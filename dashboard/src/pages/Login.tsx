@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Languages } from 'lucide-react';
 import { GithubIcon } from '../components/GithubIcon';
@@ -23,6 +23,42 @@ export function Login({ onLogin }: LoginProps) {
     void i18n.changeLanguage(language);
   };
 
+  const validateAndEnter = async (key: string) => {
+    const response = await fetch(`${API_BASE_URL}/auth/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': key,
+      },
+    });
+
+    if (response.ok) {
+      // The validate body already carries the key's role — hand it up so the app can set it
+      // directly instead of re-validating the same key a second time.
+      const data: { role?: string } = await response.json().catch(() => ({}));
+      onLogin(key, data.role);
+      return true;
+    }
+    const errorData = await response.json().catch(() => ({}));
+    setError(errorData.message || t('login.invalidKey'));
+    return false;
+  };
+
+  /* One-click entry from the mar7ba OPS console: it opens this page as
+     `#key=<freshly minted key>`. The fragment never reaches the server, and
+     replaceState strips it from the address bar and the history entry before
+     anything else can observe it. A bad or revoked key falls back to the
+     ordinary paste form. */
+  useEffect(() => {
+    const match = /^#key=(.+)$/.exec(window.location.hash);
+    if (!match) return;
+    const key = decodeURIComponent(match[1]);
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    setIsLoading(true);
+    validateAndEnter(key).finally(() => setIsLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!apiKey.trim()) {
@@ -33,23 +69,7 @@ export function Login({ onLogin }: LoginProps) {
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/validate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': apiKey,
-        },
-      });
-
-      if (response.ok) {
-        // The validate body already carries the key's role — hand it up so the app can set it
-        // directly instead of re-validating the same key a second time.
-        const data: { role?: string } = await response.json().catch(() => ({}));
-        onLogin(apiKey, data.role);
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        setError(errorData.message || t('login.invalidKey'));
-      }
+      await validateAndEnter(apiKey);
     } catch {
       setError(t('login.connectionError'));
     } finally {
