@@ -9589,7 +9589,7 @@
   "info": {
     "title": "OpenWA API",
     "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API\n\n**Gateway-wide responses.** Two statuses are returned by middleware before routing, so any operation can emit them:\n\n- `415 Unsupported Media Type` — the request body carries a `Content-Encoding` other than `identity`. The aggregate in-flight body cap counts wire bytes, so a compressed body would be admitted on its compressed size and then inflated past the memory it is meant to bound. Send the body uncompressed.\n- `503 Service Unavailable` with `Retry-After` — the gateway already has too much request body data in flight. The body is not read; retry after the given delay.",
-    "version": "0.23.3",
+    "version": "0.23.4",
     "contact": {
       "name": "OpenWA",
       "url": "https://github.com/rmyndharis/OpenWA",
@@ -10199,7 +10199,7 @@
           },
           "lastError": {
             "type": "string",
-            "description": "Human-readable reason carried while the status is FAILED (a terminal engine failure) or ACTION_REQUIRED (the engine is running but something needs a human). Cleared on any other status.",
+            "description": "Human-readable reason carried while the status is FAILED (a terminal engine failure), ACTION_REQUIRED (the engine is running but something needs a human), or INITIALIZING while the engine is retrying a dropped connection on its own. Cleared on any other status.",
             "example": "Failed to launch the browser process: spawn /usr/bin/chromium ENOENT",
             "nullable": true
           },
@@ -10476,7 +10476,7 @@
           },
           "muteExpiration": {
             "type": "number",
-            "description": "Epoch MILLISECONDS at which the mute ends, present only when muted is true; 0 means muted indefinitely. Milliseconds is the same unit as POST /sessions/{sessionId}/chats/mute muteUntil, so a value read here can be written straight back.",
+            "description": "Epoch MILLISECONDS at which the mute ends, present only when muted is true; 0 means muted indefinitely. Milliseconds is the same unit as POST /sessions/{sessionId}/chats/mute muteUntil, so a finite value can be written straight back. The 0 an indefinite mute reports is the exception: muteUntil requires a real future instant, so re-apply an indefinite mute with a far-future timestamp rather than 0.",
             "example": 1786003600000
           }
         },
@@ -12087,6 +12087,49 @@
           "longitude"
         ]
       },
+      "ChatHistoryOrderDto": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "description": "Id of the cart the customer placed from the business catalog.",
+            "example": "1000000000000001"
+          },
+          "token": {
+            "type": "string",
+            "description": "Opaque single-order credential that accompanies `orderId`. Pass through unchanged; do not log it."
+          }
+        },
+        "required": [
+          "orderId"
+        ]
+      },
+      "ChatHistoryProductDto": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "description": "Id of the shared catalog product.",
+            "example": "2000000000000002"
+          },
+          "title": {
+            "type": "string",
+            "example": "Sample product"
+          },
+          "description": {
+            "type": "string",
+            "example": "A sample product description."
+          },
+          "businessOwnerJid": {
+            "type": "string",
+            "description": "JID of the catalog's owner.",
+            "example": "628123456789@c.us"
+          }
+        },
+        "required": [
+          "productId"
+        ]
+      },
       "ChatHistoryMessageDto": {
         "type": "object",
         "properties": {
@@ -12125,6 +12168,8 @@
               "poll",
               "call",
               "revoked",
+              "order",
+              "product",
               "masked",
               "unknown"
             ],
@@ -12223,6 +12268,22 @@
           },
           "location": {
             "$ref": "#/components/schemas/ChatHistoryLocationDto"
+          },
+          "order": {
+            "description": "Set for `order` messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatHistoryOrderDto"
+              }
+            ]
+          },
+          "product": {
+            "description": "Set for `product` messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatHistoryProductDto"
+              }
+            ]
           }
         },
         "required": [

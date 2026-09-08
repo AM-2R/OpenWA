@@ -78,6 +78,10 @@ export type MessageType =
   | 'poll'
   | 'call'
   | 'revoked'
+  // WhatsApp Business commerce: a customer's cart placed from the catalog, and a single product
+  // card shared into a chat. Both carry the ids the commerce APIs need — see `IncomingMessage`.
+  | 'order'
+  | 'product'
   // A message WhatsApp deliberately withheld from linked/companion devices (e.g. high-security
   // business OTPs): the payload is absent by design, not unparseable. See `mapBaileysMessageType`.
   | 'masked'
@@ -110,6 +114,28 @@ export interface IncomingMessage {
   mentionedIds?: string[];
   /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
   call?: { video: boolean; missed: boolean };
+  /**
+   * Set for `order` messages: a cart the customer placed from the business catalog. The message
+   * carries no line items — `orderId` plus the single-order `token` are the correlation handle a
+   * caller redeems against WhatsApp's own order lookup, which this project does not expose, so both
+   * must survive to that caller. Both engines populate them.
+   */
+  order?: {
+    orderId: string;
+    /** Opaque, single-order credential. Pass through unchanged; do not log it. */
+    token?: string;
+  };
+  /**
+   * Set for `product` messages: the catalog product shared into the chat. `productId` identifies it
+   * within `businessOwnerJid`'s catalog, so it resolves through the catalog routes only when that
+   * catalog is the session's own. Both engines populate `productId`; the rest are best-effort.
+   */
+  product?: {
+    productId: string;
+    title?: string;
+    description?: string;
+    businessOwnerJid?: string;
+  };
   /**
    * Set by the adapter when the sender is identified by a privacy id (e.g. a WhatsApp `@lid`) rather
    * than a phone number, so engine-neutral code can decide whether to attempt phone resolution without
@@ -504,8 +530,10 @@ export interface ChatSummary {
   /**
    * Epoch MILLISECONDS at which the mute ends, present only when `muted` is true; `0` means muted
    * indefinitely. Milliseconds is the same unit as `POST /sessions/{sessionId}/chats/mute`
-   * `muteUntil`, so a value read here can be written straight back (`mute-chat.dto.ts` documents that
-   * unit and why a seconds value is a trap).
+   * `muteUntil`, so a FINITE value can be written straight back (`mute-chat.dto.ts` documents that
+   * unit and why a seconds value is a trap). The `0` an indefinite mute reports is the exception:
+   * `muteUntil` requires a real future instant, so re-apply an indefinite mute with a far-future
+   * timestamp rather than `0`.
    */
   muteExpiration?: number;
 }
@@ -756,6 +784,23 @@ export interface EngineEventCallbacks {
    */
   onHistoryMessages?: (messages: IncomingMessage[]) => void;
   onDisconnected?: (reason: string) => void;
+  /**
+   * Fired each time the engine schedules an INTERNAL reconnect attempt: a drop it retries on its own
+   * and deliberately does NOT report through `onDisconnected`, because the session is still linked and
+   * the credentials are still good. Purely informational, so a consumer must not tear anything down on
+   * it; the engine keeps owning the retry.
+   *
+   * `attempt` is the 1-based number of the attempt being scheduled, and it resets once the connection
+   * is back (or after a long enough healthy stretch), so attempt 1 always opens a fresh episode.
+   * `nextDelayMs` is how long the engine waits before making it. Together they are what a consumer
+   * needs to tell a one-second blip from a session that has been down for an hour, which the status
+   * alone cannot: the engine reports INITIALIZING for the whole episode, exactly as it does for a
+   * session that has never been paired.
+   *
+   * Optional: an engine that hands every drop to its consumer instead of retrying internally
+   * (whatsapp-web.js does) simply never invokes this, because that consumer already has the drop.
+   */
+  onReconnecting?: (attempt: number, nextDelayMs: number) => void;
   onStateChanged?: (state: EngineStatus) => void;
   /**
    * Fired when the engine needs an operator action to keep the session healthy — currently only the

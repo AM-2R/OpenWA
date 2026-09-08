@@ -247,6 +247,7 @@
   "sessions": {
     "title": "సెషన్స్",
     "subtitle": "మీ వాట్సాప్ సెషన్లు మరియు QR కోడ్ కనెక్షన్లను నిర్వహించండి",
+    "feedDisconnected": "ప్రత్యక్ష నవీకరణలు డిస్‌కనెక్ట్ అయ్యాయి",
     "newSession": "కొత్త సెషన్",
     "searchPlaceholder": "సెషన్ల కోసం వెతకండి...",
     "filter": {
@@ -658,6 +659,7 @@
     "removeFile": "ఫైల్‌ను తొలగించు",
     "fileReadError": "ఫైల్ చదవడం విఫలమైంది",
     "fileTooLarge": "ఫైల్ చాలా పెద్దది (గరిష్టం 18 MB)",
+    "recipientsFileTooLarge": "గ్రహీతల ఫైల్ చాలా పెద్దది (గరిష్టం 2 MB)",
     "caption": "క్యాప్షన్",
     "filename": "ఫైల్ పేరు",
     "captionPlaceholder": "క్యాప్షన్ ఎంటర్ చేయండి...",

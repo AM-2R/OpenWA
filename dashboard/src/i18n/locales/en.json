@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Sessions",
     "subtitle": "Manage your WhatsApp sessions and QR code connections",
+    "feedDisconnected": "Live updates disconnected",
     "newSession": "New Session",
     "searchPlaceholder": "Search sessions...",
     "filter": {
@@ -658,6 +659,7 @@
     "removeFile": "Remove file",
     "fileReadError": "File read failed",
     "fileTooLarge": "File is too large (max 18 MB)",
+    "recipientsFileTooLarge": "The recipients file is too large (max 2 MB)",
     "caption": "Caption",
     "filename": "Filename",
     "captionPlaceholder": "Enter caption...",

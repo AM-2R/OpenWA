@@ -254,6 +254,7 @@
   "sessions": {
     "title": "Sessions",
     "subtitle": "ניהול Sessions של WhatsApp והתחברות באמצעות QR",
+    "feedDisconnected": "עדכונים בזמן אמת נותקו",
     "newSession": "Session חדש",
     "searchPlaceholder": "חיפוש Sessions...",
     "filter": {
@@ -667,6 +668,7 @@
     "removeFile": "הסרת קובץ",
     "fileReadError": "קריאת הקובץ נכשלה",
     "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)",
+    "recipientsFileTooLarge": "קובץ הנמענים גדול מדי (מקסימום 2 MB)",
     "caption": "כיתוב",
     "filename": "שם קובץ",
     "captionPlaceholder": "יש להזין כיתוב...",

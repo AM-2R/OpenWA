@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Sessions",
     "subtitle": "Gérez vos sessions WhatsApp et vos connexions par code QR",
+    "feedDisconnected": "Mises à jour en direct interrompues",
     "newSession": "Nouvelle session",
     "searchPlaceholder": "Rechercher des sessions...",
     "filter": {
@@ -658,6 +659,7 @@
     "removeFile": "Supprimer le fichier",
     "fileReadError": "Échec de lecture du fichier",
     "fileTooLarge": "Le fichier est trop volumineux (max 18 Mo)",
+    "recipientsFileTooLarge": "Le fichier de destinataires est trop volumineux (max 2 Mo)",
     "caption": "Légende",
     "filename": "Nom du fichier",
     "captionPlaceholder": "Entrez une légende...",

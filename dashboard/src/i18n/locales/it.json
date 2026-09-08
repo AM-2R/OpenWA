@@ -247,6 +247,7 @@
   "sessions": {
     "title": "Sessioni",
     "subtitle": "Gestisci le tue sessioni WhatsApp e le connessioni tramite codice QR",
+    "feedDisconnected": "Aggiornamenti in tempo reale disconnessi",
     "newSession": "Nuova Sessione",
     "searchPlaceholder": "Cerca sessioni...",
     "filter": {
@@ -658,6 +659,7 @@
     "removeFile": "Rimuovi file",
     "fileReadError": "Lettura del file non riuscita",
     "fileTooLarge": "Il file è troppo grande (max 18 MB)",
+    "recipientsFileTooLarge": "Il file dei destinatari è troppo grande (max 2 MB)",
     "caption": "Didascalia",
     "filename": "Nome File",
     "captionPlaceholder": "Inserisci una didascalia...",

@@ -247,6 +247,7 @@
   "sessions": {
     "title": "세션",
     "subtitle": "WhatsApp 세션과 QR 코드 연결을 관리하세요",
+    "feedDisconnected": "실시간 업데이트 연결 끊김",
     "newSession": "새 세션",
     "searchPlaceholder": "세션 검색...",
     "filter": {
@@ -658,6 +659,7 @@
     "removeFile": "파일 제거",
     "fileReadError": "파일 읽기 실패",
     "fileTooLarge": "파일이 너무 큽니다 (최대 18 MB)",
+    "recipientsFileTooLarge": "수신자 파일이 너무 큽니다 (최대 2 MB)",
     "caption": "설명",
     "filename": "파일 이름",
     "captionPlaceholder": "설명을 입력하세요...",
