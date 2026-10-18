@@ -3,8 +3,27 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
 import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
-import { filterChats, filterChannels, groupStatusesByContact } from '../utils/chatFilters';
-import { ArrowLeft, Loader2, Megaphone, CircleDashed, AlertCircle, MessageSquare } from 'lucide-react';
+import {
+  applyChatListFilter,
+  contactKey,
+  filterChats,
+  filterChannels,
+  groupStatusesByContact,
+  phoneContactId,
+  savedContactKeySet,
+  type ChatListFilter,
+} from '../utils/chatFilters';
+import {
+  ArrowLeft,
+  Loader2,
+  Megaphone,
+  CircleDashed,
+  AlertCircle,
+  MessageSquare,
+  CircleEllipsis,
+  Copy,
+  X,
+} from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone } from '../hooks/useResolvedPhone';
@@ -12,6 +31,7 @@ import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
+  contactApi,
   asMessageType,
   type Session,
   type Chat,
@@ -58,6 +78,12 @@ import ChatThread from '../components/chats/ChatThread';
 import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
 import StatusMedia from '../components/chats/StatusMedia';
 import StatusComposeModal from '../components/chats/StatusComposeModal';
+import NewChatPanel from '../components/chats/NewChatPanel';
+import GroupInfoDialog from '../components/chats/GroupInfoDialog';
+import { MuteChatDialog, SaveContactDialog, type MuteDuration } from '../components/chats/ChatDialogs';
+import type { ChatRowActions } from '../components/chats/chatActionItems';
+import { ChatActions } from '../components/chats/ChatRowMenu';
+import { Modal } from '../components/Modal';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
@@ -94,6 +120,30 @@ interface IncomingWsMessage {
 // system face); 3–5 are legacy slots older clients still emit. Approximated with generic
 // families/weights since the actual faces are proprietary; slot 0 and unknown slots keep the UI
 // default.
+// The confirmation dialog's copy for each destructive chat row action; its confirm button repeats the title.
+const CONFIRM_TEXT = {
+  leave: {
+    title: 'chats.group.leave',
+    question: 'chats.group.leaveConfirm',
+    warning: 'chats.group.leaveWarning',
+  },
+  clear: {
+    title: 'chats.rowActions.clear',
+    question: 'chats.rowActions.clearConfirm',
+    warning: 'chats.rowActions.clearWarning',
+  },
+  block: {
+    title: 'chats.rowActions.block',
+    question: 'chats.rowActions.blockConfirm',
+    warning: 'chats.rowActions.blockWarning',
+  },
+  delete: {
+    title: 'chats.rowActions.delete',
+    question: 'chats.rowActions.deleteConfirm',
+    warning: 'chats.rowActions.deleteWarning',
+  },
+} as const;
+
 const STATUS_FONT: Record<number, { family?: string; weight?: number }> = {
   1: { family: 'serif' },
   2: { family: 'cursive' },
@@ -121,7 +171,7 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
 export function Chats() {
   const { t } = useTranslation();
   useDocumentTitle(t('nav.chats'));
-  const { error: showErrorToast, warning: showWarningToast } = useToast();
+  const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToast();
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
@@ -133,6 +183,25 @@ export function Chats() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [chatFilter, setChatFilter] = useState<ChatListFilter>('all');
+
+  // The new-chat panel replaces the sidebar lists while open; the room's overflow menu drops from its header.
+  const [showNewChat, setShowNewChat] = useState<boolean>(false);
+  const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
+  const roomMenuRef = useRef<HTMLDivElement | null>(null);
+  // The group whose info dialog is open, from its row's menu or from the open room's.
+  const [groupDialogChat, setGroupDialogChat] = useState<Chat | null>(null);
+  // A destructive row action awaiting confirmation, and whether it is in flight.
+  const [confirmAction, setConfirmAction] = useState<{
+    kind: 'leave' | 'clear' | 'delete' | 'block';
+    chat: Chat;
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
+  // The archive view of the Chats tab, and the chats whose mute or contact dialog is open.
+  const [showArchived, setShowArchived] = useState<boolean>(false);
+  const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
+  const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
+  const [dialogBusy, setDialogBusy] = useState<boolean>(false);
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -397,6 +466,14 @@ export function Chats() {
       setPreviewUrl(null);
       setReplyingTo(null);
       lastRoomIdRef.current = null;
+      // The new-chat panel lists the address book of the session being left, and an open dialog acts
+      // through it.
+      setShowNewChat(false);
+      setGroupDialogChat(null);
+      setConfirmAction(null);
+      setMuteDialogChat(null);
+      setContactDialogChat(null);
+      setShowArchived(false);
     }
     return () => {
       for (const controller of loads) controller.abort();
@@ -447,9 +524,12 @@ export function Chats() {
   // effects flush would otherwise see the previous list, miss the chat and refetch the whole list.
   const chatsRef = useRef(chats);
   const activeChatIdRef = useRef<string | undefined>(undefined);
+  // The session on screen, for requests that answer later to check they still belong to it.
+  const selectedSessionRef = useRef(selectedSessionId);
   useLayoutEffect(() => {
     chatsRef.current = chats;
     activeChatIdRef.current = activeChat?.id;
+    selectedSessionRef.current = selectedSessionId;
   });
   // A request that settles after the page is left no longer finds the chat open, so its follow-ups
   // (the reconnect mark-as-read) do nothing.
@@ -984,7 +1064,283 @@ export function Chats() {
   // One search box drives all three tabs; each matches on its own fields. Plain consts (not useMemo)
   // because chats/channelsQuery.data/statusesQuery.data are already stable, query-cached references,
   // so re-filtering on every render is cheap. See utils/chatFilters for the two status orderings.
-  const filteredChats = filterChats(chats, searchQuery);
+  // Whether a 1:1 chat's contact is saved comes from the address book (`isMyContact`), not from its
+  // display name: Baileys names an unsaved contact by its bare push name too. Undefined until it loads.
+  const contactsQuery = useQuery({
+    queryKey: ['contacts', selectedSessionId],
+    queryFn: () => contactApi.list(selectedSessionId),
+    enabled: Boolean(selectedSessionId),
+    staleTime: 5 * 60 * 1000,
+    // contactApi.list already retried a throttled page; another attempt would walk every page again.
+    retry: false,
+  });
+  const savedContactKeys = useMemo(() => savedContactKeySet(contactsQuery.data), [contactsQuery.data]);
+
+  const searching = searchQuery.trim() !== '';
+  const searchedChats = filterChats(chats, searchQuery);
+  const archivedCount = filterChats(chats, '').filter(c => c.archived).length;
+  const shownChats = applyChatListFilter(
+    searching ? searchedChats : searchedChats.filter(c => c.archived === showArchived),
+    chatFilter,
+    savedContactKeys,
+  );
+  const filteredChats = showArchived
+    ? shownChats
+    : [...shownChats.filter(c => c.pinned), ...shownChats.filter(c => !c.pinned)];
+
+  // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
+  // it is added to the sidebar locally until the first message, or the next list load, settles it.
+  // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
+  // through another session (a lookup that answered after a switch) is dropped: opening it here would
+  // send the next message through the wrong account.
+  const handleOpenNewChat = (chat: Chat, sessionId: string) => {
+    if (sessionId !== selectedSessionRef.current) return;
+    const existing = chats.find(c => c.id === chat.id);
+    if (!existing) setChats(prev => [chat, ...prev]);
+    setActiveTab('chats');
+    setActiveChannel(null);
+    setActiveStatusContactId(null);
+    setActiveChat(existing ?? chat);
+    setShowNewChat(false);
+    setChatFilter('all');
+    setSearchQuery('');
+  };
+
+  // Chat row actions. Everything but the info views is an operator route, so a read-only key gets only those.
+  //
+  // Every action is bound to the session it started in. Two sessions can list the same chat id (a group
+  // both accounts are in), and a request that answers after a switch changed only the session it went to:
+  // its result must not land on the list or the open chat of the session now selected.
+  const stillOn = (sessionId: string) => sessionId === selectedSessionRef.current;
+
+  const renameChat = useCallback((sessionId: string, chatId: string, name: string) => {
+    if (sessionId !== selectedSessionRef.current) return;
+    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, name } : c)));
+    setActiveChat(prev => (prev?.id === chatId ? { ...prev, name } : prev));
+  }, []);
+
+  // Several chat routes answer HTTP 200 with `{ success: false }` when the engine declined to act (WhatsApp
+  // keeps at most three chats pinned; Baileys cannot clear or delete a chat it knows no last message of),
+  // which is a failure here: nothing changed, so nothing local changes either.
+  const expectSuccess = (result: { success: boolean }) => {
+    if (!result.success) throw new Error(t('chats.rowActions.declined'));
+  };
+  const failWith = (key: string) => (err: unknown) =>
+    showErrorToast(t(key), err instanceof Error ? err.message : undefined);
+
+  const patchChat = (sessionId: string, chatId: string, patch: Partial<Chat>) => {
+    if (!stillOn(sessionId)) return;
+    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, ...patch } : c)));
+    setActiveChat(prev => (prev?.id === chatId ? { ...prev, ...patch } : prev));
+  };
+
+  const handleMarkUnread = async (chat: Chat) => {
+    const sessionId = selectedSessionId;
+    try {
+      expectSuccess(await sessionApi.markChatUnread(sessionId, chat.id));
+      if (!stillOn(sessionId)) return;
+      // A negative count is how the list shows a chat marked unread (a badge with no number).
+      patchChat(sessionId, chat.id, { unreadCount: -1 });
+      if (activeChatIdRef.current === chat.id) setActiveChat(null);
+    } catch (err) {
+      failWith('chats.rowActions.markUnreadFailed')(err);
+    }
+  };
+
+  // The blocklist decides whether a 1:1 chat offers Block or Unblock. Only a key that can act on it reads it.
+  const blockedQuery = useQuery({
+    queryKey: ['contacts-blocked', selectedSessionId],
+    queryFn: () => contactApi.listBlocked(selectedSessionId),
+    enabled: Boolean(selectedSessionId) && canWrite,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const isBlocked = (chat: Chat) =>
+    (blockedQuery.data ?? []).some(id => id === chat.id || id.split('@')[0] === chat.id.split('@')[0]);
+
+  // The address book is keyed by phone number, so a contact can be saved only under a phone-based id: the
+  // chat's own when it has one, else, for the open chat, the number the engine resolved for its @lid. The
+  // digits of a @lid are no phone number and are never used as one.
+  const addressbookIdOf = (chat: Chat): string | null =>
+    phoneContactId(chat.id) ??
+    (chat.id === activeChat?.id && resolvedPhoneQ.data ? `${resolvedPhoneQ.data.replace(/\D/g, '')}@c.us` : null);
+
+  const handleTogglePin = (chat: Chat) => {
+    const sessionId = selectedSessionId;
+    return sessionApi
+      .pinChat(sessionId, chat.id, !chat.pinned)
+      .then(expectSuccess)
+      .then(() => patchChat(sessionId, chat.id, { pinned: !chat.pinned }))
+      .catch(failWith(chat.pinned ? 'chats.rowActions.unpinFailed' : 'chats.rowActions.pinFailed'));
+  };
+
+  const handleToggleArchive = (chat: Chat) => {
+    const sessionId = selectedSessionId;
+    return sessionApi
+      .archiveChat(sessionId, chat.id, !chat.archived)
+      .then(expectSuccess)
+      .then(() => {
+        showSuccessToast(t(chat.archived ? 'chats.rowActions.unarchived' : 'chats.rowActions.archived'));
+        patchChat(sessionId, chat.id, { archived: !chat.archived });
+      })
+      .catch(failWith('chats.rowActions.archiveFailed'));
+  };
+
+  const MUTE_FOREVER = Date.UTC(2100, 0, 1);
+  const handleMute = async (chat: Chat, duration: MuteDuration | null) => {
+    const sessionId = selectedSessionId;
+    const until =
+      duration === null
+        ? null
+        : duration === 'always'
+          ? MUTE_FOREVER
+          : Date.now() + (duration === '8h' ? 8 * 3_600_000 : 7 * 86_400_000);
+    setDialogBusy(true);
+    try {
+      expectSuccess(await sessionApi.muteChat(sessionId, chat.id, until));
+      // The list reports an indefinite mute as expiry 0.
+      patchChat(sessionId, chat.id, {
+        muted: until !== null,
+        muteExpiration: until === null ? undefined : duration === 'always' ? 0 : until,
+      });
+      if (stillOn(sessionId)) setMuteDialogChat(null);
+    } catch (err) {
+      failWith('chats.rowActions.muteFailed')(err);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const handleSaveContact = async (chat: Chat, firstName: string, lastName: string) => {
+    const sessionId = selectedSessionId;
+    const contactId = addressbookIdOf(chat);
+    if (!contactId) return;
+    setDialogBusy(true);
+    try {
+      expectSuccess(await contactApi.upsert(sessionId, contactId, firstName, lastName || undefined));
+      showSuccessToast(t('chats.rowActions.contactSaved'));
+      void queryClient.invalidateQueries({ queryKey: ['contacts', sessionId] });
+      renameChat(sessionId, chat.id, [firstName, lastName].filter(Boolean).join(' '));
+      if (stillOn(sessionId)) setContactDialogChat(null);
+    } catch (err) {
+      failWith('chats.rowActions.contactSaveFailed')(err);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const handleUnblock = (chat: Chat) => {
+    const sessionId = selectedSessionId;
+    return contactApi
+      .unblock(sessionId, chat.id)
+      .then(expectSuccess)
+      .then(() => {
+        showSuccessToast(t('chats.rowActions.unblocked', { name: chat.name || chat.id.split('@')[0] }));
+        return queryClient.invalidateQueries({ queryKey: ['contacts-blocked', sessionId] });
+      })
+      .catch(failWith('chats.rowActions.blockFailed'));
+  };
+
+  const rowActions: ChatRowActions = {
+    onGroupInfo: setGroupDialogChat,
+    onSaveContact: canWrite ? setContactDialogChat : undefined,
+    canSaveContact: chat => addressbookIdOf(chat) !== null,
+    isSavedContact: chat => savedContactKeys?.has(contactKey(chat.id)) ?? false,
+    onTogglePin: canWrite ? chat => void handleTogglePin(chat) : undefined,
+    onMute: canWrite ? chat => (chat.muted ? void handleMute(chat, null) : setMuteDialogChat(chat)) : undefined,
+    onToggleArchive: canWrite ? chat => void handleToggleArchive(chat) : undefined,
+    onMarkUnread: canWrite ? chat => void handleMarkUnread(chat) : undefined,
+    onLeaveGroup: canWrite ? chat => setConfirmAction({ kind: 'leave', chat }) : undefined,
+    onToggleBlock: canWrite
+      ? chat => (isBlocked(chat) ? void handleUnblock(chat) : setConfirmAction({ kind: 'block', chat }))
+      : undefined,
+    onClear: canWrite ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
+    onDelete: canWrite ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
+    isBlocked,
+  };
+
+  // Leaving a group, clearing a chat and deleting one all run from the confirmation dialog. On success the
+  // dialog closes; on a failure, a declined one included, it stays open, so the action can be tried again.
+  // A switch closes the dialog, and a request that answers after it changes nothing on the new session.
+  const runConfirmedAction = async () => {
+    if (!confirmAction) return;
+    const { kind, chat } = confirmAction;
+    const sessionId = selectedSessionId;
+    const name = chat.name || chat.id.split('@')[0];
+    setConfirmBusy(true);
+    try {
+      if (kind === 'leave') {
+        expectSuccess(await sessionApi.leaveGroup(sessionId, chat.id));
+        showSuccessToast(t('chats.group.left', { name }));
+        if (stillOn(sessionId)) void loadChats(sessionId, { background: true });
+      } else if (kind === 'block') {
+        expectSuccess(await contactApi.block(sessionId, chat.id));
+        showSuccessToast(t('chats.rowActions.blocked', { name }));
+        await queryClient.invalidateQueries({ queryKey: ['contacts-blocked', sessionId] });
+      } else if (kind === 'clear') {
+        expectSuccess(await sessionApi.clearChatMessages(sessionId, chat.id));
+        showSuccessToast(t('chats.rowActions.cleared', { name }));
+        patchChat(sessionId, chat.id, { lastMessage: '', unreadCount: 0 });
+        // The thread cache holds the messages just deleted; the next open reads the empty chat.
+        await queryClient.invalidateQueries({ queryKey: messagesQueryKey(sessionId, chat.id) });
+      } else {
+        expectSuccess(await sessionApi.deleteChat(sessionId, chat.id));
+        showSuccessToast(t('chats.rowActions.deleted', { name }));
+        if (stillOn(sessionId)) setChats(prev => prev.filter(c => c.id !== chat.id));
+        queryClient.removeQueries({ queryKey: messagesQueryKey(sessionId, chat.id) });
+      }
+      if (!stillOn(sessionId)) return;
+      if ((kind === 'leave' || kind === 'delete') && activeChatIdRef.current === chat.id) setActiveChat(null);
+      setConfirmAction(null);
+    } catch (err) {
+      const failed =
+        kind === 'leave'
+          ? 'chats.group.leaveFailed'
+          : kind === 'block'
+            ? 'chats.rowActions.blockFailed'
+            : kind === 'clear'
+              ? 'chats.rowActions.clearFailed'
+              : 'chats.rowActions.deleteFailed';
+      failWith(failed)(err);
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  const handleCopyChatId = async () => {
+    if (!activeChat) return;
+    setRoomMenuOpen(false);
+    try {
+      await navigator.clipboard.writeText(activeChat.id);
+      showSuccessToast(t('chats.chatIdCopied'));
+    } catch (err) {
+      showErrorToast(t('chats.copyFailed'), err instanceof Error ? err.message : undefined);
+    }
+  };
+
+  // The overflow menu closes on a press outside it, on Escape, and with the chat it belongs to. Escape
+  // is taken in the capture phase and marked handled, like the emoji picker's, so the page's own
+  // handler below leaves the room open.
+  useEffect(() => {
+    setRoomMenuOpen(false);
+  }, [activeChat?.id]);
+  useEffect(() => {
+    if (!roomMenuOpen) return;
+    const closeOnOutsidePress = (event: MouseEvent) => {
+      if (!roomMenuRef.current?.contains(event.target as Node)) setRoomMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      event.preventDefault();
+      setRoomMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsidePress);
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsidePress);
+      document.removeEventListener('keydown', closeOnEscape, true);
+    };
+  }, [roomMenuOpen]);
   // The channels zero-state ("not subscribed to any channels") stays keyed on the UNFILTERED list
   // below, so a non-matching search renders an empty list rather than claiming there are none.
   const filteredChannels = filterChannels(channelsQuery.data ?? [], searchQuery);
@@ -1021,12 +1377,13 @@ export function Chats() {
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
       else if (activeChat) setActiveChat(null);
+      else if (showNewChat) setShowNewChat(false);
       else return;
       event.preventDefault();
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, showNewChat]);
 
   // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
   // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
@@ -1095,6 +1452,16 @@ export function Chats() {
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
             onComposeStatus={() => setComposeOpen(true)}
+            onNewChat={canWrite ? () => setShowNewChat(true) : undefined}
+            newChatPanel={
+              canWrite && showNewChat ? (
+                <NewChatPanel
+                  sessionId={selectedSessionId}
+                  onOpenChat={handleOpenNewChat}
+                  onClose={() => setShowNewChat(false)}
+                />
+              ) : null
+            }
             formatChatTime={formatChatTime}
             chatsTab={{
               loading: loadingChats,
@@ -1102,6 +1469,10 @@ export function Chats() {
               activeChatId: activeChat?.id,
               pictures: listPics.data,
               onSelectChat: setActiveChat,
+              filter: chatFilter,
+              onFilterChange: setChatFilter,
+              rowActions,
+              archive: { count: archivedCount, showing: showArchived, onToggle: () => setShowArchived(v => !v) },
             }}
             channelsTab={{
               engineLoading: engineType === null,
@@ -1157,6 +1528,37 @@ export function Chats() {
                     <span className="room-contact-jid" title={activeChat.id}>
                       {activeChat.id}
                     </span>
+                  </div>
+                  <div className="room-header-actions">
+                    <div className="room-menu" ref={roomMenuRef}>
+                      <button
+                        type="button"
+                        className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
+                        onClick={() => setRoomMenuOpen(open => !open)}
+                        title={t('chats.moreActions')}
+                        aria-label={t('chats.moreActions')}
+                        aria-expanded={roomMenuOpen}
+                      >
+                        <CircleEllipsis size={22} />
+                      </button>
+                      {/* A disclosure of plain buttons, not role="menu": it keeps no roving focus or arrow
+                          keys, and the role would promise them. */}
+                      {roomMenuOpen && (
+                        <div className="room-menu-popover">
+                          {/* The row's actions, then what only an open room needs. */}
+                          <ChatActions chat={activeChat} actions={rowActions} onPicked={() => setRoomMenuOpen(false)} />
+                          <hr />
+                          <button type="button" onClick={() => void handleCopyChatId()}>
+                            <Copy size={16} />
+                            {t('chats.copyChatId')}
+                          </button>
+                          <button type="button" onClick={() => setActiveChat(null)}>
+                            <X size={16} />
+                            {t('chats.closeChat')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </header>
 
@@ -1310,6 +1712,64 @@ export function Chats() {
         onClose={() => setLightboxIndex(null)}
         onNavigate={setLightboxIndex}
       />
+
+      {groupDialogChat && sessions.some(s => s.id === selectedSessionId) && (
+        <GroupInfoDialog
+          session={sessions.find(s => s.id === selectedSessionId)!}
+          group={groupDialogChat}
+          onClose={() => setGroupDialogChat(null)}
+          onRenamed={renameChat}
+        />
+      )}
+
+      {confirmAction && (
+        <Modal
+          open
+          onClose={() => setConfirmAction(null)}
+          title={t(CONFIRM_TEXT[confirmAction.kind].title)}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setConfirmAction(null)} disabled={confirmBusy}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn-danger" onClick={() => void runConfirmedAction()} disabled={confirmBusy}>
+                {confirmBusy ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  t(CONFIRM_TEXT[confirmAction.kind].title)
+                )}
+              </button>
+            </>
+          }
+        >
+          <p>
+            {t(CONFIRM_TEXT[confirmAction.kind].question, {
+              name: confirmAction.chat.name || confirmAction.chat.id.split('@')[0],
+            })}
+          </p>
+          <p className="text-muted">{t(CONFIRM_TEXT[confirmAction.kind].warning)}</p>
+        </Modal>
+      )}
+
+      {muteDialogChat && (
+        <MuteChatDialog
+          chat={muteDialogChat}
+          busy={dialogBusy}
+          onMute={duration => void handleMute(muteDialogChat, duration)}
+          onClose={() => setMuteDialogChat(null)}
+        />
+      )}
+
+      {contactDialogChat && (
+        <SaveContactDialog
+          chat={contactDialogChat}
+          busy={dialogBusy}
+          onSave={(first, last) => void handleSaveContact(contactDialogChat, first, last)}
+          onClose={() => setContactDialogChat(null)}
+        />
+      )}
 
       {composeOpen && (
         <StatusComposeModal

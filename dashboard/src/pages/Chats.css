@@ -1851,3 +1851,755 @@
   color: var(--text-muted);
   margin-top: 0.375rem;
 }
+
+/* =============================================================================
+   CHAT ACTIONS: new chat, quick filters, archive, row and room menus, dialogs
+   ============================================================================= */
+.chats-page .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius, 8px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.chats-page .icon-btn:hover,
+.chats-page .icon-btn.active {
+  background: var(--bg-light);
+  color: var(--text-primary);
+}
+
+.chats-page .icon-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.chats-page .icon-btn.small {
+  width: 28px;
+  height: 28px;
+}
+
+.chats-page .icon-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error-text);
+}
+
+/* Search and the New chat button share a row. */
+.chats-page .chat-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chats-page .chat-search-row .chat-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chats-page .chat-new-button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+}
+
+/* Quick filters */
+.chats-page .chat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.chats-page .chat-filter-pill {
+  padding-block: 0.25rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.chats-page .chat-filter-pill:hover {
+  background: var(--bg-light);
+  color: var(--text-primary);
+}
+
+.chats-page .chat-filter-pill.active {
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+/* The archive's entry at the head of the list, and the way back from its view. */
+.chats-page .chat-archive-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding-block: 0.75rem;
+  padding-inline: 1.25rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chats-page .chat-archive-entry:hover {
+  background: var(--bg-light);
+}
+
+.chats-page .chat-archive-entry svg {
+  color: var(--primary-text);
+}
+
+.chats-page .chat-archive-count {
+  margin-inline-start: auto;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+/* Pin and mute marks on a row */
+.chats-page .chat-item-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.chats-page .chat-item-flags + .chat-unread-badge {
+  margin-inline-start: 0.375rem;
+}
+
+/* A row's chevron: shown on hover, on keyboard focus and while its menu is open. Its room is kept clear on
+   every row that has one, so the time does not move when it appears. */
+.chats-page .chat-item-wrap {
+  position: relative;
+}
+
+.chats-page .chat-item-wrap.has-menu .chat-item-top {
+  padding-inline-end: 1.75rem;
+}
+
+.chats-page .chat-row-menu {
+  position: absolute;
+  top: 0.75rem;
+  inset-inline-end: 0.75rem;
+}
+
+.chats-page .chat-row-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.chats-page .chat-item-wrap:hover .chat-row-menu-trigger,
+.chats-page .chat-row-menu.open .chat-row-menu-trigger,
+.chats-page .chat-row-menu-trigger:focus-visible {
+  opacity: 1;
+}
+
+.chats-page .chat-row-menu-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* The row's and the room's menus share their entries (ChatActionList). */
+.chats-page .room-header-actions {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.chats-page .room-menu {
+  position: relative;
+}
+
+.chats-page .chat-row-menu-popover,
+.chats-page .room-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  inset-inline-end: 0;
+  z-index: 30;
+  min-width: 240px;
+  padding: 0.375rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.chats-page .chat-row-menu-group,
+.chats-page .room-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .chat-row-menu-popover button,
+.chats-page .room-menu-popover button {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chats-page .chat-row-menu-popover button:hover:not(:disabled),
+.chats-page .chat-row-menu-popover button:focus-visible,
+.chats-page .room-menu-popover button:hover:not(:disabled),
+.chats-page .room-menu-popover button:focus-visible {
+  background: var(--bg-light);
+  outline: none;
+}
+
+.chats-page .chat-row-menu-popover button svg,
+.chats-page .room-menu-popover button svg {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.chats-page .chat-row-menu-popover button:disabled,
+.chats-page .room-menu-popover button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chats-page .chat-row-menu-popover hr,
+.chats-page .room-menu-popover hr {
+  width: 100%;
+  margin-block: 0.25rem;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+/* A disabled entry carries the reason under its label. */
+.chats-page .chat-action-label {
+  display: flex;
+  flex-direction: column;
+  white-space: normal;
+}
+
+.chats-page .chat-action-label small {
+  max-width: 16rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* New chat / new group panel (sidebar sub-view) */
+.chats-page .new-chat-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .new-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chats-page .new-chat-search {
+  margin-block: 0.75rem 0;
+  margin-inline: 1.25rem;
+}
+
+.chats-page .new-chat-hint {
+  margin-block: 0.375rem 0;
+  margin-inline: 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.chats-page .new-chat-section-label {
+  padding-block: 0.875rem 0.375rem;
+  padding-inline: 1.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary-text);
+}
+
+/* The panel's rows are buttons: they take the list row's look, not the global button's. */
+.chats-page button.chat-item-card {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.chats-page button.chat-item-card:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.chats-page .action-row .chat-item-name {
+  font-weight: 500;
+}
+
+.chats-page .chat-avatar.action-avatar {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.chats-page .select-check {
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  margin-inline-start: auto;
+  border: 2px solid var(--border);
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.chats-page .select-check.checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.chats-page .new-group-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding-block: 0.875rem 0;
+  padding-inline: 1.25rem;
+}
+
+.chats-page .new-group-name {
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-light);
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  outline: none;
+}
+
+.chats-page .new-group-name:focus {
+  border-color: var(--primary);
+  background: var(--bg-white);
+}
+
+.chats-page .participant-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+.chats-page .participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0.125rem;
+  padding-inline: 0.625rem 0.25rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-size: 0.8125rem;
+}
+
+.chats-page .participant-chip button {
+  display: flex;
+  padding: 2px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chats-page .new-group-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.chats-page .new-group-count {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.chats-page .new-group-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-block: 0.5rem;
+  padding-inline: 1rem;
+  border: none;
+  border-radius: var(--radius, 8px);
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chats-page .new-group-create:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Group info dialog (the global .modal card, inside the page) */
+.chats-page .group-info-modal {
+  max-width: 640px;
+}
+
+.chats-page .group-info-title {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+
+.chats-page .group-info-tile {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chats-page .group-info-subtitle {
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .group-info-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 1rem 0;
+  padding-inline: 1.5rem;
+}
+
+.chats-page .group-info-toolbar .chats-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-inline: 0.875rem;
+}
+
+.chats-page .group-info-toolbar .icon-btn {
+  margin-inline-start: auto;
+}
+
+.chats-page .group-info-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-light);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.chats-page .group-info-badge.admin {
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary-text);
+}
+
+.chats-page .group-info-state {
+  display: flex;
+  justify-content: center;
+  padding: 2rem;
+  color: var(--text-muted);
+}
+
+.chats-page .group-info-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chats-page .group-info-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.chats-page .group-info-field .required {
+  color: var(--error);
+}
+
+.chats-page .group-info-field input,
+.chats-page .group-info-field textarea,
+.chats-page .group-info-add input,
+.chats-page .chat-dialog-form input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-light);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+}
+
+.chats-page .group-info-field textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.chats-page .group-info-field input:focus,
+.chats-page .group-info-field textarea:focus,
+.chats-page .group-info-add input:focus,
+.chats-page .chat-dialog-form input:focus {
+  border-color: var(--primary);
+  background: var(--bg-white);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.chats-page .group-info-field input:disabled,
+.chats-page .group-info-field textarea:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.chats-page .group-info-picture {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-light);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chats-page .group-info-picture:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.chats-page .group-info-picture:disabled {
+  cursor: default;
+}
+
+.chats-page .chat-avatar.avatar-lg {
+  width: 88px;
+  height: 88px;
+}
+
+.chats-page .group-info-members {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chats-page .group-info-add {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.chats-page .group-info-add button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-count {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.chats-page .group-info-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chats-page .group-info-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-block: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chats-page .group-info-member {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chats-page .group-info-member .name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .group-info-member .number {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.chats-page .group-info-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0.125rem;
+  padding-inline: 0.5rem;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.chats-page .group-info-actions {
+  display: flex;
+  gap: 0.125rem;
+  flex-shrink: 0;
+}
+
+/* Confirmation, mute and save-contact dialogs: the confirm-modal shape the Sessions page uses. */
+.chats-page .confirm-modal {
+  max-width: 420px;
+}
+
+.chats-page .confirm-modal .modal-body p {
+  margin: 0 0 0.5rem;
+}
+
+.chats-page .confirm-modal .text-muted {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.chats-page .chat-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: none;
+}
+
+.chats-page .chat-dialog-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.chats-page .chat-dialog-options input {
+  accent-color: var(--primary);
+}
+
+.chats-page .chat-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.chats-page .chat-dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.chats-page .chat-dialog-form .text-muted {
+  margin: 0;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+}
