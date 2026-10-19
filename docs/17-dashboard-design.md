@@ -111,8 +111,9 @@ mounted for any admin key.
 /chats             → Chats (Chats / Channels / Status tabs, quick filters and an Archived view on
                      Chats; chat list + message thread live via WebSocket; thread pages older
                      history in on scroll-up; per-chat menu (pin, mute, archive, mark unread,
-                     block, clear, delete, leave group) [operator]; group info dialog; new chat /
-                     new group [operator]; read-only channel feed on whatsapp-web.js)
+                     block, leave group; clear and delete on whatsapp-web.js only) [operator];
+                     group info dialog; new chat / new group [operator]; read-only channel feed
+                     on whatsapp-web.js)
 /webhooks          → Webhooks (per-session webhook endpoints)
 /templates         → Message Templates
 /message-tester    → Message Tester (ad-hoc send-* + check-number)

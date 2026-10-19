@@ -171,7 +171,7 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ messages: [], total: 0 }));
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) return Promise.resolve(jsonResponse([]));
-    if (method === 'POST' && path === `${base}/chats/read`) return Promise.resolve(jsonResponse({ success: true }));
+    if (method === 'POST' && path === `${base}/chats/read`) return gated('read', () => jsonResponse({ success: true }));
     if (method === 'POST' && path === `${base}/groups`) {
       return gated('createGroup', () => jsonResponse({ id: GROUP_ID, name: (body as { name: string }).name }, 201));
     }
@@ -223,7 +223,8 @@ afterEach(async () => {
   window.sessionStorage.setItem('openwa_engine_type', 'baileys');
 });
 
-function renderPage(): ReturnType<RTL['render']> {
+/** Renders the page; `reactStrictMode` replays effect setup and cleanup as `main.tsx` does in development. */
+function renderPage({ reactStrictMode = false } = {}): ReturnType<RTL['render']> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
   queryClients.push(queryClient);
   return rtl.render(
@@ -232,6 +233,7 @@ function renderPage(): ReturnType<RTL['render']> {
       { client: queryClient },
       createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Chats))),
     ),
+    { reactStrictMode },
   );
 }
 
@@ -252,51 +254,55 @@ test('a quick filter that matches no chat says so instead of claiming the accoun
   assert.ok(!screen.queryByText('Alice'), 'the filter left a 1:1 chat in the groups list');
 });
 
-test('a typed number is checked with the gateway and opens a chat under the id it resolves to', async () => {
-  const { screen, fireEvent, waitFor, within } = rtl;
-  const { container } = renderPage();
-  await screen.findByText('Alice');
-  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
-  fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
-    target: { value: TYPED_NUMBER },
+for (const reactStrictMode of [false, true]) {
+  test(`a typed number is checked with the gateway and opens a chat under the id it resolves to${reactStrictMode ? ' (StrictMode)' : ''}`, async () => {
+    const { screen, fireEvent, waitFor, within } = rtl;
+    const { container } = renderPage({ reactStrictMode });
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
+      target: { value: TYPED_NUMBER },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Start chat with/ }));
+
+    await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the new chat did not open'));
+    assert.ok(
+      fetchCalls.some(c => c.method === 'GET' && c.path === `/api/sessions/${SESSION.id}/contacts/check/15550009999`),
+      'the number was not checked with the gateway',
+    );
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+    assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open over the list');
   });
-  fireEvent.click(screen.getByRole('button', { name: /^Start chat with/ }));
+}
 
-  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the new chat did not open'));
-  assert.ok(
-    fetchCalls.some(c => c.method === 'GET' && c.path === `/api/sessions/${SESSION.id}/contacts/check/15550009999`),
-    'the number was not checked with the gateway',
-  );
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
-  assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open over the list');
-});
+for (const reactStrictMode of [false, true]) {
+  test(`a group is created with the picked contacts on Baileys, and whatsapp-web.js is not offered one${reactStrictMode ? ' (StrictMode)' : ''}`, async () => {
+    const { screen, fireEvent, waitFor, within } = rtl;
+    const { container } = renderPage({ reactStrictMode });
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New group' }));
+    fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Team' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Bob/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
 
-test('a group is created with the picked contacts on Baileys, and whatsapp-web.js is not offered one', async () => {
-  const { screen, fireEvent, waitFor, within } = rtl;
-  const { container } = renderPage();
-  await screen.findByText('Alice');
-  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
-  fireEvent.click(screen.getByRole('button', { name: 'New group' }));
-  fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Team' } });
-  fireEvent.click(await screen.findByRole('button', { name: /Bob/ }));
-  fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
+    await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the new group did not open'));
+    const create = fetchCalls.find(c => c.method === 'POST' && c.path === `/api/sessions/${SESSION.id}/groups`);
+    assert.deepEqual(create?.body, { name: 'Team', participants: [CONTACT.id] });
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('Team');
+    rtl.cleanup();
 
-  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the new group did not open'));
-  const create = fetchCalls.find(c => c.method === 'POST' && c.path === `/api/sessions/${SESSION.id}/groups`);
-  assert.deepEqual(create?.body, { name: 'Team', participants: [CONTACT.id] });
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('Team');
-  rtl.cleanup();
-
-  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
-  renderPage();
-  await screen.findByText('Alice');
-  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
-  await screen.findByText('Bob');
-  assert.ok(
-    !screen.queryByRole('button', { name: 'New group' }),
-    'whatsapp-web.js, which answers 501, offered a group',
-  );
-});
+    window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+    renderPage({ reactStrictMode });
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await screen.findByText('Bob');
+    assert.ok(
+      !screen.queryByRole('button', { name: 'New group' }),
+      'whatsapp-web.js, which answers 501, offered a group',
+    );
+  });
+}
 
 test('a group row offers its actions, and marking it unread badges the row', async () => {
   const { screen, fireEvent, waitFor } = rtl;
@@ -397,8 +403,9 @@ test('a member who is no admin sees the group read-only, and a viewer key gets n
   assert.ok((within(dialog).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled);
 });
 
-test('a 1:1 row clears its chat and deletes it, each only after its own confirmation', async () => {
+test('a 1:1 row clears its chat and deletes it on whatsapp-web.js, each only after its own confirmation', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
   renderPage();
   await screen.findByText('Alice');
   const chatPath = `/api/sessions/${SESSION.id}/chats`;
@@ -636,6 +643,7 @@ test("a pin that answers after a switch does not pin the other session's chat wi
 test('a clear or delete the engine declines keeps the chat and its dialog, and says it failed', async () => {
   const { screen, fireEvent, within } = rtl;
   declineWrites = true;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
   renderPage();
   await screen.findByText('Alice');
 
@@ -692,4 +700,72 @@ test('a chat keyed by a privacy id offers Save contact disabled, with the reason
   fireEvent.click(save);
   assert.ok(!screen.queryByRole('dialog'), 'the save dialog opened for a @lid chat');
   assert.ok(!fetchCalls.some(c => c.method === 'PUT' && c.path.includes('/contacts/')), 'a @lid id was sent');
+});
+
+// ── Mark as unread against the automatic read the open room queues (MARK_READ_DEBOUNCE_MS later). ──
+
+const readsOf = (chatId: string) =>
+  fetchCalls.filter(
+    c => c.path === `/api/sessions/${SESSION.id}/chats/read` && (c.body as { chatId?: string })?.chatId === chatId,
+  );
+const unreadIndex = (chatId: string) =>
+  fetchCalls.findIndex(
+    c => c.path === `/api/sessions/${SESSION.id}/chats/unread` && (c.body as { chatId?: string })?.chatId === chatId,
+  );
+
+test("Mark as unread drops the chat's queued automatic read, and another chat's queued read still goes out", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listGroup = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Team'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the group did not open'));
+  // Both reads are now queued: the group's from its opening, Alice's from hers.
+  fireEvent.click(screen.getByText('Alice'));
+  pickRowAction('Alice', 'Mark as unread');
+
+  await waitFor(() => assert.equal(readsOf(GROUP.id).length, 1, "the other chat's queued read was dropped"), {
+    timeout: 3_000,
+  });
+  await waitFor(() => assert.ok(unreadIndex(CHAT.id) >= 0, 'the unread mark was not sent'));
+  await settle();
+  assert.deepEqual(readsOf(CHAT.id), [], 'the queued read went out and undid the unread mark');
+});
+
+test('Mark as unread waits for an automatic read already sent, so the unread mark is the last request', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const release = hold('read');
+  renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'the automatic read was not sent'), {
+    timeout: 3_000,
+  });
+
+  pickRowAction('Alice', 'Mark as unread');
+  await settle();
+  assert.equal(unreadIndex(CHAT.id), -1, 'the unread mark went out while the read was still in flight');
+
+  release();
+  await waitFor(() => assert.ok(unreadIndex(CHAT.id) >= 0, 'the unread mark was not sent'));
+  const readIndex = fetchCalls.indexOf(readsOf(CHAT.id)[0]);
+  assert.ok(readIndex < unreadIndex(CHAT.id), 'the read was not ordered before the unread mark');
+  assert.equal(readsOf(CHAT.id).length, 1, 'another automatic read followed the unread mark');
+});
+
+test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  assert.ok(screen.getByRole('button', { name: 'Archive chat' }), 'the row menu did not open');
+  assert.ok(!screen.queryByRole('button', { name: 'Clear chat' }), 'the row menu offered Clear chat');
+  assert.ok(!screen.queryByRole('button', { name: 'Delete chat' }), 'the row menu offered Delete chat');
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  const menu = container.querySelector('.room-menu-popover') as HTMLElement;
+  assert.ok(within(menu).getByRole('button', { name: 'Copy chat ID' }), 'the room menu did not open');
+  assert.ok(!within(menu).queryByRole('button', { name: 'Clear chat' }), 'the room menu offered Clear chat');
+  assert.ok(!within(menu).queryByRole('button', { name: 'Delete chat' }), 'the room menu offered Delete chat');
 });

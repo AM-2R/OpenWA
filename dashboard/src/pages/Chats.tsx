@@ -88,6 +88,7 @@ import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
 const MARK_READ_DEBOUNCE_MS = 750;
+const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
 
 // mergeDeliveryStatus (forward-only delivery-tick merge) is shared with mergeOrAppend in utils/chatMessages
 // so the WS append path and the ack path apply the exact same rule.
@@ -226,6 +227,9 @@ export function Chats() {
   // both, so the query is gated off entirely (never fired) rather than left to fail per-request.
   // The engine comes from the sign-in validate response, which every role can read.
   const channelsSupported = engineType === 'whatsapp-web.js';
+  // On Baileys the phone can ignore a clear or delete the gateway reports as done, and the gateway then drops
+  // its stored copy of the messages (#1891). Until that is fixed both are offered on whatsapp-web.js only.
+  const canClearOrDelete = canWrite && engineType === 'whatsapp-web.js';
   const channelsQuery = useQuery({
     queryKey: ['channels', selectedSessionId],
     queryFn: () => sessionApi.getSubscribedChannels(selectedSessionId!),
@@ -484,14 +488,27 @@ export function Chats() {
   // Coalesce mark-as-read RPCs per chat: every incoming message in the visible chat raises a
   // read event, and a per-event POST sprays the gateway into 429s. One trailing call per chat
   // after a quiet window carries the same effect.
+  // A chat marked unread takes no automatic read until it is opened again, and Mark as unread waits for a
+  // read already sent: otherwise a read queued from the open room lands after the unread and undoes it.
+  // Keyed by session and chat, since a session switch still flushes the previous session's reads.
+  const [readsInFlight] = useState(() => new Map<string, Promise<void>>());
+  const [keptUnread] = useState(() => new Set<string>());
   const markReadCoalescer = useMemo(
     () =>
       createTrailingCoalescer<string>(chatId => {
-        void sessionApi.markChatRead(selectedSessionId, chatId).catch(err => {
-          showWarningToast(t('chats.errors.markRead'), err instanceof Error ? err.message : undefined);
+        const key = readKey(selectedSessionId, chatId);
+        const read = sessionApi.markChatRead(selectedSessionId, chatId).then(
+          () => undefined,
+          err => {
+            showWarningToast(t('chats.errors.markRead'), err instanceof Error ? err.message : undefined);
+          },
+        );
+        readsInFlight.set(key, read);
+        void read.finally(() => {
+          if (readsInFlight.get(key) === read) readsInFlight.delete(key);
         });
       }, MARK_READ_DEBOUNCE_MS),
-    [selectedSessionId, t, showWarningToast],
+    [selectedSessionId, t, showWarningToast, readsInFlight],
   );
 
   // Flush pending trailing calls on unmount / session switch: the mark-as-read POST is
@@ -514,9 +531,10 @@ export function Chats() {
   // account's and nothing is marked read.
   const markChatRead = useCallback(
     (chatId: string) => {
+      if (keptUnread.has(readKey(selectedSessionId, chatId))) return;
       if (canWrite && listedSessionRef.current === selectedSessionId) markReadCoalescer.call(chatId);
     },
-    [markReadCoalescer, canWrite, selectedSessionId],
+    [markReadCoalescer, canWrite, selectedSessionId, keptUnread],
   );
 
   // 3. WebSocket integration for real-time messages
@@ -924,6 +942,8 @@ export function Chats() {
   // the mark-as-read RPC for the same chat.
   useEffect(() => {
     if (!activeChat) return;
+    // Opening a chat is what reads it again after Mark as unread.
+    keptUnread.delete(readKey(selectedSessionId, activeChat.id));
     markChatRead(activeChat.id);
     // A read-only key sends no mark-as-read, so the chat stays unread on the gateway; clearing the
     // badge here would only have the next chat-list load bring it back.
@@ -1136,13 +1156,18 @@ export function Chats() {
 
   const handleMarkUnread = async (chat: Chat) => {
     const sessionId = selectedSessionId;
+    const key = readKey(sessionId, chat.id);
+    keptUnread.add(key);
+    markReadCoalescer.drop(chat.id);
     try {
+      await readsInFlight.get(key);
       expectSuccess(await sessionApi.markChatUnread(sessionId, chat.id));
       if (!stillOn(sessionId)) return;
       // A negative count is how the list shows a chat marked unread (a badge with no number).
       patchChat(sessionId, chat.id, { unreadCount: -1 });
       if (activeChatIdRef.current === chat.id) setActiveChat(null);
     } catch (err) {
+      keptUnread.delete(key);
       failWith('chats.rowActions.markUnreadFailed')(err);
     }
   };
@@ -1254,8 +1279,8 @@ export function Chats() {
     onToggleBlock: canWrite
       ? chat => (isBlocked(chat) ? void handleUnblock(chat) : setConfirmAction({ kind: 'block', chat }))
       : undefined,
-    onClear: canWrite ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
-    onDelete: canWrite ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
+    onClear: canClearOrDelete ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
+    onDelete: canClearOrDelete ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
     isBlocked,
   };
 

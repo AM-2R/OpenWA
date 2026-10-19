@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
 - Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list, where Unread includes chats marked unread and Unknown lists 1:1 chats whose contact is not saved.
 - Add a New chat panel to the dashboard Chats page for operator keys that opens a chat with a saved contact or a typed international number once the gateway confirms the number is on WhatsApp, and on Baileys creates a group from a name and picked contacts or numbers.
-- Add a menu to every dashboard chat row and to the open chat's header that pins, mutes, archives, marks unread, clears or deletes a chat, saves, renames or blocks its contact, and leaves a group, asking first before an action that cannot be undone; the header's menu also copies the chat id and closes the chat.
+- Add a menu to every dashboard chat row and to the open chat's header that pins, mutes, archives, marks unread, clears or deletes a chat (on whatsapp-web.js only for now, see #1891), saves, renames or blocks its contact, and leaves a group, asking first before an action that cannot be undone; the header's menu also copies the chat id and closes the chat.
 - Add an Archived view to the dashboard chat list; archived chats leave the main list, and pinned chats lead it.
 - Add a group info dialog to the dashboard Chats page that edits a group's name, picture and description and adds, removes, promotes and demotes its participants when the account administers the group.
 

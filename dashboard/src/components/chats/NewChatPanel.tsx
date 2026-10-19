@@ -75,14 +75,15 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [creating, setCreating] = useState(false);
   // A lookup or a group creation can answer after the panel was closed (Back, or a session switch, which
-  // unmounts it). Its result then belongs to nothing on screen and is dropped.
+  // unmounts it). Its result then belongs to nothing on screen and is dropped. Setup sets the flag again:
+  // StrictMode replays setup after a cleanup on a panel that stays mounted.
   const openRef = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    openRef.current = true;
+    return () => {
       openRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const contactsQuery = useQuery({
     queryKey: ['contacts', sessionId],
