@@ -54,8 +54,8 @@ export class MediaController {
   @ApiResponse({
     status: 400,
     description:
-      'Neither url nor base64 given, the url answers non-2xx, times out or cannot be reached, or ffmpeg ' +
-      'refused the input.',
+      'Neither url nor base64 given, the url is not an absolute http(s) URL or answers non-2xx, times out or ' +
+      'cannot be reached, or ffmpeg refused the input.',
   })
   @ApiResponse({ status: 413, description: 'The supplied media is above the media size cap.' })
   @ApiResponse({
@@ -82,8 +82,8 @@ export class MediaController {
   @ApiResponse({
     status: 400,
     description:
-      'Neither url nor base64 given, the url answers non-2xx, times out or cannot be reached, or ffmpeg ' +
-      'refused the input.',
+      'Neither url nor base64 given, the url is not an absolute http(s) URL or answers non-2xx, times out or ' +
+      'cannot be reached, or ffmpeg refused the input.',
   })
   @ApiResponse({ status: 413, description: 'The supplied media is above the media size cap.' })
   @ApiResponse({
