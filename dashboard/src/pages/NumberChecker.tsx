@@ -18,14 +18,44 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { copyToClipboard } from '../utils/clipboard';
 import { useSessionsQuery } from '../hooks/queries';
 import { contactApi, type CheckNumberResponse } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { escapeCsvCell } from '../utils/csv';
+import { isGatewayRefusal } from '../utils/groupSelection';
 import './NumberChecker.css';
 
 export type CheckStatus = 'registered' | 'unregistered' | 'failed';
+
+// Every lookup is an outbound WhatsApp query that counts against the gateway's per-IP limit on this route
+// (100 a minute by default) and against the linked account's standing, so one run is capped.
+export const NUMBER_CHECK_BATCH_MAX = 100;
+
+interface BatchStop {
+  status: number;
+  attempted: number;
+  total: number;
+}
+
+// What each stopping status means, so a single unanswered lookup is not reported as the gateway refusing.
+const STOP_REASONS: Record<number, string> = {
+  409: 'The session is not connected',
+  429: 'The gateway rate limit was reached',
+  503: 'WhatsApp did not answer a lookup',
+};
+
+// `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
+function batchStopMessage({ status, attempted, total }: BatchStop): string {
+  const reason = STOP_REASONS[status] ?? 'The gateway refused a lookup';
+  const unsent = total - attempted;
+  const where =
+    unsent > 0
+      ? `Stopped at number ${attempted} of ${total}; ${unsent} ${unsent === 1 ? 'number was' : 'numbers were'} not sent.`
+      : 'The last lookup failed.';
+  return `${reason} (HTTP ${status}). ${where} Try again later.`;
+}
 
 export interface CheckResultItem extends CheckNumberResponse {
   status: CheckStatus;
@@ -41,10 +71,7 @@ export function NumberChecker() {
   const { canWrite } = useRole();
 
   const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
-  const readySessions = useMemo(
-    () => sessions.filter(s => s.status?.toLowerCase() === 'ready' || s.status?.toLowerCase() === 'authenticated'),
-    [sessions],
-  );
+  const readySessions = useMemo(() => sessions.filter(s => s.status === 'ready'), [sessions]);
 
   const [selectedSession, setSelectedSession] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
@@ -66,6 +93,7 @@ export function NumberChecker() {
   const [batchResults, setBatchResults] = useState<CheckResultItem[]>([]);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
+  const [batchStop, setBatchStop] = useState<BatchStop | null>(null);
   const batchRunIdRef = useRef<number>(0);
 
   useEffect(() => {
@@ -75,8 +103,8 @@ export function NumberChecker() {
     };
   }, []);
 
-  // Auto-prefix country code state
-  const [autoPrefix91, setAutoPrefix91] = useState(true);
+  // Opt-in: the +91 rewrite would turn any other country's 10-digit or 0-prefixed number into an Indian one.
+  const [autoPrefix91, setAutoPrefix91] = useState(false);
 
   // Format and clean phone number based on digit rules
   const formatNumberForCheck = useCallback(
@@ -152,6 +180,7 @@ export function NumberChecker() {
       list: Array.from(uniqueFormatted),
     };
   }, [batchInput, autoPrefix91, formatNumberForCheck]);
+  const batchOverLimit = batchParsedStats.uniqueCount > NUMBER_CHECK_BATCH_MAX;
 
   // Perform single check
   const handleSingleCheck = async () => {
@@ -197,10 +226,12 @@ export function NumberChecker() {
   };
 
   // Copy WhatsApp ID
-  const handleCopy = (id: string) => {
-    navigator.clipboard.writeText(id);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
+  const handleCopy = async (id: string) => {
+    // The house helper: over plain HTTP on a LAN address navigator.clipboard does not exist.
+    if (await copyToClipboard(id)) {
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
   };
 
   // Perform batch check
@@ -220,9 +251,11 @@ export function NumberChecker() {
     const runId = ++batchRunIdRef.current;
     setIsCheckingBatch(true);
     setBatchResults([]);
+    setBatchStop(null);
     setBatchProgress({ current: 0, total: numbers.length });
 
     const results: CheckResultItem[] = [];
+    let refusedWith: number | undefined;
 
     for (let i = 0; i < numbers.length; i++) {
       if (batchRunIdRef.current !== runId) return;
@@ -253,6 +286,14 @@ export function NumberChecker() {
           timestamp: new Date().toLocaleTimeString(),
         });
         setBatchResults([...results]);
+
+        // The gateway keeps refusing this route for the rest of its window, so every number after this one
+        // would only become a false "Failed" row (and spend more of the limit).
+        if (isGatewayRefusal(err)) {
+          refusedWith = (err as { status: number }).status;
+          setBatchProgress({ current: i + 1, total: numbers.length });
+          break;
+        }
       }
 
       if (batchRunIdRef.current !== runId) return;
@@ -266,6 +307,12 @@ export function NumberChecker() {
 
     if (batchRunIdRef.current !== runId) return;
     setIsCheckingBatch(false);
+    if (refusedWith !== undefined) {
+      const stop = { status: refusedWith, attempted: results.length, total: numbers.length };
+      setBatchStop(stop);
+      toast.error('Batch stopped', batchStopMessage(stop));
+      return;
+    }
     toast.success(`Completed checking ${results.length} numbers.`);
   };
 
@@ -385,7 +432,7 @@ export function NumberChecker() {
                   <input
                     type="text"
                     className="nc-input"
-                    placeholder="e.g. 9876543210 (10 digits) or 919876543210 (12 digits)"
+                    placeholder="e.g. 919876543210 or 6281234567890 (with country code)"
                     value={phoneNumber}
                     onChange={e => setPhoneNumber(e.target.value)}
                     onKeyDown={e => {
@@ -437,8 +484,8 @@ export function NumberChecker() {
                 )}
                 <span className="nc-hint">
                   {autoPrefix91
-                    ? '10-digit numbers automatically get +91 prepended. 12-digit numbers remain unchanged.'
-                    : 'Numbers are checked exactly as entered.'}
+                    ? 'Adds +91 to 10-digit numbers and to 11 digits with a leading 0. Numbers with + or 00 stay as typed.'
+                    : 'Numbers are checked as typed, digits only, so include the country code.'}
                 </span>
               </div>
 
@@ -634,13 +681,13 @@ export function NumberChecker() {
                   onChange={e => setBatchDelay(Number(e.target.value))}
                   disabled={isCheckingBatch}
                 >
-                  <option value={500}>500 ms (Fast)</option>
                   <option value={1000}>1000 ms / 1 sec (Recommended)</option>
                   <option value={2000}>2000 ms / 2 sec (Extra Safe)</option>
                   <option value={3000}>3000 ms / 3 sec (High Volume Safe)</option>
                 </select>
                 <span className="nc-hint">
-                  Adds spacing between consecutive queries to prevent WhatsApp rate limits.
+                  Waits between lookups to stay under the gateway&apos;s request limit (100 a minute by default). The
+                  run stops if the gateway refuses further lookups.
                 </span>
               </div>
 
@@ -659,7 +706,9 @@ export function NumberChecker() {
                   </span>
                 </label>
                 <span className="nc-hint">
-                  10-digit numbers (e.g. 96...) will get +91 prepended. 12-digit numbers will be checked as-is.
+                  {autoPrefix91
+                    ? 'Adds +91 to 10-digit numbers (e.g. 96...) and to 11 digits with a leading 0. Numbers with + or 00 stay as typed.'
+                    : 'Numbers are checked as typed, digits only, so include the country code.'}
                 </span>
               </div>
             </div>
@@ -669,7 +718,7 @@ export function NumberChecker() {
                 <label className="nc-label">Numbers to Check (One per line or comma-separated)</label>
                 <textarea
                   className="nc-textarea"
-                  placeholder="9612345678 (10 digits)&#10;919612345678 (12 digits)&#10;14155552671"
+                  placeholder="919612345678&#10;6281234567890&#10;14155552671"
                   value={batchInput}
                   onChange={e => setBatchInput(e.target.value)}
                   disabled={isCheckingBatch}
@@ -691,7 +740,13 @@ export function NumberChecker() {
                   </div>
                 ) : (
                   <span className="nc-hint">
-                    Paste raw 10-digit or 12-digit phone numbers. One per line or comma-separated.
+                    Paste phone numbers with the country code, one per line or comma-separated. Up to{' '}
+                    {NUMBER_CHECK_BATCH_MAX} numbers per run.
+                  </span>
+                )}
+                {batchOverLimit && (
+                  <span className="nc-batch-limit" role="status">
+                    {`Too many numbers: ${batchParsedStats.uniqueCount} parsed, at most ${NUMBER_CHECK_BATCH_MAX} per run. Remove ${batchParsedStats.uniqueCount - NUMBER_CHECK_BATCH_MAX} to start.`}
                   </span>
                 )}
               </div>
@@ -703,7 +758,7 @@ export function NumberChecker() {
               <button
                 className="nc-btn nc-btn-primary"
                 onClick={handleStartBatch}
-                disabled={!canWrite || !batchInput.trim() || readySessions.length === 0}
+                disabled={!canWrite || !batchInput.trim() || readySessions.length === 0 || batchOverLimit}
               >
                 <UserCheck size={18} /> Start Batch Check
               </button>
@@ -719,6 +774,18 @@ export function NumberChecker() {
               </button>
             )}
           </div>
+
+          {batchStop && (
+            <div className="nc-alert warning nc-batch-stopped">
+              <div className="nc-alert-icon">
+                <AlertCircle size={22} />
+              </div>
+              <div className="nc-alert-content">
+                <strong>Batch stopped</strong>
+                <p style={{ margin: '0.25rem 0 0' }}>{batchStopMessage(batchStop)}</p>
+              </div>
+            </div>
+          )}
 
           {/* Progress & Counters */}
           {(isCheckingBatch || batchResults.length > 0) && (

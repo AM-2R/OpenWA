@@ -575,3 +575,11 @@
   color: var(--text-muted);
   font-size: 0.75rem;
 }
+
+.number-checker .nc-batch-limit {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--error-text);
+}
