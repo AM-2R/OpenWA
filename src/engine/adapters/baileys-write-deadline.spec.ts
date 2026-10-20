@@ -82,6 +82,12 @@ describe('group writes report an unconfirmed write rather than success', () => {
     await expect(groups({ groupLeave }, 500).leaveGroup('123@g.us')).resolves.toBeUndefined();
     expect(groupLeave).toHaveBeenCalledWith('123@g.us');
   });
+
+  it('names the operation that was not confirmed', async () => {
+    await expect(groups({ groupLeave: stub() }, 15).leaveGroup('123@g.us')).rejects.toThrow(
+      'WhatsApp did not confirm leaving the group in time',
+    );
+  });
 });
 
 describe('profile writes report an unconfirmed write rather than success', () => {

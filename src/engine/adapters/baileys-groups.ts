@@ -17,7 +17,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { type createLogger } from '../../common/services/logger.service';
-import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
 import { toParticipantWid } from '../identity/wa-id';
 
 /**
@@ -162,7 +162,7 @@ export class BaileysGroups {
 
   /** Bound a write whose confirmation the library discards; see baileys-query-deadline.ts. */
   private confirmed<T>(work: Promise<T>, operation: string): Promise<T> {
-    return withQueryDeadline(work, this.queryBudgetMs, `WhatsApp did not confirm ${operation} in time`);
+    return confirmedWrite(work, this.queryBudgetMs, operation);
   }
 
   /** Post-ensureReady socket handle. */

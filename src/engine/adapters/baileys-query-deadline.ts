@@ -42,6 +42,11 @@ export async function withQueryDeadline<T>(work: Promise<T>, timeoutMs: number, 
   }
 }
 
+/** {@link withQueryDeadline} for a write whose confirmation the library discards; the error names the operation. */
+export function confirmedWrite<T>(work: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return withQueryDeadline(work, timeoutMs, `WhatsApp did not confirm ${operation} in time`);
+}
+
 /**
  * Budget for a single bounded Baileys call, read or write. Anchored to MEDIA_DOWNLOAD_TIMEOUT_MS (inbound-media-cap.ts),
  * this repo's existing figure for one bounded network round trip over WhatsApp. It must stay under
