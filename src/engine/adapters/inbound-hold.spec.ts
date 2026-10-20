@@ -7,6 +7,7 @@ import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { plannedInboundDownload } from './wwebjs-messaging';
+import type { WwebjsLifecycle } from './wwebjs-lifecycle';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineRegistry } from '../engine-registry.service';
@@ -1153,7 +1154,7 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
     });
     (adapter as unknown as { client: unknown }).client = client;
     (adapter as unknown as { callbacks: unknown }).callbacks = callbacks;
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { adapter, client };
   };
   const incoming = (id: string, from: string, page?: jest.Mock, body = '') => ({

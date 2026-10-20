@@ -463,9 +463,11 @@ export class BaileysEvents {
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
       // keeps the newest by timestamp. The queue is unbounded, so a burst parks rather than shedding
-      // and the message keeps its media either way. The catch below is the teardown path: the
-      // limiter rejects only when it has been closed, since processInboundMessage handles its own
-      // failures (a media download that fails emits the omitted marker rather than throwing).
+      // and the message keeps its media either way. Nothing rejects here today: the limiter is never
+      // closed, and processInboundMessage handles its own failures (a media download that fails emits
+      // the omitted marker rather than throwing). The catch below is a net for the day something does,
+      // a closed or bounded limiter, so the message is still emitted rather than lost to an unhandled
+      // rejection.
       const generation = this.storeGeneration;
       // Where the session holds a message until its row is written (PostgreSQL), admit it now, in
       // arrival order: its chat's order, and a slot of the session's room when it downloads media.
@@ -473,12 +475,9 @@ export class BaileysEvents {
       const processed = this.host.inboundLimiter
         .run(yieldSlot => this.processInboundMessage(msg, { generation, ticket, yieldSlot }))
         .catch((error: unknown) => {
-          // Only one failure can actually land here today: the limiter closing, an orderly teardown.
-          // Its queue is unbounded so it never sheds, and processInboundMessage swallows its own
-          // errors, so nothing else rejects. The other arm is defence in depth against a rejection
-          // shape that does not exist yet, and it names the error rather than calling it
-          // "saturated", which used to send operators to look at concurrency settings for a problem
-          // that was never there. The retry below cannot reject either, for the same reason.
+          // Names the failure rather than calling it "saturated", which used to send operators to look
+          // at concurrency settings for a problem that was never there. The retry below skips the
+          // limiter and processInboundMessage handles its own errors, so it cannot reject.
           const closed = error instanceof Error && error.message.startsWith('ConcurrencyLimiter closed');
           this.host.logger.warn(
             closed
