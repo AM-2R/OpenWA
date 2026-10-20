@@ -583,6 +583,47 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
+    it('answers a 400 from the measured length, without building a render of hundreds of megabytes', async () => {
+      // 341 + 1365 + 341 placeholders fit in a header, body and footer at their size limits. One 393 KB value
+      // would build ~800 MB (a RangeError at the join, or an out-of-memory abort in a small container).
+      (templateService.resolve as jest.Mock).mockResolvedValue(
+        mockTemplate({ header: '{a}'.repeat(341), body: '{a}'.repeat(1365), footer: '{a}'.repeat(341) }),
+      );
+
+      const error = await service
+        .sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { a: 'x'.repeat(393_000) } })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as Error).message).toContain(`Rendered template is ${2047 * 393_000 + 4} characters`);
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers a 400, not a 500, for a variable that has no text form', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
+
+      await expect(
+        service.sendTemplate('sess-1', {
+          chatId: 'test@c.us',
+          templateId: 'tpl-1',
+          vars: { customer: { toString: 1 } as unknown as string },
+        }),
+      ).rejects.toThrow(new BadRequestException("Variable 'customer' cannot be rendered as text"));
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('still renders a number sent for a variable', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Order {{orderId}}' }));
+
+      await service.sendTemplate('sess-1', {
+        chatId: 'test@c.us',
+        templateId: 'tpl-1',
+        vars: { orderId: 1234 as unknown as string },
+      });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('test@c.us', 'Order 1234');
+    });
+
     it('renders at-or-under the cap unchanged', async () => {
       (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
       // 'Hi ' + name lands exactly on the 64 KiB default cap — at the cap is NOT over it.

@@ -34,6 +34,22 @@ export function assertBase64WithinMediaCap(base64: string | null | undefined): v
   }
 }
 
+/** Room for a `data:<mime>;base64,` prefix, which the exact check strips, when only the length is known. */
+const DATA_URI_PREFIX_ALLOWANCE_CHARS = 256;
+
+/**
+ * The same refusal as {@link assertBase64WithinMediaCap}, for a base64 string that has not been built yet and
+ * is known only by its length (a template renders to it). Refuses only a length certain to decode past the cap,
+ * after allowing for a data URI prefix; whatever is borderline passes, and the exact check on the finished
+ * string decides.
+ */
+export function assertBase64LengthWithinMediaCap(chars: number): void {
+  const maxBytes = inboundMediaMaxBytes();
+  if (Math.floor(((chars - DATA_URI_PREFIX_ALLOWANCE_CHARS) * 3) / 4) > maxBytes) {
+    throw new PayloadTooLargeException(`Base64 media exceeds the maximum allowed size of ${maxBytes} bytes`);
+  }
+}
+
 /** A request body that carries media as a URL, as base64, or as both. */
 export interface MediaBody {
   url?: string;

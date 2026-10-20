@@ -15,7 +15,7 @@ import { Message, MessageDirection, MessageStatus } from './entities/message.ent
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, SettleAdmission, countsTowardSendBreaker } from './send-pacing.service';
 import { TemplateService } from '../template/template.service';
-import { renderTemplate } from '../../common/utils/template-render';
+import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { createLogger } from '../../common/services/logger.service';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -275,7 +275,8 @@ export class MessageSendService {
    *
    * The FINAL rendered text is capped at template.renderMaxChars (default 64 KiB): caller-supplied
    * variables can inflate a small template unboundedly, so an over-cap render is rejected with a
-   * 400 naming the limit rather than truncated silently or pushed to the engine/DB as-is.
+   * 400 naming the limit rather than truncated silently or pushed to the engine/DB as-is. The length
+   * is measured before anything is rendered, so a refused request never allocates the oversized text.
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
     const template = await this.templateService.resolve(sessionId, {
@@ -284,18 +285,28 @@ export class MessageSendService {
     });
 
     const vars = dto.vars ?? {};
-    const segments = [template.header, template.body, template.footer]
-      .filter((segment): segment is string => segment != null && segment.length > 0)
-      .map(segment => renderTemplate(segment, vars));
-    const text = segments.join('\n\n');
+    const parts = [template.header, template.body, template.footer].filter(
+      (segment): segment is string => segment != null && segment.length > 0,
+    );
+    const separator = '\n\n';
 
     const maxChars =
       this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
       DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
-    if (text.length > maxChars) {
-      throw new BadRequestException(
-        `Rendered template is ${text.length} characters, over the ${maxChars}-character limit`,
-      );
+    let text: string;
+    try {
+      const length =
+        parts.reduce((sum, part) => sum + renderedLength(part, vars), 0) +
+        separator.length * Math.max(0, parts.length - 1);
+      if (length > maxChars) {
+        throw new BadRequestException(
+          `Rendered template is ${length} characters, over the ${maxChars}-character limit`,
+        );
+      }
+      text = parts.map(part => renderTemplate(part, vars)).join(separator);
+    } catch (error) {
+      if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
+      throw error;
     }
 
     return this.sendText(sessionId, {
