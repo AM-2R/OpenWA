@@ -239,7 +239,9 @@ export class PluginsService {
     try {
       // The dashboard PUTs the whole (redacted) config back, so a sentinel secret means "unchanged":
       // restore the stored value instead of overwriting the real secret with the mask.
-      const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema);
+      const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema, {
+        mergedOverStored: true,
+      });
       this.pluginLoader.updatePluginConfig(id, merged);
       return { success: true, message: `Plugin ${id} configuration updated` };
     } catch (error) {

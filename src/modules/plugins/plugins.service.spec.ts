@@ -679,6 +679,29 @@ describe('PluginsService — per-session config', () => {
     expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ apiKey: 'A-secret', lang: 'en' });
   });
 
+  // A write is merged over the stored base config, so a removed secret has to travel as null; an empty
+  // string is not a removal.
+  it('removes the base secret on an explicit null and keeps it on an empty string', () => {
+    service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
+
+    service.updateConfig('sess-cfg', { apiKey: '', lang: 'de' });
+    expect(loader.getPlugin('sess-cfg')?.config).toEqual({ apiKey: 'BASE', lang: 'de' });
+
+    expect(service.updateConfig('sess-cfg', { apiKey: null }).success).toBe(true);
+    expect(loader.getPlugin('sess-cfg')?.config).toEqual({ apiKey: null, lang: 'de' });
+    expect(service.findOne('sess-cfg').config).toEqual({ apiKey: null, lang: 'de' });
+  });
+
+  // The override slice replaces the stored one, and a session without its own secret inherits the base.
+  it('drops a per-session secret sent as null, so the session inherits the base one', () => {
+    service.updateConfig('sess-cfg', { apiKey: 'BASE' });
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
+
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: null, lang: 'he' });
+
+    expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ lang: 'he' });
+  });
+
   it('keeps the base config and per-session overrides independent', () => {
     service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
     service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });

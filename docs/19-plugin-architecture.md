@@ -201,7 +201,8 @@ to translate from `locale`. Treat it as optional too, and fall back to `navigato
 host.
 
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
-preserved on an unchanged write.
+preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
+removes it for an explicit `null`.
 
 ### Plugin Entry Point
 
