@@ -7999,6 +7999,24 @@ describe('SessionService', () => {
       expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
     });
 
+    // The engine is registered and running by then. Reporting the start as failed would buy a retry that
+    // answers "already started", with no SESSION_STARTED audit row for a start that worked.
+    it('keeps a start that worked when the database fails the reads that follow its init', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (repository.findOne as jest.Mock).mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+        return Promise.resolve();
+      });
+
+      const started = await service.start('sess-uuid-1');
+
+      expect(started.id).toBe('sess-uuid-1');
+      expect(service.getEngine('sess-uuid-1')).toBeDefined();
+      expect(mockEngine.destroy).not.toHaveBeenCalled();
+      expect(mockEngine.forceDestroy).not.toHaveBeenCalled();
+    });
+
     it('escalates to forceDestroy() when the retired engine fails its graceful destroy()', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

@@ -407,7 +407,15 @@ export class SessionEngineControls {
       // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
       // delete() clears its teardown mark before this slow init resolves, so re-check the session row
       // exists, not just the mark; the requireSession below then surfaces a deleted session as NotFound.
-      if (await this.host.isSessionRetired(id)) {
+      // Guarded like the same read in executeReconnect: a failed read assumes not-retired, so a
+      // transient database error cannot fail a start whose engine is already registered and running.
+      let retired: boolean;
+      try {
+        retired = await this.host.isSessionRetired(id);
+      } catch {
+        retired = false;
+      }
+      if (retired) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.fences.destroyWithEscalation(id, resurrected);
@@ -422,7 +430,15 @@ export class SessionEngineControls {
         // start retired above answers as the stop or delete that retired it instead.
         throw new ServerShuttingDownException();
       }
-      return this.requireSession(id);
+      try {
+        return await this.requireSession(id);
+      } catch (error) {
+        // The engine is registered and running. A failed read (a missing row stays NotFound) must not
+        // report a start that worked as failed: the retry a transient database error buys would answer
+        // "already started". The row read on entry stands in for the one that failed.
+        if (retired || error instanceof NotFoundException) throw error;
+        return session;
+      }
     } finally {
       this.initializingSessions.delete(id);
     }
