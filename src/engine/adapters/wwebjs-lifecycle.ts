@@ -1185,7 +1185,8 @@ export class WwebjsLifecycle {
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
           isExecutionContextDestroyedError(reason) ||
-          /callfunctionon timed out|timed out\. increase the 'protocoltimeout'/i.test(reason);
+          isProtocolTimeout(error) ||
+          /callfunctionon timed out/i.test(reason);
         if (!transient) {
           throw error;
         }
