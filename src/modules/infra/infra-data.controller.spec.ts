@@ -576,10 +576,16 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     // better-sqlite3 hands out one runner per DataSource, so the patch is undone on that instance.
     const runner = ds.createQueryRunner();
     const realQuery = runner.query.bind(runner);
+    const sessionSettings: string[] = [];
     jest.spyOn(ds, 'createQueryRunner').mockImplementation(() => {
       let aborted = false;
       runner.query = ((...callArgs: Parameters<typeof realQuery>) => {
         const sql = callArgs[0];
+        // PostgreSQL accepts the transaction-local settings the import opens with; SQLite has no SET.
+        if (/^SET LOCAL /.test(sql)) {
+          sessionSettings.push(sql);
+          return Promise.resolve([]);
+        }
         if (aborted && sql !== 'ROLLBACK') {
           return Promise.reject(
             new Error('current transaction is aborted, commands ignored until end of transaction block'),
@@ -608,6 +614,9 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       'Failed to import session s1: duplicate key value violates unique constraint "PK_sessions"',
     ]);
     expect((await ds.getRepository(Session).find()).map(s => s.id).sort()).toEqual(['s1', 's2']);
+    // The clears scale with the live tables, so the runtime statement timeout is lifted for this
+    // transaction (a lock wait keeps its bound).
+    expect(sessionSettings).toEqual(['SET LOCAL statement_timeout = 0', 'SET LOCAL lock_timeout = 30000']);
   });
 
   it('leaves a session that had no claim unclaimed rather than inventing one', async () => {
