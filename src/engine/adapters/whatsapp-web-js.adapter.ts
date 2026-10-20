@@ -219,7 +219,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       isPageTransportError: error => this.isPageTransportError(error),
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
       ensureNotChannelRecipient: chatId => this.ensureNotChannelRecipient(chatId),
-      getNumberId: number => this.getNumberId(number),
+      // The raw answer, `@lid` included: the send resolver addresses a migrated contact by it, while the
+      // public getNumberId reports the neutral phone id.
+      getNumberId: number => this.contacts.lookupNumberId(number),
       capInboundMediaFor: (msg, maxBytesOverride, ticket) => this.capInboundMediaFor(msg, maxBytesOverride, ticket),
       config: this.config,
       getCallbacks: () => this.callbacks,

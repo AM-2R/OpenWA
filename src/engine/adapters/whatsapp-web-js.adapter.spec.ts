@@ -9268,6 +9268,21 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     await expect(missing.checkNumberExists('628111')).resolves.toBe(false);
   });
 
+  // The interface answers in the neutral dialect (`<phone>@c.us`), as the Baileys engine does. WhatsApp
+  // Web names a migrated contact by its lid, an engine-private id that the number check must not expose.
+  it.each([
+    ['a bare number', '628111'],
+    ['a phone id', '628111@c.us'],
+    ['a number with a plus', '+628111'],
+  ])('getNumberId answers %s of a migrated contact with the phone id, not its lid', async (_label, input) => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({ getNumberId });
+
+    await expect(adapter.getNumberId(input)).resolves.toBe('628111@c.us');
+    await expect(adapter.checkNumberExists(input)).resolves.toBe(true);
+    expect(getNumberId).toHaveBeenCalledWith(input);
+  });
+
   it('getSubscribedChannels reads $1 on a renamed build, never the literal "undefined"', async () => {
     const getChannels = jest.fn().mockResolvedValue([{ id: { $1: '120363@newsletter' }, name: 'Renamed' }]);
 
