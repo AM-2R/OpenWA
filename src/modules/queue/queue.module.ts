@@ -7,7 +7,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
 import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
-import { queueConnectionOptions } from './redis-connection';
+import { queueRootOptions } from './redis-connection';
 import { ShutdownSafeQueue } from './shutdown-safe-queue';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
@@ -45,7 +45,7 @@ BullModule.queueClass = ShutdownSafeQueue;
     // explicitly for clarity, matching HooksModule above).
     PluginsModule,
     BullModule.forRootAsync({
-      useFactory: () => ({ connection: queueConnectionOptions() }),
+      useFactory: queueRootOptions,
     }),
     BullModule.registerQueue({
       name: QUEUE_NAMES.WEBHOOK,

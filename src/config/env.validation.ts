@@ -116,6 +116,14 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       `S3_KEY_PREFIX must be a relative key prefix such as "staging/" with no empty, "." or ".." segment (got ${JSON.stringify(s3KeyPrefix)})`,
     );
   }
+  // The BullMQ key prefix is joined to the queue name with a colon in every Redis key, so a colon or
+  // whitespace in it builds keys that tooling cannot split back apart.
+  const queuePrefix = str('QUEUE_PREFIX');
+  if (queuePrefix !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(queuePrefix)) {
+    errors.push(
+      `QUEUE_PREFIX must be 1 to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit (got ${JSON.stringify(queuePrefix)})`,
+    );
+  }
   // Every production hardening in the repo gates on the exact string 'production', so an
   // unrecognised value silently selects the permissive branch of each one — CORS, Swagger, DTO
   // error detail, the default-secret guard and the ALLOW_DEV_API_KEY rejection that stops the public

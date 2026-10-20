@@ -641,6 +641,17 @@ describe('validateEnv', () => {
     },
   );
 
+  // The prefix is joined to the queue name with a colon in every Redis key.
+  it('accepts a plain QUEUE_PREFIX, or none, and rejects one that would build ambiguous keys', () => {
+    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', '', '  ']) {
+      expect(() => validateEnv({ QUEUE_PREFIX: ok })).not.toThrow();
+    }
+    for (const bad of ['a:b', 'has space', '-lead', '.lead', 'a/b', 'x'.repeat(65)]) {
+      expect(() => validateEnv({ QUEUE_PREFIX: bad })).toThrow(/QUEUE_PREFIX must be 1 to 64/);
+    }
+    expect(() => validateEnv({ QUEUE_PREFIX: 'x'.repeat(64) })).not.toThrow();
+  });
+
   // Read as an exact 'true'/'false' override; anything else falls back to the NODE_ENV default, so
   // CSP_UPGRADE_INSECURE_REQUESTS=False kept the blank-dashboard trap on in production.
   it.each([
