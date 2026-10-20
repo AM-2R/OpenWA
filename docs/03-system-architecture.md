@@ -292,7 +292,7 @@ export class SomeService {
 
   async saveMedia(filePath: string, data: Buffer) {
     await this.storage.putFile(filePath, data); // path-safety guarded
-    await this.cache.setSessionStatus('id', 'READY'); // no-op if Redis disabled
+    const cacheUp = await this.cache.isAvailable(); // false when Redis is disabled or unreachable
   }
 }
 ```
@@ -1488,11 +1488,12 @@ Migrations that must run on both dialects with different SQL take the same check
 
 There is **no** cache-manager / `CacheModuleOptions` / `redisStore` setup and **no** in-memory cache.
 `CacheService` (`src/common/cache/cache.service.ts`) talks to **ioredis directly** and is gated by
-`REDIS_ENABLED` (falling back to the `cache.enabled` config flag). When caching is disabled — or Redis
-is unreachable — the service **fails open**: every read returns `null` and every write is a silent
-no-op, so the app keeps serving from its source of truth. In other words, "no cache configured" means
-**no cache** (recompute), not an in-process LRU. Cache is never the source of truth, and today no
-request path reads from it: its only consumer is the infra status probe (`isAvailable`).
+`REDIS_ENABLED` (falling back to the `cache.enabled` config flag). It stores no values: its only
+consumer is the infra status probe, which calls `isAvailable()` to learn whether Redis answers a ping
+right now. When caching is disabled, or Redis is unreachable, `isAvailable()` returns `false` instead
+of throwing, so the app keeps serving from its source of truth. In other words, "no cache configured"
+means **no cache** (recompute), not an in-process LRU. Cache is never the source of truth, and no
+request path reads from it today.
 
 ```typescript
 // src/common/cache/cache.service.ts
@@ -1512,25 +1513,6 @@ export class CacheService implements OnModuleDestroy {
     if (!this.enabled) return false; // disabled -> always "no cache"
     this.ensureClient(); // create on first use; ioredis handles (re)connecting
     return this.ping(); // reflects live state: false during an outage, true once back
-  }
-
-  // Fail-open reads/writes: unavailable Redis is a no-op, never an error to the caller.
-  async getSessionStatus(id: string): Promise<string | null> {
-    if (!(await this.isAvailable())) return null;
-    try {
-      return await this.redis!.get(`session:${id}:status`);
-    } catch {
-      return null;
-    }
-  }
-
-  async setSessionStatus(id: string, status: string): Promise<void> {
-    if (!(await this.isAvailable())) return; // no-op when disabled/unreachable
-    try {
-      await this.redis!.setex(`session:${id}:status`, /* TTL */ 300, status);
-    } catch {
-      /* logged + swallowed */
-    }
   }
 }
 ```

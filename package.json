@@ -212,10 +212,10 @@
         "statements": 61
       },
       "./src/common/cache/": {
-        "branches": 34,
-        "functions": 33,
-        "lines": 42,
-        "statements": 42
+        "branches": 70,
+        "functions": 75,
+        "lines": 95,
+        "statements": 91
       },
       "./src/common/security/": {
         "branches": 85,

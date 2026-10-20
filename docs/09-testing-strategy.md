@@ -180,7 +180,7 @@ authoritative gate. Current policy:
 | Scope                       | Branches | Functions | Lines | Statements |
 | --------------------------- | -------- | --------- | ----- | ---------- |
 | Global                      | 54%      | 68%       | 60%   | 61%        |
-| `src/common/cache/`         | 34%      | 33%       | 42%   | 42%        |
+| `src/common/cache/`         | 70%      | 75%       | 95%   | 91%        |
 | `src/common/security/`      | 85%      | 95%       | 93%   | 92%        |
 | `src/common/services/`      | 82%      | 91%       | 90%   | 88%        |
 | `src/common/storage/`       | 75%      | 85%       | 84%   | 80%        |

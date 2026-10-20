@@ -119,9 +119,11 @@ describe('CacheService connected response deadlines', () => {
     blocked.add('get');
     blocked.add('setex');
     const recovered = new Promise<void>(resolve => client.once('ready', () => resolve()));
-    expect(
-      await withinDeadline(Promise.all([service.getSessionStatus('s1'), service.setSessionStatus('s1', 'ready')])),
-    ).toEqual([null, undefined]);
+    // The client the service built carries the deadlines, so commands issued on it directly settle too.
+    expect(await withinDeadline(Promise.allSettled([client.get('s1'), client.setex('s1', 60, 'ready')]))).toEqual([
+      expect.objectContaining({ status: 'rejected' }),
+      expect.objectContaining({ status: 'rejected' }),
+    ]);
     blocked.clear();
     await recovered;
     expect(await service.isAvailable()).toBe(true);
