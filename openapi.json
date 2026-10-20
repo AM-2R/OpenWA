@@ -16051,7 +16051,7 @@
             }
           },
           "409": {
-            "description": "Plugin already installed",
+            "description": "Plugin already installed, or the plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {
@@ -16244,6 +16244,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Uninstall a plugin (removes its files; built-ins are protected)",
@@ -16305,6 +16315,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Enable a plugin",
@@ -16359,6 +16379,16 @@
           },
           "404": {
             "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {
@@ -16752,6 +16782,16 @@
           },
           "404": {
             "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {

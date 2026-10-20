@@ -6205,7 +6205,7 @@ The digest shown is a placeholder: use the SHA-256 of the `.zip` (`sha256sum cha
 
 **Response** `201` — the newly installed `PluginDto`.
 
-**Errors:** `400` invalid URL / download, integrity check, or package invalid · `401` · `403` · `409` already installed
+**Errors:** `400` invalid URL / download, integrity check, or package invalid · `401` · `403` · `409` already installed, or the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6229,7 +6229,7 @@ Enable a plugin.
 
 Enable failures are returned in-band as `{ "success": false, "message": "…" }` (still HTTP 200).
 
-**Errors:** `401` · `403` · `404` unknown id
+**Errors:** `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6256,7 +6256,7 @@ the gateway runs that engine whatever its plugin status says. The request is ref
 `{ "success": false, "message": "…" }` (still HTTP 200) and changes nothing; set `ENGINE_TYPE` and
 restart to switch engines.
 
-**Errors:** `401` · `403` · `404` unknown id
+**Errors:** `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6381,7 +6381,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 **Response** `201` — the updated `PluginDto`.
 
-**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
+**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly) · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
 
 ---
 
@@ -6405,7 +6405,7 @@ Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, dr
 
 Note: this DELETE returns `200` with a body (not the usual `204`).
 
-**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id
+**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 

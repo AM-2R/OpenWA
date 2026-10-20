@@ -800,6 +800,70 @@ describe('PluginsService — disable when the plugin is not loaded', () => {
   });
 });
 
+describe('PluginsService: a plugin the boot restore has not finished with', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let config: ConfigService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-pending-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  // The restore enables outside the per-plugin chain once it outlasts the boot wait. A disable answered
+  // "not enabled" would then be overtaken by the enable, and an uninstall would leave a worker running
+  // under no map entry, so both wait for the restore instead of racing it.
+  it('refuses enable, disable, update and uninstall of it, and leaves every other plugin alone', async () => {
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+    const service = new PluginsService(loader, config);
+    service.install({ buffer: pkg() });
+    service.install({ buffer: pkg({ id: 'other-plg' }) });
+    loader.setOperatorEnabled('svc-plg', true);
+    jest.spyOn(loader, 'isRestorePending').mockImplementation(id => id === 'svc-plg');
+
+    for (const attempt of [
+      () => service.enable('svc-plg'),
+      () => service.disable('svc-plg'),
+      () => service.updatePackage('svc-plg', pkg({ version: '2.0.0' })),
+      () => service.uninstall('svc-plg'),
+    ]) {
+      await expect(attempt()).rejects.toThrow(ConflictException);
+      await expect(attempt()).rejects.toThrow(/still being restored/);
+    }
+
+    // Nothing changed: the operator's decision stands and the plugin is still installed.
+    expect(storage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg'))).toBe(true);
+
+    await expect(service.disable('other-plg')).resolves.toMatchObject({ success: true });
+    await expect(service.uninstall('other-plg')).resolves.toMatchObject({ success: true });
+  });
+
+  it('takes the same changes again once the restore is done with it', async () => {
+    const loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+    const service = new PluginsService(loader, config);
+    service.install({ buffer: pkg() });
+    const pending = jest.spyOn(loader, 'isRestorePending').mockReturnValue(true);
+    await expect(service.uninstall('svc-plg')).rejects.toThrow(ConflictException);
+
+    pending.mockReturnValue(false);
+
+    await expect(service.uninstall('svc-plg')).resolves.toMatchObject({ success: true });
+  });
+});
+
 describe('PluginsService: disable an engine plugin', () => {
   let tmpDir: string;
 

@@ -31,6 +31,9 @@ import { ApiKeyRole } from '../auth/entities/api-key.entity';
 /** Max accepted upload size for a plugin package (compressed). */
 const MAX_PLUGIN_UPLOAD_BYTES = 5 * 1024 * 1024;
 
+/** A lifecycle change to a plugin the boot restore has not finished with, which can outlast the boot wait. */
+const RESTORING_CONFLICT = 'The plugin is still being restored after startup; retry shortly';
+
 @ApiTags('plugins')
 @Controller('plugins')
 // Plugin installation and lifecycle are deployment-global and execute plugin code as the OpenWA
@@ -81,7 +84,10 @@ export class PluginsController {
   @ApiOperation({ summary: 'Install a plugin by downloading its .zip from a URL (SSRF-guarded)' })
   @ApiResponse({ status: 201, description: 'Plugin installed', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL, download failed, or invalid package' })
-  @ApiResponse({ status: 409, description: 'Plugin already installed' })
+  @ApiResponse({
+    status: 409,
+    description: 'Plugin already installed, or the plugin is still being restored after startup; retry shortly',
+  })
   async installFromUrl(@Body() dto: InstallFromUrlDto): Promise<PluginDto> {
     return await this.pluginsService.installFromUrl(dto.url);
   }
@@ -114,6 +120,7 @@ export class PluginsController {
   @ApiOperation({ summary: 'Enable a plugin' })
   @ApiResponse({ status: 200, description: 'Plugin enabled successfully', type: PluginActionResponseDto })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
   async enable(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     return await this.pluginsService.enable(id);
   }
@@ -125,6 +132,7 @@ export class PluginsController {
   @ApiOperation({ summary: 'Disable a plugin' })
   @ApiResponse({ status: 200, description: 'Plugin disabled successfully', type: PluginActionResponseDto })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
   async disable(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     return await this.pluginsService.disable(id);
   }
@@ -202,6 +210,7 @@ export class PluginsController {
   @ApiResponse({ status: 201, description: 'Plugin updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Invalid URL/package, id mismatch, or built-in' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
   @ApiResponse({
     status: 503,
     description: 'Gateway shutting down; the previous version was kept',
@@ -217,6 +226,7 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Plugin uninstalled', type: PluginActionResponseDto })
   @ApiResponse({ status: 400, description: 'Cannot uninstall (e.g. built-in)' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
   async uninstall(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     return await this.pluginsService.uninstall(id);
   }

@@ -49,6 +49,13 @@ export class PluginsService {
   private readonly opChains = new Map<string, Promise<unknown>>();
 
   private serialize<T>(id: string, op: () => Promise<T>): Promise<T> {
+    // A boot restore that outlasted the boot wait enables plugins in the background, outside this chain, so a
+    // change to a plugin it has not finished with would interleave with its enable (see isRestorePending).
+    if (this.pluginLoader.isRestorePending(id)) {
+      return Promise.reject(
+        new ConflictException(`Plugin ${id} is still being restored after startup. Retry in a moment.`),
+      );
+    }
     const prior = this.opChains.get(id) ?? Promise.resolve();
     const next = prior.catch(() => undefined).then(op);
     this.opChains.set(id, next);
