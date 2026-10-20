@@ -658,7 +658,9 @@ batch), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
 most one row per subject+kind per minute), the queue dashboard (`queue_board_mutated`), integration
 plugin instances (`integration_instance_created`, `integration_instance_updated`,
 `integration_instance_secret_regenerated`, `integration_instance_deleted`,
-`integration_instance_redriven`), and ADMIN-only infrastructure operations (`infra_config_saved`,
+`integration_instance_redriven`), plugin management (`plugin_installed`, `plugin_updated`, `plugin_uninstalled`,
+`plugin_enabled`, `plugin_disabled`, `plugin_config_updated`, `plugin_sessions_updated`; metadata carries the plugin
+id, version, the host of the requested download URL and config field names, never config values), and ADMIN-only infrastructure operations (`infra_config_saved`,
 `infra_restart_requested`, `infra_data_exported`, `infra_data_imported`, `infra_storage_exported`,
 `infra_storage_imported`).
 
