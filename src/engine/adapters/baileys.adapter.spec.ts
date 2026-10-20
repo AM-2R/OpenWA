@@ -183,6 +183,7 @@ import { ChannelNotFoundError } from '../../common/errors/channel-not-found.erro
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { Boom } from '@hapi/boom';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
@@ -1900,6 +1901,46 @@ describe('BaileysAdapter messaging', () => {
     const failure = new Error('not-acceptable');
     fakeSock.sendMessage.mockRejectedValue(failure);
     await expect(adapter.sendTextMessage('628111@s.whatsapp.net', 'hello')).rejects.toBe(failure);
+  });
+
+  // sendMessage awaits IQs (group roster, devices, sessions) before it relays the message, and WhatsApp
+  // answers a throttled one with a numeric code on the Boom. Every other path maps these to a retryable 503.
+  it.each([
+    [429, EngineThrottledError],
+    [408, EngineTransportError],
+  ])('a WhatsApp %s answer to a query the send awaits is a retryable 503, not a bare 500', async (code, expected) => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: code }));
+    const rejection = adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    await expect(rejection).rejects.toBeInstanceOf(expected);
+    await expect(rejection).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  // The throttle is WhatsApp refusing this account's traffic, which is what the breaker watches for; the send
+  // itself provably went nowhere, so its admission is given back.
+  it('a throttled send is known to have sent nothing and still feeds the send breaker', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: 429 }));
+    const error: unknown = await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello').catch((e: unknown) => e);
+    expect(sentNothing(error)).toBe(true);
+    expect(countsTowardSendBreaker(error)).toBe(true);
+  });
+
+  // A query that timed out may have been answered after the caller gave up, so nothing is claimed about the
+  // send: its admission stays held, and the timeout is a transport fault the breaker leaves to reconnects.
+  it('a send whose awaited query timed out is not known to have sent nothing and stays off the breaker', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('timed out', { data: 408 }));
+    const error: unknown = await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello').catch((e: unknown) => e);
+    expect(sentNothing(error)).toBe(false);
+    expect(countsTowardSendBreaker(error)).toBe(false);
+  });
+
+  it('leaves any other WhatsApp refusal code to propagate untouched', async () => {
+    const adapter = await readyAdapter();
+    const refusal = new Boom('forbidden', { data: 403 });
+    fakeSock.sendMessage.mockRejectedValue(refusal);
+    await expect(adapter.sendTextMessage('628111@s.whatsapp.net', 'hello')).rejects.toBe(refusal);
   });
 
   /** An adapter for a session started behind a proxy, which every fetch it makes must leave through. */
@@ -7423,6 +7464,14 @@ describe('BaileysAdapter status posting', () => {
     const failure = new Error('not-acceptable');
     fakeSock.sendMessage.mockRejectedValue(failure);
     await expect(adapter.postTextStatus('hello', { recipients: ['628111@c.us'] })).rejects.toBe(failure);
+  });
+
+  it('a status post throttled by WhatsApp is a retryable 503, not a bare 500', async () => {
+    const adapter = await ready();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: 429 }));
+    await expect(adapter.postTextStatus('hello', { recipients: ['628111@c.us'] })).rejects.toBeInstanceOf(
+      EngineThrottledError,
+    );
   });
 });
 

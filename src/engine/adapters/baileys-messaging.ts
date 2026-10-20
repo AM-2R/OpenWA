@@ -22,7 +22,7 @@ import {
   Product,
   Quotable,
 } from '../interfaces/whatsapp-engine.interface';
-import { toEngineParticipants } from './baileys-groups';
+import { refusedStatusCode, toEngineParticipants } from './baileys-groups';
 import { findSelfParticipant } from './baileys-group-mapper';
 import { buildVCard } from './vcard';
 import {
@@ -40,6 +40,7 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { type createLogger } from '../../common/services/logger.service';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
@@ -269,6 +270,19 @@ export async function resolveMediaBuffer(
     return { data: fetched.data, mimetype: callerMimetype ?? (unknown ? fallbackType : fetched.mimetype) };
   }
   return { data: Buffer.from(media.data, 'base64'), mimetype: media.mimetype };
+}
+
+/**
+ * Give a WhatsApp throttle or timeout answer (WA code 429 or 408) its retryable 503 instead of letting
+ * the raw Boom surface as a 500. `sendMessage` awaits several IQs before it relays the message (group
+ * roster, devices, sessions) and nothing after the relay awaits a result, so a numeric code here is a
+ * query WhatsApp turned away: a 429 provably sent nothing. Every other failure is returned untouched.
+ */
+export function mapSendRefusal(error: unknown): unknown {
+  const code = refusedStatusCode(error);
+  if (code === 429) return new EngineThrottledError('WhatsApp rate-limited the send (code 429)');
+  if (code === 408) return new EngineTransportError('WhatsApp timed out a query the send depends on (code 408)');
+  return error;
 }
 
 export class BaileysMessaging {
@@ -929,7 +943,7 @@ export class BaileysMessaging {
       sent = options ? await sock.sendMessage(jid, content, options) : await sock.sendMessage(jid, content);
     } catch (error) {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
-      throw error;
+      throw mapSendRefusal(error);
     }
     // Mutations are announced by their library echo; no local callback replaces it.
     if (!('react' in content || 'delete' in content || 'edit' in content)) this.host.rememberOwnSend(sent?.key?.id);
