@@ -10,7 +10,7 @@ import {
 import { SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { toMessageMedia } from './wwebjs-messaging';
-import { type WwebjsEngineHost, withPage, reportPageDeath } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPage, reportPageDeath } from './wwebjs-host';
 
 /**
  * The status-post counterpart of `toMessageResult`, but its absent-message case is *narrower* than a
@@ -54,9 +54,9 @@ export function toStatusResult(msg: Message | undefined): StatusResult {
 export class WwebjsStatus {
   constructor(private readonly host: WwebjsEngineHost) {}
 
-  /** Post-ensureReady client handle. */
+  /** Post-ensureReady client handle; see {@link requireClient} for a teardown that lands in between. */
   private client(): Client {
-    return this.host.getClient();
+    return requireClient(this.host);
   }
 
   /** See {@link withPage} for what a dead page answers here. */
