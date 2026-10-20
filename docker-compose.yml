@@ -16,7 +16,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Minimal set that keeps DockerService (src/modules/docker/docker.service.ts) working:
-      # PING (health), INFO (getSystemInfo), CONTAINERS (list/inspect/create/start/stop),
+      # PING (health), CONTAINERS (list/inspect/create/start/stop),
       # IMAGES (pull), VOLUMES (createVolume). POST is the proxy's single all-or-nothing
       # method gate for non-GET requests (haproxy.cfg: `deny unless METH_GET || env(POST)`).
       # Two consequences of the pinned proxy config, accepted and documented in SECURITY.md:
@@ -34,7 +34,6 @@ services:
       CONTAINERS: 1
       IMAGES: 1
       VOLUMES: 1
-      INFO: 1
       PING: 1
       POST: 1
       # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
