@@ -15,6 +15,7 @@ import { ScopeBindingService } from '../integration/scope-binding.service';
 import { ReKeyChatStatesBySessionId1786500000000 } from '../../database/migrations/1786500000000-ReKeyChatStatesBySessionId';
 import { ScrubRevokedMessageContent1786900000000 } from '../../database/migrations/1786900000000-ScrubRevokedMessageContent';
 import { ScrubNonPhoneLidMappings1786950000000 } from '../../database/migrations/1786950000000-ScrubNonPhoneLidMappings';
+import { BackfillLegacyMessageTypes1791300000000 } from '../../database/migrations/1791300000000-BackfillLegacyMessageTypes';
 import { Session as SessionEntity, SessionStatus } from '../session/entities/session.entity';
 import { In } from 'typeorm';
 import { DateUtils } from 'typeorm/util/DateUtils';
@@ -930,6 +931,9 @@ export class InfraDataService {
           try {
             await ScrubRevokedMessageContent1786900000000.scrub(queryRunner);
             await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
+            // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
+            // the boot-time backfill no longer converts on a migration-managed database.
+            await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner);
           } catch (error) {
             warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
           }

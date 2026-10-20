@@ -2426,6 +2426,42 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     expect(await ds.query('SELECT lid, phone FROM lid_mappings')).toEqual([{ lid: '3', phone: '628123' }]);
   });
 
+  // Boot no longer converts the raw whatsapp-web.js tokens on a migration-managed database, so an archive taken
+  // before the neutral vocabulary has to be converted by the import that restores it.
+  it('converts the raw message types of a restored archive and leaves the neutral ones alone', async () => {
+    await seedSession('s1');
+    const dump = await build().exportData();
+    const at = dump.tables.sessions[0].updatedAt;
+    const message = (id: string, type: string) => ({
+      id,
+      sessionId: 's1',
+      waMessageId: `W-${id}`,
+      chatId: 'c@c.us',
+      chatName: null,
+      author: null,
+      from: 'c@c.us',
+      to: 'me@c.us',
+      body: 'hello',
+      type,
+      direction: MessageDirection.INCOMING,
+      timestamp: 1,
+      metadata: null,
+      status: MessageStatus.DELIVERED,
+      createdAt: at,
+      mediaPath: null,
+      mediaMimetype: null,
+    });
+    const types = ['chat', 'ptt', 'vcard', 'multi_vcard', 'image', 'call_log', 'text'];
+
+    const res = await build().importData({
+      tables: { ...dump.tables, messages: types.map((type, i) => message(`m${i}`, type)) },
+    });
+
+    expect(res.imported).toBe(true);
+    const stored = await ds.query<Array<{ id: string; type: string }>>('SELECT id, type FROM messages ORDER BY id');
+    expect(stored.map(row => row.type)).toEqual(['text', 'voice', 'contact', 'contact', 'image', 'call_log', 'text']);
+  });
+
   it('exports and restores automation_rules, which the session wipe would otherwise cascade away', async () => {
     await seedSession('s1');
     const ruleRepo = ds.getRepository(AutomationRule);
