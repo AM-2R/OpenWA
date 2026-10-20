@@ -412,11 +412,21 @@ export class PluginsService {
    * means the package was substituted in transit and the install fails closed.
    */
   async installFromUrl(url: string): Promise<PluginDto> {
-    const buffer = await this.downloadPackage(url);
-    // Peek the id (the SSRF download stays outside the lock) so the install — which writes the plugin
-    // directory — is serialized against any concurrent uninstall/update of the same id.
-    const { manifest } = parsePluginPackage(buffer);
-    return this.serialize(manifest.id, () => Promise.resolve(this.install({ buffer })));
+    // The SSRF download stays outside the lock; the install itself takes it.
+    return this.installPackage({ buffer: await this.downloadPackage(url) });
+  }
+
+  /**
+   * {@link install} under the same per-id lock as uninstall and update. The id is peeked from the package
+   * first, so an install (which writes the plugin directory) cannot interleave with a teardown of that
+   * plugin that is still awaiting its takeovers, and then remove the files the install just wrote.
+   */
+  async installPackage(file?: { buffer?: Buffer }): Promise<PluginDto> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No plugin file uploaded');
+    }
+    const { manifest } = parsePluginPackage(file.buffer);
+    return this.serialize(manifest.id, () => Promise.resolve(this.install(file)));
   }
 
   /**

@@ -74,8 +74,8 @@ export class PluginsController {
   @ApiResponse({ status: 400, description: 'Invalid package' })
   @ApiResponse({ status: 409, description: 'Plugin already installed' })
   @ApiResponse({ status: 413, description: 'Package exceeds the 5 MB upload limit' })
-  install(@UploadedFile() file: { buffer?: Buffer }): PluginDto {
-    return this.pluginsService.install(file);
+  async install(@UploadedFile() file: { buffer?: Buffer }): Promise<PluginDto> {
+    return this.pluginsService.installPackage(file);
   }
 
   @Post('install-url')

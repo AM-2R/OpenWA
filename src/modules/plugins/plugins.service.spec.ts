@@ -68,6 +68,45 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     expect(() => service.install({ buffer: Buffer.alloc(0) })).toThrow(/no plugin file/i);
   });
 
+  it('installPackage installs like install and refuses an empty upload', async () => {
+    await expect(service.installPackage({ buffer: Buffer.alloc(0) })).rejects.toThrow(/no plugin file/i);
+
+    const dto = await service.installPackage({ buffer: pkg() });
+
+    expect(dto.id).toBe('svc-plg');
+    expect(loader.getPlugin('svc-plg')).toBeDefined();
+  });
+
+  // An uninstall awaits the plugin's takeovers before it removes the files, and an upload that landed in
+  // that window wrote a directory the teardown then deleted from under the freshly loaded plugin.
+  it('installPackage waits for an uninstall of the same id that is still running', async () => {
+    service.install({ buffer: pkg() });
+    let finish!: () => void;
+    jest.spyOn(service as unknown as { uninstallInner: () => Promise<unknown> }, 'uninstallInner').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = () => resolve({ success: true, message: 'ok' });
+        }),
+    );
+    const install = jest.spyOn(service, 'install');
+
+    const uninstalling = service.uninstall('svc-plg');
+    const reinstalling = service.installPackage({ buffer: pkg() });
+    const outcome = reinstalling.then(
+      () => 'installed',
+      (error: Error) => error.message,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    expect(install).not.toHaveBeenCalled();
+
+    finish();
+    await uninstalling;
+
+    // The mocked uninstall removed nothing, so the install that ran after it finds the plugin and refuses.
+    await expect(outcome).resolves.toMatch(/already installed/i);
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a duplicate install (already installed)', () => {
     service.install({ buffer: pkg() });
     expect(() => service.install({ buffer: pkg() })).toThrow(/already installed/i);
