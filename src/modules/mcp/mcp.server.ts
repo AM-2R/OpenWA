@@ -17,7 +17,7 @@ import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { handleToolError, jsonToolResult, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
-import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
+import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
 import { presentedApiKey } from '../../common/security/bearer-token';
 
@@ -72,10 +72,7 @@ export function auditMcpAuthFailure(
 
 /** Read TRUSTED_PROXIES once as a list (shared by the pre-auth throttle and the audit IP resolver). */
 function readTrustedProxies(): string[] {
-  return (process.env.TRUSTED_PROXIES ?? '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+  return parseTrustedProxies(process.env.TRUSTED_PROXIES);
 }
 
 /** Resolve the trusted-proxy-aware client IP + HTTP method/path for an audit record. */

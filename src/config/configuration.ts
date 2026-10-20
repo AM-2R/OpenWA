@@ -5,6 +5,7 @@ import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
 import { resolveRequestTimeoutMs } from './http-timeouts';
 import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/services/shutdown-budget';
+import { parseTrustedProxies } from '../common/utils/ip';
 import { positiveIntFromEnv } from '../common/utils/env-int';
 
 /**
@@ -338,10 +339,7 @@ export default () => ({
     // may be trusted for client-IP resolution. Empty by default: X-Forwarded-For
     // is ignored and the direct socket address is used, preventing spoofing of
     // the API-key allowedIps whitelist.
-    trustedProxies: (process.env.TRUSTED_PROXIES || '')
-      .split(',')
-      .map(proxy => proxy.trim())
-      .filter(Boolean),
+    trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
   },
 
   // Plugin platform configuration
