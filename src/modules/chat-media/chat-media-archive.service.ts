@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
+import { extFromMimetype } from '../../common/media/mime-ext';
 import { createLogger } from '../../common/services/logger.service';
 
 /** Storage key prefix owned by the chat-media archive; the media bucket is shared with statuses. */
@@ -27,16 +28,6 @@ const PURGE_BATCH_SIZE = 500;
 const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Archive keys reconciled per orphan-sweep query — bounds peak memory independently of store size. */
 const SWEEP_CHUNK_SIZE = 500;
-
-/** Subtypes whose registered mimetype name differs from the conventional file extension. */
-const MIME_SUBTYPE_EXT_OVERRIDES: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov' };
-
-/** File extension to store a blob under, derived from its mimetype; 'bin' when unrecognized. */
-function extFromMimetype(mimetype: string): string {
-  const subtype = mimetype.split('/')[1]?.split(';')[0]?.trim().toLowerCase();
-  if (!subtype || !/^[a-z0-9]+$/.test(subtype)) return 'bin';
-  return MIME_SUBTYPE_EXT_OVERRIDES[subtype] ?? subtype;
-}
 
 /** `metadata.media.data` holding a remote URL (a URL-based send) rather than base64 bytes. */
 const MEDIA_URL_POINTER = /^https?:\/\//i;

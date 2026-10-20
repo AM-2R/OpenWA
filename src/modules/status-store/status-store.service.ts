@@ -8,6 +8,7 @@ import type { IncomingStatus } from './incoming-status';
 import type { Status } from '../../engine/interfaces/whatsapp-engine.interface';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
+import { extFromMimetype } from '../../common/media/mime-ext';
 import { isUniqueViolation } from '../../common/utils/db-errors';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { parseWaId, userPart } from '../../engine/identity/wa-id';
@@ -37,16 +38,6 @@ const DEFAULT_ORPHAN_GRACE_MS = 60 * 60 * 1000;
 
 /** Storage key prefix owned by the status store; the media bucket is shared with chat media. */
 const STATUS_MEDIA_PREFIX = 'statuses/';
-
-/** Subtypes whose registered mimetype name differs from the conventional file extension. */
-const MIME_SUBTYPE_EXT_OVERRIDES: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov' };
-
-/** File extension to store a status media blob under, derived from its mimetype; 'bin' when unrecognized. */
-function extFromMimetype(mimetype: string): string {
-  const subtype = mimetype.split('/')[1]?.split(';')[0]?.trim().toLowerCase();
-  if (!subtype || !/^[a-z0-9]+$/.test(subtype)) return 'bin';
-  return MIME_SUBTYPE_EXT_OVERRIDES[subtype] ?? subtype;
-}
 
 /**
  * Persists inbound status/story broadcasts (`StatusUpdate` rows) with a 24h TTL, storing any attached
