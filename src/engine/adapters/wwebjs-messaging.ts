@@ -335,7 +335,7 @@ export function toMessageResult(msg: Message | undefined): MessageResult {
     );
   }
   const id = msg.id as unknown as SerializedWid | undefined;
-  return { id: id?._serialized ?? id?.$1 ?? '', timestamp: msg.timestamp };
+  return { id: readWid(id) ?? '', timestamp: msg.timestamp };
 }
 
 /**
