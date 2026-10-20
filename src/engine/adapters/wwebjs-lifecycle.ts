@@ -1114,7 +1114,11 @@ export class WwebjsLifecycle {
    * failing probe answers alive, since the page is healing, not dead (#1081).
    */
   async probeLiveness(): Promise<boolean> {
-    if (this.status !== EngineStatus.READY || !this.client) return false;
+    // The watchdog also probes an ACTION_REQUIRED session, observe-only (it never reconnects one): the page
+    // is still up while the operator acts. Answering false without asking made every such session look
+    // dead on the first tick, and hid a page that really had died.
+    const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
+    if (!probeable || !this.client) return false;
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {

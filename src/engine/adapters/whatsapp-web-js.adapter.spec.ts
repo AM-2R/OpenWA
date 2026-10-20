@@ -6471,6 +6471,22 @@ describe('WhatsAppWebJsAdapter.probeLiveness (session watchdog probe)', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(false);
   });
 
+  it('asks the page when the session awaits operator action, so the watchdog can tell a live page from a dead one', async () => {
+    // The watchdog probes ACTION_REQUIRED observe-only; a probe that never asked reported "dead" for a
+    // healthy page and could never report the recovery.
+    const alive = adapterWith(
+      { getState: jest.fn().mockResolvedValue(WAState.CONNECTED) },
+      EngineStatus.ACTION_REQUIRED,
+    );
+    const gone = adapterWith(
+      { getState: jest.fn().mockRejectedValue(new Error('Target closed')) },
+      EngineStatus.ACTION_REQUIRED,
+    );
+
+    await expect(alive.probeLiveness()).resolves.toBe(true);
+    await expect(gone.probeLiveness()).resolves.toBe(false);
+  });
+
   it('resolves false without touching the client when the adapter is not READY', async () => {
     const getState = jest.fn();
     const adapter = adapterWith({ getState }, EngineStatus.AUTHENTICATING);
@@ -6616,7 +6632,7 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
     const { adapter, client } = wireAdapter();
 
     client.pupPage.emit('framenavigated', navFrame());
-    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.ACTION_REQUIRED;
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.DISCONNECTED;
 
     await expect(adapter.probeLiveness()).resolves.toBe(false);
     expect(client.getState).not.toHaveBeenCalled();
