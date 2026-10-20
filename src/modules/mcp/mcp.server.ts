@@ -19,7 +19,7 @@ import { handleToolError, jsonToolResult, smartToolResult } from './tool-result'
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
-import { bearerToken } from '../../common/security/bearer-token';
+import { presentedApiKey } from '../../common/security/bearer-token';
 
 const logger = createLogger('McpServer');
 
@@ -39,12 +39,7 @@ export interface McpRequestContext {
  * cannot disagree on what the credential is (the SDK's own header copy joins duplicate headers).
  */
 function extractApiKey(headers: Record<string, string | string[] | undefined> = {}): string | undefined {
-  const xApiKey = headers['x-api-key'];
-  if (xApiKey) {
-    return Array.isArray(xApiKey) ? xApiKey[0] : xApiKey;
-  }
-  const auth = headers['authorization'];
-  return bearerToken(Array.isArray(auth) ? auth[0] : auth);
+  return presentedApiKey(headers);
 }
 
 /**
