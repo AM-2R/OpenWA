@@ -884,6 +884,85 @@ describe('PluginWorkerHost', () => {
       expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 4, ok: true, result: true });
       ch.crash(); // drains the pending dispatch and its timer
     });
+
+    // A handler slower than the host's hook timeout keeps running in the worker, and what it sends from
+    // there names the dispatch that timed out. Honouring that claim only until the timeout let the send
+    // run outside the guard, fire message:sending again and dispatch the same slow handler once more.
+    describe('a handler that outlives the host timeout', () => {
+      const fakeTimers = (): void => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      };
+      const guardedResult = async (ch: FakeChannel, id: number, inFlight: string[]): Promise<unknown> => {
+        ch.reply({ kind: 'cap', id, verb: 'messages.sendText', args: [], inFlight });
+        await flush();
+        await flush();
+        const reply = ch.sent.find(m => m.kind === 'cap-result' && m.id === id);
+        return reply && reply.kind === 'cap-result' && reply.ok ? reply.result : reply;
+      };
+      const build = () => {
+        const hm = new HookManager();
+        const ch = new FakeChannel();
+        hm.register('moderation', SENDING, () => Promise.resolve({ continue: false }));
+        const capDispatcher = async (): Promise<unknown> => (await hm.execute(SENDING, {}, { source: 'cap' })).continue;
+        const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, undefined, (events, run) =>
+          hm.runInFlight(events as HookEvent[], run),
+        );
+        const dispatch = (event: string) => host.dispatchHook({ event, data: {}, source: 'test', timeoutMs: 5000 });
+        return { ch, dispatch };
+      };
+
+      afterEach(() => jest.useRealTimers());
+
+      it('keeps guarding its capability calls after the timeout, until the worker answers', async () => {
+        fakeTimers();
+        const { ch, dispatch } = build();
+        const timedOut = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await expect(timedOut).resolves.toEqual({ continue: true });
+
+        // The late send still short-circuits (true), rather than running the veto chain (false).
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        // The handler finally returns: the claim is given back, and the same call is no longer guarded.
+        const hook = ch.sent.find(m => m.kind === 'hook');
+        ch.reply({ kind: 'hook-result', id: hook?.kind === 'hook' ? hook.id : -1, continue: true });
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        ch.crash();
+      });
+
+      it('gives the claim back when the worker exits', async () => {
+        fakeTimers();
+        const { ch, dispatch } = build();
+        const timedOut = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await timedOut;
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        ch.crash();
+
+        // Nothing honours a claim on a dead worker's behalf: a call that still arrives runs the chain.
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+      });
+
+      it('holds a bounded number of late claims, giving the oldest back first', async () => {
+        fakeTimers();
+        const { ch, dispatch } = build();
+        const first = dispatch('message:sending');
+        await jest.advanceTimersByTimeAsync(5000);
+        await first;
+        await expect(guardedResult(ch, 1, ['message:sending'])).resolves.toBe(true);
+
+        // 32 more timed-out dispatches of another event push the first one past the bound.
+        for (let i = 0; i < 32; i++) {
+          const next = dispatch('message:sent');
+          await jest.advanceTimersByTimeAsync(5000);
+          await next;
+        }
+
+        await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        ch.crash();
+      });
+    });
   });
 
   describe('post-crash dead-check (fail-fast, no stall)', () => {

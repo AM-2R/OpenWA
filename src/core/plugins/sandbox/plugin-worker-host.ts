@@ -27,6 +27,13 @@ const SEND_CAP_TIMEOUT_FACTOR = 4;
 /** Longest worker-reported error kept for an exit message and the plugin's status. */
 const MAX_WORKER_ERROR_CHARS = 500;
 
+/**
+ * Timed-out hook dispatches whose in-flight claim is still honoured, per worker. A handler that never
+ * returns would otherwise keep one entry per dispatch for as long as the worker lives; past this many,
+ * the oldest claim is given back.
+ */
+const MAX_LATE_HOOK_CLAIMS = 32;
+
 /** Worker replies that finish a host request; one arriving during a liveness probe restarts its window. */
 const PROGRESS_KINDS: ReadonlySet<WorkerToHostMessage['kind']> = new Set([
   'lifecycle-result',
@@ -92,6 +99,9 @@ export class PluginWorkerHost {
   // this set bounds that claim, so a worker can never mark an event in flight that the host did not
   // actually dispatch to it (HookManager's AsyncLocalStorage guard does not span the IPC boundary).
   private readonly inFlightHookEvents = new Map<string, number>();
+  // Dispatches that timed out host-side while their handler may still be running in the worker, oldest
+  // first, each with the release of the in-flight claim it still holds. See holdLateClaim.
+  private readonly lateHookClaims = new Map<number, () => void>();
 
   // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
   private inFlightCaps = 0;
@@ -191,17 +201,29 @@ export class PluginWorkerHost {
     const inFlight = [...new Set([...(options.inFlight ?? []), options.event])];
     for (const event of inFlight) this.incInFlightHook(event);
     return new Promise(resolve => {
-      // settle decrements the in-flight counters on every exit path (worker result, timeout, or crash
-      // drain) since it is what the hookPending entry's resolve runs.
-      const settle = (result: { continue: boolean; data?: unknown; error?: string }): void => {
+      let released = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        this.lateHookClaims.delete(id);
         for (const event of inFlight) this.decInFlightHook(event);
+      };
+      // settle gives the in-flight claim back on every exit path that ends the dispatch (the worker's
+      // result, a late one included, or the crash drain) since it is what the hookPending entry's resolve
+      // runs. Resolving a second time is a no-op, so a late result only releases the claim.
+      const settle = (result: { continue: boolean; data?: unknown; error?: string }): void => {
+        release();
         resolve(result);
       };
       const timer = setTimeout(() => {
-        this.hookPending.delete(id);
         options.onTimeout?.();
         this.probeLiveness();
-        settle({ continue: true });
+        // The chain moves on without this plugin, but its handler is still running in the worker, and
+        // a capability call it makes from here on still names this dispatch. Dropping the claim now
+        // would let that call run outside the re-entrancy guard, re-fire the event and dispatch the
+        // same slow handler again, one more send every timeout for as long as the plugin stays enabled.
+        resolve({ continue: true });
+        this.holdLateClaim(id, release);
       }, options.timeoutMs);
       this.hookPending.set(id, { resolve: settle, timer });
       this.channel.postMessage({
@@ -215,6 +237,20 @@ export class PluginWorkerHost {
         inFlight,
       });
     });
+  }
+
+  /**
+   * Keep the claim of a timed-out dispatch until the worker answers it or exits, bounded by
+   * {@link MAX_LATE_HOOK_CLAIMS}. The hookPending entry stays too, so the late result finds it.
+   */
+  private holdLateClaim(id: number, release: () => void): void {
+    this.lateHookClaims.set(id, release);
+    if (this.lateHookClaims.size <= MAX_LATE_HOOK_CLAIMS) return;
+    const [oldest, giveBack] = this.lateHookClaims.entries().next().value as [number, () => void];
+    const waiter = this.hookPending.get(oldest);
+    if (waiter) clearTimeout(waiter.timer);
+    this.hookPending.delete(oldest); // an answer this late is ignored
+    giveBack();
   }
 
   /**
