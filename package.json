@@ -87,7 +87,6 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "adm-zip": "^0.6.1",
-    "archiver": "^8.0.0",
     "audio-decode": "^2.2.3",
     "better-sqlite3": "^13.0.3",
     "bullmq": "^6.3.13",
@@ -119,7 +118,6 @@
     "@nestjs/cli": "^11.0.24",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.2.7",
-    "@types/archiver": "^8.0.0",
     "@types/dockerode": "^4.0.2",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
@@ -198,7 +196,6 @@
     "moduleNameMapper": {
       "^@whiskeysockets/baileys$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
       "^@whiskeysockets/baileys/(.*)$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
-      "^archiver$": "<rootDir>/../test/__mocks__/archiver.ts",
       "^https-proxy-agent$": "<rootDir>/../test/__mocks__/https-proxy-agent.ts",
       "^puppeteer$": "<rootDir>/../test/__mocks__/puppeteer.ts",
       "^socks-proxy-agent$": "<rootDir>/../test/__mocks__/socks-proxy-agent.ts"

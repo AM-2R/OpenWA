@@ -3,11 +3,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 
-// `archiver` v8 ships ESM-only, which ts-jest can't parse transitively. These tests never touch the
-// export path (archiver's only consumer), so a lightweight stub suffices — same approach as the local
-// spec. Must run before importing StorageService.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 // Mock the AWS SDK so no real network call is made: HeadBucket resolves (bucket reachable), and the
 // S3Client constructor is a jest.fn so each test can assert on the exact config it received.
 jest.mock('@aws-sdk/client-s3', () => {

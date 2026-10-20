@@ -4,8 +4,6 @@ import * as path from 'path';
 import { DataSource, IsNull, Not, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 import { StorageService } from '../../common/storage/storage.service';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { ChatMediaArchiveService, CHAT_MEDIA_PREFIX } from './chat-media-archive.service';

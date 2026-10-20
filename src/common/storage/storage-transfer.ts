@@ -1,7 +1,5 @@
-import { TarArchive } from 'archiver';
 import * as tar from 'tar-stream';
-import { createGunzip } from 'zlib';
-import * as fs from 'fs';
+import { createGunzip, createGzip } from 'zlib';
 import { Readable, PassThrough, Transform, pipeline } from 'stream';
 import { LoggerService } from '../services/logger.service';
 import { positiveIntFromEnv } from '../utils/env-int';
@@ -34,13 +32,15 @@ export function isMissingObjectError(error: unknown): boolean {
 // ============================================================================
 
 /**
- * A file opened for export. `size` is the byte length the tar header declares; without it archiver
- * has to buffer that one entry to learn its length.
+ * A file opened for export. `size` is the byte length the tar header declares; without it the entry
+ * has to be buffered to learn its length.
  */
 export interface ExportFileSource {
   stream: Readable;
   size?: number;
 }
+
+type TarPack = ReturnType<typeof tar.pack>;
 
 // Returns the output as soon as the file list is known and fills the archive in the background, one
 // entry at a time: each file is opened only after the previous entry has been written through to the
@@ -73,21 +73,27 @@ export async function createExportStream(
   }
   const output = new PassThrough();
 
-  const archive = new TarArchive({
-    gzip: true,
-    gzipOptions: { level: 6 },
-  });
+  const pack = tar.pack();
+  const gzip = createGzip({ level: 6 });
 
-  // Surface archive-level failures (gzip/finalize) on the returned stream instead of
-  // letting them become an unhandled rejection or a silently truncated download.
-  archive.on('error', (err: Error) => {
+  // Surface archive-level failures (tar/gzip) on the returned stream instead of letting them become an
+  // uncaught 'error' event or a silently truncated download.
+  const failArchive = (err: Error): void => {
     logger.error('Export archive failed', String(err));
     output.destroy(err);
+  };
+  pack.on('error', failArchive);
+  gzip.on('error', failArchive);
+
+  pack.pipe(gzip).pipe(output);
+  // The output closes early when the archive fails or the consumer goes away: release the tar and gzip
+  // streams with whatever they still buffer. After a clean finish both have ended, so this does nothing.
+  output.once('close', () => {
+    pack.destroy();
+    gzip.destroy();
   });
 
-  archive.pipe(output);
-
-  appendEntries(files, openFile, archive, output, logger).catch((err: Error) => output.destroy(err));
+  appendEntries(files, openFile, pack, output, logger).catch((err: Error) => output.destroy(err));
   return output;
 }
 
@@ -105,10 +111,40 @@ function enforceSize(file: string, size: number | undefined): Transform {
   });
 }
 
+/**
+ * Write one tar entry from `source` and call `done` once it is complete or torn down. A known size is
+ * piped straight into the entry; without one the source is buffered first, since a tar header has to
+ * declare the length up front. A failed entry also destroys the pack, which fails the output through
+ * its 'error' listener, so the entry's own error is not needed here; it still needs a listener of its
+ * own, because an 'error' event nothing listens for would crash the process.
+ */
+function writeEntry(
+  pack: TarPack,
+  source: Readable,
+  header: { name: string; mode: number; mtime: Date },
+  size: number | undefined,
+  output: PassThrough,
+  done: () => void,
+): void {
+  if (size !== undefined) {
+    const sink = pack.entry({ ...header, size }, () => done());
+    sink.on('error', () => undefined);
+    source.pipe(sink);
+    return;
+  }
+  const chunks: Buffer[] = [];
+  source.on('data', (chunk: Buffer) => chunks.push(chunk));
+  source.on('end', () => {
+    // The pack is gone once the output closed, and adding an entry to a destroyed pack throws.
+    if (output.destroyed) return;
+    pack.entry(header, Buffer.concat(chunks), () => done()).on('error', () => undefined);
+  });
+}
+
 async function appendEntries(
   files: string[],
   openFile: (filePath: string) => Promise<ExportFileSource>,
-  archive: TarArchive,
+  pack: TarPack,
   output: PassThrough,
   logger: LoggerService,
 ): Promise<void> {
@@ -136,11 +172,10 @@ async function appendEntries(
       stream.destroy();
       break;
     }
-    // The tar sink fails with an error nothing can listen for when an entry's length differs from the
-    // size in its header, which would crash the process. A file rewritten between open and read does
-    // that, so the length is checked here and a mismatch fails the export like a read error, before
-    // the sink sees the extra byte or the early end. pipeline() also forwards a source error, which
-    // pipe() does not.
+    // The tar sink fails with a bare "Size mismatch" when an entry's length differs from the size in
+    // its header. A file rewritten between open and read does that, so the length is checked here and
+    // a mismatch fails the export like a read error, naming the file, before the sink sees the extra
+    // byte or the early end. pipeline() also forwards a source error, which pipe() does not.
     const entry = pipeline(stream, enforceSize(file, size), err => {
       if (!err || output.destroyed) return;
       logger.error(`Export failed reading file: ${file}`, String(err));
@@ -148,26 +183,18 @@ async function appendEntries(
     });
     await new Promise<void>(resolve => {
       const done = (): void => {
-        archive.removeListener('entry', done);
         output.removeListener('close', done);
         resolve();
       };
-      archive.on('entry', done);
       output.on('close', done);
-      // Mode and date are set explicitly: archiver derives both from `stats` when present, and this
-      // stand-in carries only the size.
-      const stats = size === undefined ? undefined : ({ size } as fs.Stats);
-      archive.append(entry, { name: file, mode: 0o644, date: new Date(), stats });
+      writeEntry(pack, entry, { name: file, mode: 0o644, mtime: new Date() }, size, output, done);
     });
     if (output.destroyed) {
       stream.destroy();
       break;
     }
   }
-  if (output.destroyed) {
-    archive.abort();
-    return;
-  }
+  if (output.destroyed) return;
   // Same reasoning as the entry-count warning in createExportStream, for the import's total-bytes cap.
   const localByteCap = positiveIntFromEnv('STORAGE_IMPORT_MAX_TOTAL_BYTES', DEFAULT_IMPORT_MAX_TOTAL_BYTES);
   const warnAboveBytes = Math.min(localByteCap, DEFAULT_IMPORT_MAX_TOTAL_BYTES);
@@ -188,9 +215,7 @@ async function appendEntries(
         'Raise STORAGE_IMPORT_MAX_BYTES on the destination before restoring this archive.',
     );
   }
-  // finalize() rejections also emit via the 'error' handler above; catch the promise so it
-  // never surfaces as an unhandled rejection.
-  archive.finalize().catch(() => undefined);
+  pack.finalize();
 }
 
 // ============================================================================

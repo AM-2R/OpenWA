@@ -4,8 +4,6 @@ import * as path from 'path';
 import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 import { StorageService } from '../../common/storage/storage.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';

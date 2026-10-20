@@ -3,47 +3,6 @@ import { PassThrough, Readable } from 'stream';
 import * as tar from 'tar-stream';
 import { createGzip } from 'zlib';
 
-// archiver v8 is ESM-only and ts-jest cannot load it here. This stand-in keeps the parts of its
-// TarArchive contract the export relies on: a stream entry with a known size is piped straight into
-// the tar pack (without one it is collected first), 'entry' fires once the entry is written, and an
-// entry failure is emitted as 'error'. The real archiver runs in test/storage-export-streaming.e2e-spec.ts.
-jest.mock('archiver', () => {
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  const { EventEmitter } = require('events') as typeof import('events');
-  const tar = require('tar-stream') as typeof import('tar-stream');
-  const { createGzip } = require('zlib') as typeof import('zlib');
-  /* eslint-enable @typescript-eslint/no-require-imports */
-  class TarArchive extends EventEmitter {
-    private readonly pack = tar.pack();
-    private readonly gzip = createGzip();
-    constructor() {
-      super();
-      this.pack.pipe(this.gzip);
-    }
-    pipe(destination: NodeJS.WritableStream): NodeJS.WritableStream {
-      return this.gzip.pipe(destination);
-    }
-    append(source: Readable, data: { name: string; stats?: { size: number } }): void {
-      const done = (err?: Error | null): void => void (err ? this.emit('error', err) : this.emit('entry', data));
-      if (data.stats) {
-        source.pipe(this.pack.entry({ name: data.name, size: data.stats.size }, done));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      source.on('data', (chunk: Buffer) => chunks.push(chunk));
-      source.on('end', () => this.pack.entry({ name: data.name }, Buffer.concat(chunks), done));
-    }
-    finalize(): Promise<void> {
-      this.pack.finalize();
-      return Promise.resolve();
-    }
-    abort(): void {
-      this.pack.destroy();
-    }
-  }
-  return { TarArchive };
-});
-
 import {
   createExportStream,
   DEFAULT_IMPORT_MAX_BYTES,
@@ -181,6 +140,28 @@ describe('createExportStream streams one file at a time', () => {
 
     expect(imported.get(files[1])?.equals(contentFor(files[1]))).toBe(true);
   });
+
+  // A key is an opaque name. A backslash, a doubled slash or a leading `word:` belongs to it, and an archive that
+  // rewrites any of them restores the file under a different key.
+  it.each([true, false])(
+    'writes every key under exactly the name it is stored by (size reported: %s)',
+    async withSize => {
+      const names = [
+        'media/back\\slash.bin',
+        'media/dir//double.bin',
+        '628123:4@s.whatsapp.net/c.jpg',
+        'status:x/y.bin',
+      ];
+      const { openFile } = trackingOpener({}, withSize);
+      const logger = makeLogger();
+      const output = await createExportStream(() => Promise.resolve(names), openFile, logger as never);
+
+      const imported = await importAll(output, logger);
+
+      expect([...imported.keys()]).toEqual(names);
+      expect(imported.get(names[0])?.equals(contentFor(names[0]))).toBe(true);
+    },
+  );
 
   it('fails the output with a read error part-way through a file and stops opening files', async () => {
     const { stats, openFile } = trackingOpener({ 'media/file-b.bin': 'read' });

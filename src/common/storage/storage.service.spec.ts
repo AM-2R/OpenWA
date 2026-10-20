@@ -6,11 +6,6 @@ import { createGzip } from 'zlib';
 import { PassThrough, Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
-// `archiver` v8 ships as ESM only, which ts-jest cannot parse when StorageService
-// is imported transitively. These tests never exercise the export path (which is
-// the only consumer of archiver), so a lightweight stub is sufficient.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 import { StorageService } from './storage.service';
 import * as transfer from './storage-transfer';
 
@@ -360,10 +355,10 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     const iterateFiles = jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
       yield await Promise.resolve('media/a.bin');
     });
-    // No read stub: the enumerator runs before the archive is constructed, and `archiver` is mocked
-    // at the top of this file, so the call rejects there and no file is ever opened. Which
-    // enumeration was used is settled by then, and that is the whole claim here.
-    await service.createExportStream().catch(() => undefined);
+    // No read stub: the file does not exist, so the export skips it with a warning. Which enumeration
+    // was used is settled before that, and that is the whole claim here.
+    const output = await service.createExportStream();
+    output.destroy();
 
     expect(iterateFiles).toHaveBeenCalled();
     expect(listFiles).not.toHaveBeenCalled();
@@ -383,6 +378,23 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     await service.createExportStream();
 
     expect(await create.mock.calls[0][0]()).toEqual(['media/a.bin']);
+    create.mockRestore();
+  });
+
+  // An S3 console "Create folder" leaves a zero-byte object whose key ends in "/". It holds no file, and as an
+  // archive entry of file type it would fail the import that restores the archive onto a local store.
+  it('leaves out an S3 folder placeholder, which holds no file', async () => {
+    const { service } = makeService();
+    jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
+      yield await Promise.resolve('sess1/');
+      yield 'sess1/a.bin';
+      yield 'sess1/deep/';
+    });
+    const create = jest.spyOn(transfer, 'createExportStream').mockResolvedValue(new PassThrough());
+
+    await service.createExportStream();
+
+    expect(await create.mock.calls[0][0]()).toEqual(['sess1/a.bin']);
     create.mockRestore();
   });
 

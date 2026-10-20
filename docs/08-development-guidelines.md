@@ -426,9 +426,6 @@ describe('resolveReconnectConfig', () => {
 
 ```typescript
 // test/app.e2e-spec.ts
-// archiver is ESM-only and AppModule pulls it in; stub it so ts-jest (CommonJS) can load the graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';

@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { spawnSync } from 'node:child_process';
 
 // Queue-on boot env, set BEFORE AppModule is imported below: QUEUE_ENABLED is read at module-eval

@@ -14,7 +14,6 @@ import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.servic
 import type { StorageService } from '../../common/storage/storage.service';
 import { mergeSentMetadata, updateMessageMetadata } from '../message/message-metadata';
 
-jest.mock('archiver', () => ({ default: jest.fn() }));
 const describePostgres = process.env.DATABASE_TYPE === 'postgres' ? describe : describe.skip;
 
 describePostgres('webhook and media recovery on PostgreSQL', () => {

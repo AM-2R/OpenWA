@@ -56,7 +56,9 @@ export async function* iterateLocalFiles(localPath: string, prefix = ''): AsyncG
     }
 
     for (const entry of entries) {
-      const relativePath = dir ? path.join(dir, entry.name) : entry.name;
+      // Keys use "/" on every host: the archive carries them verbatim, and a key with a backslash would
+      // restore as a different file on another host.
+      const relativePath = dir ? path.posix.join(dir, entry.name) : entry.name;
       if (entry.isDirectory()) {
         queue.push({ dir: relativePath, depth: depth + 1 });
       } else if (entry.isFile()) {

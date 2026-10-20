@@ -4,11 +4,6 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
-// `archiver` v8 ships ESM-only, which ts-jest can't parse transitively. These tests never touch the
-// export path (archiver's only consumer), so a lightweight stub suffices — same approach as the
-// other storage specs. Must run before importing StorageService.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 // Mock the AWS SDK so no real network call is made. Each test drives `mockSend`: HeadBucket probes
 // (boot + re-probe) and GetObject reads are distinguished by the mocked command constructors.
 const mockSend = jest.fn();

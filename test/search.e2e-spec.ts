@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph (same as other e2e specs).
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 // Seed the well-known dev-admin-key (ApiKeyRole.ADMIN, so it satisfies @RequireRole(OPERATOR))
 // BEFORE AppModule is imported, mirroring integration-instance.e2e-spec.ts's env-first pattern.
 process.env.ALLOW_DEV_API_KEY = 'true';

@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -24,10 +24,6 @@ import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.ent
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { postgresUtcExtra } from '../../database/postgres-utc';
 
-// StorageService (imported transitively by the infra controllers) pulls in `archiver`, which is
-// ESM-only and cannot be parsed by ts-jest; the import never touches it.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 /**
  * The replace-all import trims send_idempotency_keys with a statement that compares the claim's
  * varchar sessionId with sessions.id, a uuid on PostgreSQL. The comparison only holds because the

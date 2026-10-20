@@ -467,6 +467,9 @@ export class StorageService implements OnModuleDestroy {
   }
 
   private isExportableKey(file: string): boolean {
+    // A key ending in "/" is a folder placeholder an S3 console leaves behind: it holds no file, and written to
+    // the archive as one it would fail the import that restores it onto a local store.
+    if (file.endsWith('/')) return false;
     if (isSafeStorageKey(file)) return true;
     this.logger.warn(`Skipping an unsafe storage key in the export: ${JSON.stringify(file)}`);
     return false;
