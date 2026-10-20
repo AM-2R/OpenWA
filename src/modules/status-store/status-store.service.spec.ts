@@ -952,7 +952,38 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
     }
   });
 
-  it('runs the orphan sweep once at startup and on its own (slower) cadence, cleared on destroy', () => {
+  it('skips an orphan sweep tick while the previous sweep is still running', async () => {
+    const { repo, storage } = mockDeps();
+    const service = new StatusStoreService(
+      repo,
+      storage,
+      fakeConfigService({ 'status.orphanSweepIntervalMs': 60_000 }),
+    );
+
+    jest.useFakeTimers();
+    let release: () => void = () => undefined;
+    jest.spyOn(service, 'purgeExpired').mockResolvedValue(0);
+    const sweepSpy = jest
+      .spyOn(service, 'sweepOrphanedMedia')
+      .mockImplementationOnce(() => new Promise<number>(resolve => (release = () => resolve(0))))
+      .mockResolvedValue(0);
+    try {
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+      release();
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(sweepSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      service.onModuleDestroy();
+      release();
+      jest.useRealTimers();
+    }
+  });
+
+  it('runs the orphan sweep once at startup and on its own (slower) cadence, cleared on destroy', async () => {
     const { repo, storage } = mockDeps();
     const service = new StatusStoreService(repo, storage, fakeConfigService());
 
@@ -964,21 +995,21 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
 
       // The TTL purge fires every 15 min; the orphan sweep only on its own 1h interval.
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(15 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(sweepSpy).not.toHaveBeenCalled();
-      jest.advanceTimersByTime(45 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(45 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
 
       service.onModuleDestroy();
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(60 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
       expect(sweepSpy).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('honors a configured status.orphanSweepIntervalMs override', () => {
+  it('honors a configured status.orphanSweepIntervalMs override', async () => {
     const { repo, storage } = mockDeps();
     const service = new StatusStoreService(
       repo,
@@ -991,7 +1022,7 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', (
       const sweepSpy = jest.spyOn(service, 'sweepOrphanedMedia').mockResolvedValue(0);
       service.onModuleInit();
       sweepSpy.mockClear();
-      jest.advanceTimersByTime(5 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(sweepSpy).toHaveBeenCalledTimes(1);
       service.onModuleDestroy();
     } finally {

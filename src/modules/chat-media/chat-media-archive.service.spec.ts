@@ -923,6 +923,32 @@ describe('ChatMediaArchiveService', () => {
       }
     });
 
+    it('skips an orphan sweep tick while the previous sweep is still running', async () => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+      const svc = build({ 'chatMedia.orphanSweepIntervalMs': 60_000 });
+      let release: () => void = () => undefined;
+      const sweep = jest
+        .spyOn(svc, 'sweepOrphanedMedia')
+        .mockImplementationOnce(() => new Promise<number>(resolve => (release = () => resolve(0))))
+        .mockResolvedValue(0);
+      const purge = jest.spyOn(svc, 'purgeExpired').mockResolvedValue(0);
+      try {
+        svc.onModuleInit();
+        await jest.advanceTimersByTimeAsync(60_000);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(sweep).toHaveBeenCalledTimes(1);
+
+        release();
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(sweep).toHaveBeenCalledTimes(2);
+      } finally {
+        svc.onModuleDestroy();
+        release();
+        [sweep, purge].forEach(spy => spy.mockRestore());
+        jest.useRealTimers();
+      }
+    });
+
     it('schedules both sweeps once archiving is on, and clears them on destroy', () => {
       const setInterval = jest.spyOn(global, 'setInterval');
       const clearInterval = jest.spyOn(global, 'clearInterval');
