@@ -504,10 +504,6 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.getAllPlugins().filter(p => p.manifest.type === type);
   }
 
-  getEnabledPlugins(): PluginInstance[] {
-    return this.getAllPlugins().filter(p => p.status === PluginStatus.ENABLED);
-  }
-
   isPluginEnabled(pluginId: string): boolean {
     const plugin = this.plugins.get(pluginId);
     return plugin?.status === PluginStatus.ENABLED;
