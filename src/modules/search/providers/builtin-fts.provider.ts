@@ -380,8 +380,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
       params.push(q.sessionId);
     }
     if (q.chatId) {
-      where.push(`${prefix}"chatId" = ${ph()}`);
-      params.push(q.chatId);
+      // Every stored form of the chat when the host expanded it (a chat first stored under a lid and later
+      // under the phone is one chat, as in the message list), the literal id otherwise.
+      if (q.chatIdAliases?.length) {
+        const placeholders = q.chatIdAliases.map(() => ph()).join(',');
+        where.push(`${prefix}"chatId" IN (${placeholders})`);
+        params.push(...q.chatIdAliases);
+      } else {
+        where.push(`${prefix}"chatId" = ${ph()}`);
+        params.push(q.chatId);
+      }
     }
     if (q.chatIds?.length === 0) where.push('1 = 0');
     else if (q.chatIds) {
@@ -390,8 +398,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
       params.push(...q.chatIds);
     }
     if (q.from) {
-      where.push(`${prefix}"from" = ${ph()}`);
-      params.push(q.from);
+      if (q.fromAliases?.length) {
+        // A group message keeps the group id in `from` and the person in `author`, so both are matched.
+        const asSender = q.fromAliases.map(() => ph()).join(',');
+        const asAuthor = q.fromAliases.map(() => ph()).join(',');
+        where.push(`(${prefix}"from" IN (${asSender}) OR ${prefix}"author" IN (${asAuthor}))`);
+        params.push(...q.fromAliases, ...q.fromAliases);
+      } else {
+        where.push(`${prefix}"from" = ${ph()}`);
+        params.push(q.from);
+      }
     }
     if (q.direction) {
       where.push(`${prefix}"direction" = ${ph()}`);
