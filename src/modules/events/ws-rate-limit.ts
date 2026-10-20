@@ -111,9 +111,9 @@ export class TokenBucketLimiter {
 }
 
 /**
- * Per-subject sliding-window counter (fixed `max` events per `windowMs`). Same shape as the
- * MCP KeyRateLimiter but returns a boolean instead of throwing an HttpException, since the
- * WS surface answers with an error frame, not an HTTP status.
+ * Per-subject sliding-window counter (fixed `max` events per `windowMs`). Returns a boolean rather
+ * than throwing, since the WS surface answers with an error frame, not an HTTP status; the MCP
+ * KeyRateLimiter wraps it for the HTTP side.
  */
 export class SlidingWindowLimiter {
   private readonly hits = new Map<string, number[]>();
