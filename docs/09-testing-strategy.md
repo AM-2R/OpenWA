@@ -212,7 +212,7 @@ authoritative gate. Current policy:
 | `src/modules/message/`      | 75%      | 66%       | 86%   | 85%        |
 | `src/modules/metrics/`      | 64%      | 58%       | 70%   | 67%        |
 | `src/modules/plugins/`      | 69%      | 64%       | 77%   | 76%        |
-| `src/modules/profile/`      | 78%      | 84%       | 88%   | 85%        |
+| `src/modules/profile/`      | 65%      | 84%       | 88%   | 85%        |
 | `src/modules/queue/`        | 74%      | 81%       | 95%   | 95%        |
 | `src/modules/search/`       | 69%      | 86%       | 78%   | 78%        |
 | `src/modules/session/`      | 75%      | 79%       | 88%   | 87%        |

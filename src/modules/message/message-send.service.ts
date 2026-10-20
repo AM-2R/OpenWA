@@ -9,7 +9,7 @@ import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
+import { resolveMediaBody } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
@@ -23,7 +23,6 @@ import { isUniqueViolation } from '../../common/utils/db-errors';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
-import { isMediaUrl, MEDIA_URL_MESSAGE } from '../../common/media/media-url';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
@@ -991,31 +990,14 @@ export class MessageSendService {
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {
-    const base64 = stripBase64DataUri(dto.base64);
-    if (!dto.url && !base64) {
-      throw new BadRequestException('Either url or base64 must be provided');
-    }
-    // The DTO checks this too, but a plugin send and a message:sending rewrite reach here without it,
-    // and both engines decode anything that is not an http(s) URL as base64.
-    if (!base64 && !isMediaUrl(dto.url)) {
-      throw new BadRequestException(MEDIA_URL_MESSAGE);
-    }
-
-    if (base64 && !dto.mimetype) {
-      throw new BadRequestException('mimetype is required when using base64 data');
-    }
-
-    // Bound an outbound base64 payload to the same byte cap as URL/inbound media, before it is
-    // persisted or handed to the engine. URL media is already capped while streaming.
-    assertBase64WithinMediaCap(base64);
-
+    const { mimetype, data } = resolveMediaBody(dto, {
+      fallbackMimetype: 'application/octet-stream',
+      requireMimetypeForBase64: true,
+      checkUrl: true,
+    });
     return {
-      mimetype: dto.mimetype || 'application/octet-stream',
-      // base64 wins over url when both are present: it is the explicit local payload, and a stale
-      // `url` (e.g. a Swagger/example default left in the body) must not be fetched in its place.
-      // Aligns the send selection with the base64-first persisted metadata and the url field's check,
-      // which is skipped only when base64 holds data after its data-URI prefix is stripped (#670).
-      data: base64 || dto.url!,
+      mimetype,
+      data,
       filename: dto.filename,
       caption: dto.caption,
       mentions: dto.mentions,

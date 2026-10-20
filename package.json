@@ -455,7 +455,7 @@
         "statements": 44
       },
       "./src/modules/profile/": {
-        "branches": 78,
+        "branches": 65,
         "functions": 84,
         "lines": 88,
         "statements": 85

@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { GroupMemberAddMode, IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
-import { assertBase64WithinMediaCap, stripBase64DataUri } from '../message/media-cap.util';
+import { resolveMediaBody } from '../message/media-cap.util';
 import { chatKind } from '../../engine/identity/wa-id';
 import { isAddressableParticipant } from '../../engine/identity/wa-id';
 import { SetGroupPictureDto } from './dto/group.dto';
@@ -222,19 +222,12 @@ export class GroupService {
 
   setGroupPicture(sessionId: string, groupId: string, dto: SetGroupPictureDto): Promise<void> {
     this.assertGroupId(groupId);
-    const base64 = stripBase64DataUri(dto.base64);
-    if (!dto.url && !base64) {
-      throw new BadRequestException('Either url or base64 must be provided');
-    }
-    if (base64 && !dto.mimetype) {
-      throw new BadRequestException('mimetype is required when using base64 data');
-    }
-    assertBase64WithinMediaCap(base64);
-    const media: MediaInput = {
-      mimetype: dto.mimetype || 'image/jpeg',
-      // base64 wins over url when both are present, mirroring setProfilePicture.
-      data: base64 || dto.url!,
-    };
+    // base64 wins over url when both are present, mirroring setProfilePicture.
+    const media: MediaInput = resolveMediaBody(dto, {
+      fallbackMimetype: 'image/jpeg',
+      requireMimetypeForBase64: true,
+      checkUrl: true,
+    });
     return this.getEngine(sessionId).setGroupPicture(groupId, media);
   }
 
