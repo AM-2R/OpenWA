@@ -571,6 +571,13 @@ export class SessionEngineControls {
       // the row is later deleted/recreated.
       unlinked = await this.fences.teardownEngineSafely(id, engine, e => e.logout(), 'logout', session.name);
       this.engines.deleteIfLive(id, engine);
+      // Clear `phone` AFTER the attempt, whatever its outcome, to take the session out of the boot
+      // auto-start query (phone IS NOT NULL). A completed engine-backed unlink wipes the stored
+      // credentials, so the session can never reach READY again without a fresh QR/pairing; an
+      // incomplete one tore the local credentials down, so re-entering auto-start would only wedge it.
+      // Before the status write, so a failed status write cannot leave the flag behind and resurrect
+      // the session into a QR it can never pass on every restart. onReady rewrites it on the next link.
+      await this.sessionRepository.update(id, { phone: null });
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
     } finally {
       if (this.operatorTeardowns.get(id) === engine) {
@@ -583,13 +590,10 @@ export class SessionEngineControls {
         sessionId: id,
         action: 'logout_incomplete',
       });
-      // The local teardown already ran (map reconciled, status DISCONNECTED), but the unlink operation
-      // did not complete. Clear `phone` AFTER the attempt and BEFORE throwing so the boot auto-start
-      // does not resurrect the session into a credential state that can no longer reach READY — the
-      // local credentials were torn down, so re-entering auto-start would only wedge it. The retryable
-      // 502 carries a stable machine code so the dashboard can branch on origin without guessing from
-      // the status/message; no success audit is written on this path.
-      await this.sessionRepository.update(id, { phone: null });
+      // The local teardown already ran (map reconciled, `phone` cleared, status DISCONNECTED), but the
+      // unlink operation did not complete. The retryable 502 carries a stable machine code so the
+      // dashboard can branch on origin without guessing from the status/message; no success audit is
+      // written on this path.
       throw new BadGatewayException({
         statusCode: HttpStatus.BAD_GATEWAY,
         message:
@@ -599,12 +603,6 @@ export class SessionEngineControls {
         code: 'SESSION_LOGOUT_INCOMPLETE',
       });
     }
-
-    // A completed engine-backed unlink wipes the stored credentials, so this session can never
-    // reach READY again without a fresh QR/pairing. Clear `phone` to take it out of the boot
-    // auto-start query (phone IS NOT NULL) instead of resurrecting it into a QR it can never pass
-    // on every restart. onReady rewrites it on the next successful link.
-    await this.sessionRepository.update(id, { phone: null });
 
     this.logger.log(`Session logged out: ${session.name}`, {
       sessionId: id,

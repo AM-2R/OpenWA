@@ -516,6 +516,21 @@ describe('SessionService', () => {
       expect(result.phone).toBeNull();
     });
 
+    // `phone` is the flag that keeps an unlinked session out of the boot auto-start query. It must not
+    // depend on the status write that follows the unlink: a failure there reports the logout as failed
+    // (the unlink is done either way) but must not leave the session to be resurrected into a QR.
+    it('logout() clears phone before the DISCONNECTED write, so a failed status write cannot leave the flag behind', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockImplementation((_id: string, patch: Record<string, unknown>) =>
+        'status' in patch ? Promise.reject(new Error('db down')) : Promise.resolve({ affected: 1 }),
+      );
+      enginesOf().set('sess-uuid-1', { logout: jest.fn().mockResolvedValue(undefined) });
+
+      await expect(service.logout('sess-uuid-1')).rejects.toThrow('db down');
+
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+    });
+
     it('logout() rejects with 502 + stable code SESSION_LOGOUT_INCOMPLETE when the unlink is incomplete — but still tears down locally AND clears phone', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
