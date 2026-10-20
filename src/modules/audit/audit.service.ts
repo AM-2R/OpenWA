@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, In } from 'typeorm';
+import { Repository, LessThan, In } from 'typeorm';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 import { ApiKey } from '../auth/entities/api-key.entity';
 import { createLogger } from '../../common/services/logger.service';
@@ -40,8 +40,6 @@ export interface AuditQueryOptions {
   apiKeyId?: string;
   sessionId?: string;
   severity?: AuditSeverity;
-  startDate?: Date;
-  endDate?: Date;
   limit?: number;
   offset?: number;
 }
@@ -143,10 +141,6 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     return this.log(action, context, AuditSeverity.WARN);
   }
 
-  async logError(action: AuditAction, context: AuditContext = {}): Promise<AuditLog | null> {
-    return this.log(action, context, AuditSeverity.ERROR);
-  }
-
   async findAll(
     options: AuditQueryOptions = {},
     allowedSessions?: string[] | null,
@@ -168,10 +162,6 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     }
     if (options.severity) where.severity = options.severity;
 
-    if (options.startDate && options.endDate) {
-      where.createdAt = Between(options.startDate, options.endDate);
-    }
-
     // Clamp the page size so an arbitrarily large `limit` can't load the whole table into one response.
     const requested = options.limit && options.limit > 0 ? options.limit : 50;
     const take = Math.min(requested, MAX_AUDIT_PAGE_SIZE);
@@ -188,22 +178,6 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     });
 
     return { data, total };
-  }
-
-  async getRecentByApiKey(apiKeyId: string, limit = 10): Promise<AuditLog[]> {
-    return this.auditRepository.find({
-      where: { apiKeyId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
-  }
-
-  async getRecentBySession(sessionId: string, limit = 10): Promise<AuditLog[]> {
-    return this.auditRepository.find({
-      where: { sessionId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
   }
 
   async cleanup(olderThanDays = 30): Promise<number> {
