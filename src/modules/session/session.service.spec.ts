@@ -2116,6 +2116,18 @@ describe('SessionService', () => {
       expect(ownership.release).not.toHaveBeenCalled();
     });
 
+    // The row is already gone when the claim is released, so a failed release has nothing to lapse on and
+    // must not turn a committed delete into a 500 (the retry answers 404 and no audit row is written).
+    it('delete() keeps its outcome when the claim cannot be handed back', async () => {
+      const ownership = withOwnership();
+      ownership.release.mockRejectedValue(new Error('database unreachable'));
+      jest.spyOn(lifecycle, 'delete').mockResolvedValue(undefined);
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+
+      expect(ownership.release).toHaveBeenCalledWith('sess-uuid-1');
+    });
+
     it('forceKill() hands the claim back after the kill', async () => {
       const ownership = withOwnership();
       jest.spyOn(lifecycle, 'forceKill').mockResolvedValue(createMockSession());
