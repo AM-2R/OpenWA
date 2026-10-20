@@ -1,4 +1,5 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
+import { positiveIntOrDefault } from '../../common/utils/env-int';
 
 const DEFAULT_MAX = 60;
 const DEFAULT_WINDOW_MS = 60_000;
@@ -7,22 +8,14 @@ const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_IP_MAX = 120;
 const DEFAULT_MAX_KEYS = 50_000;
 
-const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
-  if (!raw || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return i >= 1 ? i : fallback;
-};
-
 /**
  * Read MCP rate-limit configuration from the environment.
  * Falls back to the default for any missing, blank, non-positive, or non-numeric value.
  */
 export function readRateLimitConfig(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
   return {
-    max: parsePositiveInt(env['MCP_RATE_LIMIT_MAX'], DEFAULT_MAX),
-    windowMs: parsePositiveInt(env['MCP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
+    max: positiveIntOrDefault(env['MCP_RATE_LIMIT_MAX'], DEFAULT_MAX),
+    windowMs: positiveIntOrDefault(env['MCP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
   };
 }
 
@@ -32,8 +25,8 @@ export function readRateLimitConfig(env: NodeJS.ProcessEnv = process.env): { max
  */
 export function readIpRateLimitConfig(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
   return {
-    max: parsePositiveInt(env['MCP_IP_RATE_LIMIT_MAX'], DEFAULT_IP_MAX),
-    windowMs: parsePositiveInt(env['MCP_IP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
+    max: positiveIntOrDefault(env['MCP_IP_RATE_LIMIT_MAX'], DEFAULT_IP_MAX),
+    windowMs: positiveIntOrDefault(env['MCP_IP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
   };
 }
 

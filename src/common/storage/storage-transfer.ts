@@ -4,6 +4,7 @@ import { createGunzip } from 'zlib';
 import * as fs from 'fs';
 import { Readable, PassThrough, Transform, pipeline } from 'stream';
 import { LoggerService } from '../services/logger.service';
+import { positiveIntFromEnv } from '../utils/env-int';
 
 /** Per-entry buffer cap for an import (200 MiB — 4× the inbound media cap). Bounds a decompression bomb. */
 export const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
@@ -26,11 +27,6 @@ export function isMissingObjectError(error: unknown): boolean {
   return (
     e?.code === 'ENOENT' || e?.name === 'NoSuchKey' || e?.name === 'NotFound' || e?.$metadata?.httpStatusCode === 404
   );
-}
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 // ============================================================================

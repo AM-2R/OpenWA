@@ -27,20 +27,14 @@
  * distinct-key (or spoofed-IP) flood cannot grow process memory without limit.
  */
 
+import { positiveIntOrDefault } from '../../common/utils/env-int';
+
 const DEFAULT_FRAME_PER_SECOND = 60;
 const DEFAULT_FRAME_BURST = 120;
 const DEFAULT_HANDSHAKE_MAX = 10;
 const DEFAULT_HANDSHAKE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_SOCKETS_PER_KEY = 16;
 const DEFAULT_MAX_KEYS = 50_000;
-
-const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
-  if (!raw || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return i >= 1 ? i : fallback;
-};
 
 export interface WsRateLimitConfig {
   framePerSecond: number;
@@ -57,11 +51,11 @@ export interface WsRateLimitConfig {
  */
 export function readWsRateLimitConfig(env: NodeJS.ProcessEnv = process.env): WsRateLimitConfig {
   return {
-    framePerSecond: parsePositiveInt(env['WS_RATE_LIMIT_FRAME_PER_SECOND'], DEFAULT_FRAME_PER_SECOND),
-    frameBurst: parsePositiveInt(env['WS_RATE_LIMIT_FRAME_BURST'], DEFAULT_FRAME_BURST),
-    handshakeMax: parsePositiveInt(env['WS_RATE_LIMIT_HANDSHAKE_MAX'], DEFAULT_HANDSHAKE_MAX),
-    handshakeWindowMs: parsePositiveInt(env['WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS'], DEFAULT_HANDSHAKE_WINDOW_MS),
-    maxSocketsPerKey: parsePositiveInt(env['WS_MAX_SOCKETS_PER_KEY'], DEFAULT_MAX_SOCKETS_PER_KEY),
+    framePerSecond: positiveIntOrDefault(env['WS_RATE_LIMIT_FRAME_PER_SECOND'], DEFAULT_FRAME_PER_SECOND),
+    frameBurst: positiveIntOrDefault(env['WS_RATE_LIMIT_FRAME_BURST'], DEFAULT_FRAME_BURST),
+    handshakeMax: positiveIntOrDefault(env['WS_RATE_LIMIT_HANDSHAKE_MAX'], DEFAULT_HANDSHAKE_MAX),
+    handshakeWindowMs: positiveIntOrDefault(env['WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS'], DEFAULT_HANDSHAKE_WINDOW_MS),
+    maxSocketsPerKey: positiveIntOrDefault(env['WS_MAX_SOCKETS_PER_KEY'], DEFAULT_MAX_SOCKETS_PER_KEY),
   };
 }
 

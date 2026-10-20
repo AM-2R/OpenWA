@@ -5,6 +5,7 @@ import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
 import { resolveRequestTimeoutMs } from './http-timeouts';
 import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 import { DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS, MAX_TIMER_MS } from '../common/services/shutdown-budget';
+import { positiveIntFromEnv } from '../common/utils/env-int';
 
 /**
  * Root of the host's persistent state. Relative on purpose: the image sets WORKDIR /app and mounts
@@ -286,27 +287,18 @@ export default () => ({
     // opt-out here — a 0-byte cap rejects every dispatch (a total webhook outage), and a NaN would
     // silently disable the cap (`payloadBytes > NaN` is always false). env.validation rejects
     // non-decimal / non-positive values at boot.
-    maxPayloadBytes: (() => {
-      const n = parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES ?? '', 10);
-      return Number.isFinite(n) && n > 0 ? n : 1024 * 1024;
-    })(),
+    maxPayloadBytes: positiveIntFromEnv('WEBHOOK_MAX_PAYLOAD_BYTES', 1024 * 1024),
     // Max webhooks registered per session. One inbound event fans out to every registered webhook
     // of the session, so an unbounded count multiplies per-event copies of the payload. Creating a
     // NEW webhook above the cap is rejected with 400; existing ones are grandfathered (never
     // deleted). Default 16; 0 disables the cap. Garbage falls back to the default.
-    maxPerSession: (() => {
-      const n = parseInt(process.env.WEBHOOK_MAX_PER_SESSION ?? '', 10);
-      return Number.isFinite(n) && n >= 0 ? n : 16;
-    })(),
+    maxPerSession: resolveNonNegativeIntEnv(process.env.WEBHOOK_MAX_PER_SESSION, 16),
     // Inline base64 media cap for webhook payloads (decoded bytes). A media blob larger than this
     // is replaced with the { omitted: true, sizeBytes } marker BEFORE the payload is cloned per
     // webhook / queued into Redis, so fan-out and failed-job retention never copy the blob. Media
     // at or under the cap stays inline (unchanged). Default 1 MiB; 0 = never inline media. Garbage
     // falls back to the default.
-    mediaInlineMaxBytes: (() => {
-      const n = parseInt(process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES ?? '', 10);
-      return Number.isFinite(n) && n >= 0 ? n : 1024 * 1024;
-    })(),
+    mediaInlineMaxBytes: resolveNonNegativeIntEnv(process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES, 1024 * 1024),
     // How long shutdown waits for in-flight direct deliveries to finish before abandoning them.
     // 0 = don't wait (explicit opt-out); blank/garbage falls back to the default — a NaN here would
     // silently remove the drain deadline downstream (Math.max(0, NaN) is NaN).

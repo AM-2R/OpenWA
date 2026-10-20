@@ -13,6 +13,7 @@ import {
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
+import { positiveIntFromEnv } from '../utils/env-int';
 import { isSafeStorageKey } from '../utils/path-safety';
 import { DEFAULT_S3_KEY_PREFIX, normalizeS3KeyPrefix } from './s3-key-prefix';
 import { createExportStream, ExportFileSource, importFromStream, isMissingObjectError } from './storage-transfer';
@@ -62,11 +63,6 @@ export const S3_PROBE_TIMEOUT_MS = 10_000;
  */
 export const S3_CONNECT_TIMEOUT_MS = 5_000;
 export const S3_SOCKET_TIMEOUT_MS = 30_000;
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
 
 @Injectable()
 export class StorageService implements OnModuleDestroy {
