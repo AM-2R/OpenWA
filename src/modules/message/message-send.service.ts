@@ -636,7 +636,7 @@ export class MessageSendService {
         button: { id: finalDto.buttonId, text: result.body },
       };
     }
-    return this.persistSentState(message, result);
+    return this.persistSentState(message, result, result.body ? { body: result.body } : undefined);
   }
 
   async forward(
@@ -854,7 +854,13 @@ export class MessageSendService {
    * DB fault would otherwise mark a delivered message permanently FAILED and (for text) fire
    * `message:failed`. Log and return success instead.
    */
-  private async persistSentState(message: Message, result: MessageResult): Promise<MessageResponseDto> {
+  private async persistSentState(
+    message: Message,
+    result: MessageResult,
+    // Columns a sender changed in memory after its PENDING insert. The write below is an UPDATE of
+    // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body'> = {},
+  ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
     // engine. Leave waMessageId unset (NULL) so no ack mis-matches it.
@@ -869,6 +875,7 @@ export class MessageSendService {
       const updated = await this.messageRepository.update(
         { id: message.id, sessionId: message.sessionId },
         {
+          ...changed,
           waMessageId: message.waMessageId,
           status: message.status,
           timestamp: message.timestamp,
@@ -912,11 +919,12 @@ export class MessageSendService {
         }
         if (!metadataMerged) {
           // Keep the payload-bearing row when the echo merge fails. Mark it SENT without the
-          // conflicting engine id so the pending reaper cannot strip successfully sent media.
+          // conflicting engine id so the pending reaper cannot strip successfully sent media. This is the
+          // row that survives, so it carries what the send resolved too (a clicked button's label).
           await this.messageRepository
             .update(
               { id: message.id, status: MessageStatus.PENDING },
-              { status: MessageStatus.SENT, timestamp: result.timestamp },
+              { status: MessageStatus.SENT, timestamp: result.timestamp, ...changed },
             )
             .catch(err =>
               this.logger.warn(`Preserving the sent media row failed (id=${message.id})`, {

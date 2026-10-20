@@ -1357,7 +1357,10 @@ describe('MessageSendService', () => {
           },
         }),
       );
-      expect(repository.save).toHaveBeenLastCalledWith(
+      // The only write after the send is this UPDATE; the in-memory entity handed to save() earlier is
+      // mutated afterwards, so asserting on save() would pass without the label ever being written.
+      expect(repository.update).toHaveBeenLastCalledWith(
+        { id: 'msg-uuid-1', sessionId: 'sess-1' },
         expect.objectContaining({
           body: 'Sim',
           status: MessageStatus.SENT,
@@ -1366,7 +1369,40 @@ describe('MessageSendService', () => {
             button: { id: 'yes', text: 'Sim' },
           },
         }),
-        { transaction: false },
+      );
+    });
+
+    it('leaves the stored body alone when the engine resolved no label', async () => {
+      mockEngine.clickButton.mockResolvedValueOnce({ ...mockEngineResult });
+
+      await service.clickButton('sess-1', { chatId: 'test@c.us', messageId: 'PROMPT-1', buttonId: 'yes', text: 'Yes' });
+
+      const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
+      const [, patch] = update.mock.calls.at(-1) ?? [];
+      expect(patch).toMatchObject({ status: MessageStatus.SENT });
+      expect(patch).not.toHaveProperty('body');
+    });
+
+    // The echo won the race and merging onto it failed, so this row is the one kept: it still has to carry the label.
+    it('keeps the resolved label on the retained row when merging onto the echo row failed', async () => {
+      (repository.findOne as jest.Mock)
+        .mockResolvedValueOnce(null) // the prompt lookup
+        .mockRejectedValueOnce(new Error('db busy')) // the metadata merge onto the echo row
+        .mockResolvedValueOnce({ id: 'msg-uuid-1' }); // the retained row, read back
+      (repository.update as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
+      );
+
+      await service.clickButton('sess-1', {
+        chatId: 'test@c.us',
+        messageId: 'PROMPT-1',
+        buttonId: 'yes',
+        text: 'Yes',
+      });
+
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'msg-uuid-1', status: MessageStatus.PENDING },
+        expect.objectContaining({ status: MessageStatus.SENT, body: 'Sim' }),
       );
     });
 
