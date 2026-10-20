@@ -16,7 +16,7 @@ import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
-import { SessionEngineControls, StopMarks } from './session-engine-controls';
+import { SESSION_DELETE_BATCH_SIZE, SessionEngineControls, StopMarks } from './session-engine-controls';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionEngineLeafEvents } from './session-engine-leaf-events';
 import { MessageSendService } from '../message/message-send.service';
@@ -303,4 +303,72 @@ describe('Session content lifetime', () => {
     expect(replacementSend).not.toHaveBeenCalled();
     expect(await db.getRepository(Message).count()).toBe(0);
   });
+
+  it('removes the messages, outbox events and delivery failures of a session in batches and leaves other sessions alone', async () => {
+    const doomed = await createSession();
+    const kept = await db.getRepository(Session).save({ name: 'kept-session', config: {} });
+    const messages = db.getRepository(Message);
+    const outbox = db.getRepository(WebhookOutboxEvent);
+    const failures = db.getRepository(WebhookDeliveryFailure);
+    const count = SESSION_DELETE_BATCH_SIZE * 2 + 50;
+    const seed = async (sessionId: string, rows: number): Promise<void> => {
+      for (let from = 0; from < rows; from += 200) {
+        const size = Math.min(200, rows - from);
+        const range = Array.from({ length: size }, (_, i) => from + i);
+        await messages.insert(
+          range.map(i => ({
+            sessionId,
+            chatId: '10000000001@c.us',
+            from: 'me',
+            to: '10000000001@c.us',
+            body: `m${i}`,
+          })),
+        );
+        await outbox.insert(
+          range.map(i => ({
+            webhookId: 'hook-1',
+            sessionId,
+            event: 'message.received',
+            idempotencyKey: `${sessionId}-${i}`,
+            deliveryId: `dlv-${sessionId}-${i}`,
+            payload: null,
+            state: 'dispatched' as const,
+          })),
+        );
+        await failures.insert(
+          range.map(i => ({
+            sessionId,
+            webhookId: 'hook-1',
+            event: 'message.received',
+            url: 'https://receiver.example',
+            idempotencyKey: `${sessionId}-${i}`,
+            attempts: 3,
+            lastError: 'HTTP 503',
+            payload: {},
+          })),
+        );
+      }
+    };
+    await seed(doomed.id, count);
+    await seed(kept.id, 3);
+    const deleteMessages = jest.spyOn(messages, 'delete');
+    const deleteOutbox = jest.spyOn(outbox, 'delete');
+    const deleteFailures = jest.spyOn(failures, 'delete');
+
+    await controls.delete(doomed.id);
+
+    expect(await messages.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await outbox.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await failures.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await messages.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await outbox.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await failures.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await db.getRepository(Session).findOneBy({ id: doomed.id })).toBeNull();
+    // Three statements per table instead of one that holds the table for every row at once.
+    expect(deleteMessages.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(deleteOutbox.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(deleteFailures.mock.calls.length).toBeGreaterThanOrEqual(3);
+  }, 60000);
+
+  // The write scopes a delete closes stay retired when it fails: a batch running for the session stops at
 });

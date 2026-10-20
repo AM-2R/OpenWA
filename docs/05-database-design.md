@@ -928,6 +928,7 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1787200000000-DeduplicateTerminalWebhookFailures.ts   # one terminal record per webhook and idempotency key
 ├── 1790812800000-AddMessageWindowIndexes.ts   # compound timestamp indexes for message-time pagination
 ├── 1791100000000-AddIntegrationDeliveryFailureDeliveryIndex.ts   # (pluginId, instanceId, deliveryId) index for the dead-letter guards
+├── 1791200000000-AddWebhookOutboxSessionIndex.ts   # (sessionId) index for the per-session outbox delete
 └── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
 ```
 

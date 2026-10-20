@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Repository, DataSource } from 'typeorm';
+import { In, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -41,6 +41,14 @@ import {
   startSlotHolders,
   type ReconnectState,
 } from './session-engine-lifecycle.service';
+
+/**
+ * Rows of the tables that grow with traffic (messages, webhook outbox events, webhook delivery failures)
+ * removed per statement when a session is deleted. Small enough to stay under PostgreSQL's statement timeout
+ * and far below either dialect's bind-parameter limit, and short enough on SQLite (one writer, and each
+ * message row also fires the full-text index trigger) that other sessions are not stalled behind it.
+ */
+export const SESSION_DELETE_BATCH_SIZE = 500;
 
 /** A start refused because an operator stopped the session. Same 409 on the wire as any conflict. */
 export class SessionStoppedException extends ConflictException {}
@@ -762,6 +770,7 @@ export class SessionEngineControls {
       // conversations, see ConversationMappingService.rebindSession), ingress_events (the
       // instance-keyed inbound dedup record, payload already dropped after dispatch, always pruned
       // after INGRESS_DEDUP_RETENTION_DAYS), lid_mappings (a global cache by design) and audit_logs (the audit trail).
+      await this.deleteTrafficRowsInBatches(id);
       await this.host.dataSource().transaction(async manager => {
         await manager.delete(Message, { sessionId: id });
         await manager.delete(MessageBatch, { sessionId: id });
@@ -824,6 +833,31 @@ export class SessionEngineControls {
       // its entries self-remove on settlement (identity-checked). A delete that refused at either
       // fence MUST leave the entry in place — the name is still reserved against the live remover —
       // and a delete that succeeded already saw both fences pass, so no live remover exists.
+    }
+  }
+
+  /**
+   * Remove a session's rows of the tables that grow with traffic (its messages, its webhook outbox records
+   * and its webhook delivery failures) in batches, ahead of the transaction that removes everything else.
+   * One DELETE over a session that has stored millions of rows ran past PostgreSQL's statement timeout,
+   * which failed the whole delete (every retry the same) and, on SQLite, blocked the one event loop for the
+   * length of the statement while each message row also fired the full-text index trigger.
+   *
+   * The batches are not one atomic unit: a failure part-way leaves the session with fewer rows, and
+   * repeating the delete finishes the job. Nothing new can land meanwhile, because the engine is gone and
+   * the closing write scope refuses outbound writes. SQLite resolves each statement within the same tick, so
+   * the loop yields to the event loop between batches.
+   */
+  private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
+    for (const entity of [Message, WebhookOutboxEvent, WebhookDeliveryFailure]) {
+      const rows = this.host.dataSource().getRepository<{ id: string; sessionId: string }>(entity);
+      for (;;) {
+        const batch = await rows.find({ select: { id: true }, where: { sessionId }, take: SESSION_DELETE_BATCH_SIZE });
+        if (batch.length === 0) break;
+        await rows.delete({ sessionId, id: In(batch.map(row => row.id)) });
+        if (batch.length < SESSION_DELETE_BATCH_SIZE) break;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
     }
   }
 

@@ -116,6 +116,8 @@ describe('SessionService', () => {
   let shutdown: ShutdownService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let messageRepository: jest.Mocked<Partial<Repository<Message>>>;
+  let outboxRepository: { find: jest.Mock; delete: jest.Mock };
+  let failureRepository: { find: jest.Mock; delete: jest.Mock };
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
@@ -157,9 +159,24 @@ describe('SessionService', () => {
         raw: undefined,
       }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
+    outboxRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
+    failureRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
+
     dataSource = {
+      // Session delete removes the messages, the outbox records and the delivery failures in batches through the
+      // data source's own repositories.
+      getRepository: jest
+        .fn()
+        .mockImplementation((entity: unknown) =>
+          entity === WebhookOutboxEvent
+            ? outboxRepository
+            : entity === WebhookDeliveryFailure
+              ? failureRepository
+              : messageRepository,
+        ),
       transaction: jest.fn().mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
         const manager = {
           save: jest.fn().mockImplementation((entity: unknown) => Promise.resolve(entity)),
@@ -1358,6 +1375,86 @@ describe('SessionService', () => {
       const removeOrder = managerRemove.mock.invocationCallOrder[0];
       for (const order of managerDelete.mock.invocationCallOrder) expect(order).toBeLessThan(removeOrder);
       expect(managerRemove).toHaveBeenCalledWith(session);
+    });
+
+    describe('messages', () => {
+      const ids = (from: number, count: number): Array<{ id: string }> =>
+        Array.from({ length: count }, (_, i) => ({ id: `m${from + i}` }));
+
+      it('are removed in batches of 500 ahead of the transaction, not by one statement', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (messageRepository.find as jest.Mock)
+          .mockResolvedValueOnce(ids(0, 500))
+          .mockResolvedValueOnce(ids(500, 500))
+          .mockResolvedValueOnce(ids(1000, 20));
+
+        await service.delete('sess-uuid-1');
+
+        expect(messageRepository.find).toHaveBeenCalledTimes(3);
+        expect(messageRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: 500,
+        });
+        const del = messageRepository.delete as jest.Mock;
+        expect(del).toHaveBeenCalledTimes(3);
+        expect(del).toHaveBeenNthCalledWith(1, {
+          sessionId: 'sess-uuid-1',
+          id: In(ids(0, 500).map(row => row.id)),
+        });
+        expect(del).toHaveBeenNthCalledWith(3, {
+          sessionId: 'sess-uuid-1',
+          id: In(ids(1000, 20).map(row => row.id)),
+        });
+        // Every batch is out before the transaction that removes the rest and the session row.
+        const transaction = dataSource.transaction as jest.Mock;
+        expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder[0]);
+      });
+
+      it('and the webhook outbox records are removed in batches the same way', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        outboxRepository.find.mockResolvedValueOnce(ids(0, 500)).mockResolvedValueOnce(ids(500, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(outboxRepository.delete).toHaveBeenCalledTimes(2);
+        expect(outboxRepository.delete).toHaveBeenNthCalledWith(1, {
+          sessionId: 'sess-uuid-1',
+          id: In(ids(0, 500).map(row => row.id)),
+        });
+        const transaction = dataSource.transaction as jest.Mock;
+        expect(outboxRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
+          transaction.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('and the webhook delivery failures are removed in batches the same way', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        failureRepository.find.mockResolvedValueOnce(ids(0, 500)).mockResolvedValueOnce(ids(500, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(failureRepository.delete).toHaveBeenCalledTimes(2);
+        expect(failureRepository.delete).toHaveBeenNthCalledWith(1, {
+          sessionId: 'sess-uuid-1',
+          id: In(ids(0, 500).map(row => row.id)),
+        });
+        const transaction = dataSource.transaction as jest.Mock;
+        expect(failureRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
+          transaction.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('give up the delete when a batch fails, leaving the session row for a retry to finish', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (messageRepository.find as jest.Mock).mockResolvedValueOnce(ids(0, 500));
+        (messageRepository.delete as jest.Mock).mockRejectedValueOnce(new Error('canceling statement'));
+
+        await expect(service.delete('sess-uuid-1')).rejects.toThrow('canceling statement');
+
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(repository.remove).not.toHaveBeenCalled();
+      });
     });
   });
 
