@@ -5347,6 +5347,49 @@ describe('BaileysAdapter store-backed ops', () => {
         rmSpy.mockRestore();
       }
     });
+
+    // The rows that survive a failed clear resurface under the next account to link the session, so the
+    // failure is non-fatal for the unlink but must not pass without a trace.
+    const warnOf = (adapter: BaileysAdapter) =>
+      jest
+        .spyOn((adapter as unknown as { logger: { warn: (m: string, ctx?: unknown) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+    const clearFailure = (what: string) => [
+      `Failed to clear the stored ${what} of an unlinked account`,
+      expect.objectContaining({ sessionId: 'sess-1', error: 'SQLITE_BUSY' }) as unknown,
+    ];
+
+    it('logs a failed clear on logout while the unlink still completes', async () => {
+      const adapter = await linked();
+      fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+      const warn = warnOf(adapter);
+
+      await expect(adapter.logout()).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith(...clearFailure('messages'));
+      expect(warn).toHaveBeenCalledWith(...clearFailure('chat states'));
+    });
+
+    it('logs a failed clear when WhatsApp unlinks the device while the unlink still completes', async () => {
+      const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+      try {
+        const onDisconnected = jest.fn();
+        const adapter = await linked(onDisconnected);
+        fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+        const warn = warnOf(adapter);
+        fakeSock.fire('connection.update', {
+          connection: 'close',
+          lastDisconnect: { error: { output: { statusCode: 401 } } },
+        });
+        await new Promise(r => setImmediate(r));
+
+        expect(warn).toHaveBeenCalledWith(...clearFailure('messages'));
+        expect(warn).toHaveBeenCalledWith(...clearFailure('chat states'));
+        expect(onDisconnected).toHaveBeenCalledWith('logged out');
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
   });
 });
 

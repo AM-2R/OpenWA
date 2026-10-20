@@ -953,8 +953,7 @@ export class BaileysLifecycle {
       // DISCONNECTED before the awaited cleanup so no send/path observes a half-torn-down socket.
       this.localSocketShutdown(sourceSock);
       this.host.fenceStoredWrites();
-      await this.host.config.messageStore?.clearSession(this.host.config.dbSessionId).catch(() => undefined);
-      await this.host.config.chatStateStore?.clearSession(this.host.config.sessionId).catch(() => undefined);
+      await this.clearStoredAccountState();
       // Wipe the multi-file auth dir so a fresh link starts clean — stale creds would otherwise be
       // reloaded on the next connect() and block re-linking (Baileys retries them, no QR emitted).
       // A removal failure propagates: completion requires cleanup, so the operation is incomplete.
@@ -1029,8 +1028,7 @@ export class BaileysLifecycle {
         // The unlinked account's messages and chat states go with it, as they do on an API logout: the
         // next account to link this session must not reply to, forward or retry them, nor inherit its
         // muted, archived and pinned chats.
-        await this.host.config.messageStore?.clearSession(this.host.config.dbSessionId).catch(() => undefined);
-        await this.host.config.chatStateStore?.clearSession(this.host.config.sessionId).catch(() => undefined);
+        await this.clearStoredAccountState();
         await this.clearAuthState();
       } catch (err) {
         // A failed credential removal is terminal: report FAILED + onError instead of looking like a
@@ -1048,6 +1046,25 @@ export class BaileysLifecycle {
     // that same name. tracked under the captured name, settled regardless of the outcome.
     this.host.getOnCredentialTeardownStarted()?.(cleanup);
     await cleanup;
+  }
+
+  /**
+   * Drop the stored messages and chat states of the account being unlinked. A failure does not fail the
+   * unlink, whose completion is the credential removal that follows, but it is logged: the rows that
+   * survive resurface under the next account to link this session (its chat list picks up the old
+   * account's pin, mute and archive flags), and nothing else says why.
+   */
+  private async clearStoredAccountState(): Promise<void> {
+    const { messageStore, chatStateStore, dbSessionId, sessionId } = this.host.config;
+    const warn =
+      (what: string) =>
+      (err: unknown): void =>
+        this.host.logger.warn(`Failed to clear the stored ${what} of an unlinked account`, {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+    await messageStore?.clearSession(dbSessionId).catch(warn('messages'));
+    await chatStateStore?.clearSession(sessionId).catch(warn('chat states'));
   }
 
   /**
