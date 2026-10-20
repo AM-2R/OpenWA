@@ -7,10 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { In, Repository, DataSource } from 'typeorm';
+import { In, QueryDeepPartialEntity, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { MessageBatch } from '../message/entities/message-batch.entity';
+import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
+import { stripBatchMediaPayloads } from '../message/batch-media.util';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -820,6 +821,12 @@ export class SessionEngineControls {
       // is undefined here and the purge would refuse it as an unsafe key and remove nothing.
       const nameIsAnId = await this.sessionRepository.exists({ where: { id: session.name } }).catch(() => true);
       await this.engineFactory.purgeSessionData(id, nameIsAnId ? undefined : session.name);
+    } catch (error) {
+      // The session survives, but the write scopes closed above stay retired for good: a bulk batch
+      // running for it stops at its next item without recording anything, and one not yet picked up
+      // never starts. Nothing else moves a PENDING or PROCESSING row on while this process lives.
+      if (!parentDeleted) await this.failUnfinishedBatches(id);
+      throw error;
     } finally {
       writes.release();
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
@@ -847,6 +854,36 @@ export class SessionEngineControls {
       // its entries self-remove on settlement (identity-checked). A delete that refused at either
       // fence MUST leave the entry in place — the name is still reserved against the live remover —
       // and a delete that succeeded already saw both fences pass, so no live remover exists.
+    }
+  }
+
+  /**
+   * Fail the session's unfinished bulk batches after a delete that closed its write scopes but did not
+   * remove it. Written here rather than through the batch service, which this module cannot reach without
+   * a cycle; the rows are the same ones its reapers fail, with the media payloads stripped as on every
+   * terminal path. Best effort: the database that just failed the delete may fail this too, and the
+   * boot reaper still gets the row on the next start.
+   */
+  private async failUnfinishedBatches(sessionId: string): Promise<void> {
+    try {
+      const batches = this.host.dataSource().getRepository(MessageBatch);
+      const unfinished = await batches.find({
+        where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
+      });
+      for (const batch of unfinished) {
+        stripBatchMediaPayloads(batch.messages);
+        await batches.update({ id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) }, {
+          status: BatchStatus.FAILED,
+          completedAt: new Date(),
+          messages: batch.messages,
+        } as QueryDeepPartialEntity<MessageBatch>);
+      }
+    } catch (error) {
+      this.logger.warn(`Could not fail the unfinished batches of session ${sessionId} after a failed delete`, {
+        sessionId,
+        action: 'session_delete_batch_fail_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

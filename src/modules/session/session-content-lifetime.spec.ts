@@ -1,9 +1,10 @@
+import { ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { MessageBatch } from '../message/entities/message-batch.entity';
+import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -371,4 +372,87 @@ describe('Session content lifetime', () => {
   }, 60000);
 
   // The write scopes a delete closes stay retired when it fails: a batch running for the session stops at
+  // its next item without recording anything. The session is still there, so its row would stay PROCESSING.
+  describe('a delete that fails after closing the session writes', () => {
+    const seedBatch = (sessionId: string, status: BatchStatus, batchId: string) =>
+      db.getRepository(MessageBatch).save({
+        batchId,
+        sessionId,
+        status,
+        messages: [
+          {
+            chatId: '10000000001@c.us',
+            type: 'image',
+            content: { image: { base64: 'MEDIA-PAYLOAD', mimetype: 'image/png', caption: 'hi' } },
+          },
+        ],
+        options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+        progress: { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 },
+        results: [],
+      });
+
+    const statuses = async (): Promise<Array<[string, string]>> =>
+      (await db.getRepository(MessageBatch).find({ order: { batchId: 'ASC' } })).map(row => [row.batchId, row.status]);
+
+    it('fails the unfinished batches of the surviving session and strips their media', async () => {
+      const session = await createSession();
+      const other = await db.getRepository(Session).save({ name: 'other-session', config: {} });
+      await seedBatch(session.id, BatchStatus.PENDING, 'b-pending');
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      await seedBatch(session.id, BatchStatus.COMPLETED, 'b-done');
+      await seedBatch(other.id, BatchStatus.PROCESSING, 'b-other');
+      jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
+
+      expect(await statuses()).toEqual([
+        ['b-done', BatchStatus.COMPLETED],
+        ['b-other', BatchStatus.PROCESSING],
+        ['b-pending', BatchStatus.FAILED],
+        ['b-processing', BatchStatus.FAILED],
+      ]);
+      const failed = await db.getRepository(MessageBatch).find({ where: { status: BatchStatus.FAILED } });
+      for (const row of failed) {
+        expect(row.completedAt).toBeInstanceOf(Date);
+        expect(JSON.stringify(row.messages)).not.toContain('MEDIA-PAYLOAD');
+        expect(JSON.stringify(row.messages)).toContain('hi');
+      }
+      expect(await db.getRepository(Session).countBy({ id: session.id })).toBe(1);
+    });
+
+    it('leaves the batches alone when the delete is refused before it closes anything', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      jest
+        .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+        .mockRejectedValueOnce(new ConflictException('a logout teardown is still running'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow(ConflictException);
+
+      expect(await statuses()).toEqual([['b-processing', BatchStatus.PROCESSING]]);
+    });
+
+    it('still reports the delete error when the batches cannot be failed either', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+      jest.spyOn(db.getRepository(MessageBatch), 'find').mockRejectedValue(new Error('connection lost'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('after a failed delete'),
+        expect.objectContaining({ action: 'session_delete_batch_fail_failed' }),
+      );
+    });
+
+    it('does not touch the batches of a delete that committed', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+
+      await controls.delete(session.id);
+
+      expect(await statuses()).toEqual([]);
+    });
+  });
 });

@@ -41,6 +41,7 @@ import {
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { HookManager } from '../../core/hooks';
 import { assertBase64LengthWithinMediaCap, assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
+import { stripBatchMediaPayloads } from './batch-media.util';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -225,7 +226,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   ): Promise<boolean> {
     const set: QueryDeepPartialEntity<MessageBatch> = { status: BatchStatus.FAILED, completedAt: new Date() };
     if (batch.messages) {
-      this.stripBatchMediaPayloads(batch.messages);
+      stripBatchMediaPayloads(batch.messages);
       set.messages = batch.messages as QueryDeepPartialEntity<MessageBatch>['messages'];
     }
     if (withRunState) {
@@ -476,7 +477,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     batch.progress.cancelled = batch.progress.pending;
     batch.progress.pending = 0;
     batch.completedAt = new Date();
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
 
     const cancelledRows = await this.batchRepository.update(
       { id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
@@ -577,7 +578,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   private async failBatchWithoutEngine(batch: MessageBatch): Promise<void> {
     batch.status = BatchStatus.FAILED;
     batch.completedAt = new Date();
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
     await this.batchRepository.update({ id: batch.id, status: Not(BatchStatus.CANCELLED) }, {
       status: BatchStatus.FAILED,
       completedAt: batch.completedAt,
@@ -856,7 +857,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     batch.results = results;
     // The batch is terminal now (never resumed), so drop the base64 media payloads before persisting —
     // otherwise the message_batches row retains multi-MB media forever.
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
     const terminal = {
       status: batch.status,
       progress: cancelled ? cancelledProgress : batch.progress,
@@ -934,22 +935,6 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
         throw new BadRequestException('Either url or base64 must be provided for bulk media');
       }
       assertBase64WithinMediaCap(base64);
-    }
-  }
-
-  /**
-   * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
-   * terminal (never resumed), so the (often multi-MB) base64 in `message_batches.messages` is dead
-   * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
-   */
-  private stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
-    for (const m of messages ?? []) {
-      for (const key of ['image', 'video', 'audio', 'document']) {
-        const media = m.content[key] as { base64?: unknown } | undefined;
-        if (media && typeof media === 'object' && 'base64' in media) {
-          delete media.base64;
-        }
-      }
     }
   }
 
