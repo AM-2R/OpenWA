@@ -132,6 +132,39 @@ describePostgres('webhook and media recovery on PostgreSQL', () => {
     expect(await service.redrive({ sessionId: 'outside' }, [sessionId])).toMatchObject({ redriven: 0 });
   });
 
+  // The replay skips an opt-in event for a webhook that only subscribes to '*' without spending an
+  // attempt, so a row selected for one would sit at the head of every batch for good.
+  it('leaves an opt-in event out of the batch of a webhook that only subscribes to *', async () => {
+    await webhooks.update({ id: input.webhookId }, { events: ['*'] });
+    await failures.save({
+      ...input,
+      event: 'message.receipt',
+      idempotencyKey: 'receipt',
+      payload: {},
+      createdAt: new Date(Date.now() - 2000),
+    });
+    await failures.save({
+      ...input,
+      idempotencyKey: 'ordinary',
+      payload: { body: 'ok' },
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const delivery = {
+      redeliver: jest.fn(async (_webhook: Webhook, _session: string, _event: string, key: string) => {
+        await failures.delete({ idempotencyKey: key });
+        return 'delivered';
+      }),
+    };
+    const service = new WebhookRedriveService(webhooks, failures, delivery as never, config);
+
+    expect(await service.redrive({ limit: 1 }, [sessionId])).toMatchObject({ delivered: 1, remaining: 0 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual(['ordinary']);
+
+    await webhooks.update({ id: input.webhookId }, { events: ['message.receipt'] });
+    expect(await service.redrive({ limit: 1 }, [sessionId])).toMatchObject({ delivered: 1, remaining: 0 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual(['ordinary', 'receipt']);
+  });
+
   it('converges two connections on one terminal identity', async () => {
     const result = await Promise.all([
       recordWebhookDeliveryFailure(failures, logger, input),

@@ -9,6 +9,7 @@ import { isDeliverableWebhook } from './utils/deliver-once';
 import { MAX_TIMER_MS } from '../../config/configuration';
 import { resolveSessionScope } from '../../common/security/session-scope';
 import { createLogger } from '../../common/services/logger.service';
+import { WILDCARD_EXCLUDED_EVENTS } from '../../common/utils/wildcard-events';
 
 /** Rows replayed per call when the caller names no limit, and the most one call will take. */
 export const DEFAULT_WEBHOOK_REDRIVE_LIMIT = 100;
@@ -158,7 +159,14 @@ export class WebhookRedriveService implements OnModuleDestroy {
         ...(request.webhookId ? { webhookId: request.webhookId } : {}),
       })
       .andWhere('webhook.active = :active', { active: true })
-      .andWhere(`EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscribedEvent} IN ('*', failure.event))`);
+      // The same rule as subscriptionCoversEvent: '*' covers every event except the opt-in ones, which a
+      // webhook must name. Selecting them for a '*'-only webhook would put rows at the head of every batch
+      // that the replay then skips without raising their attempts, so they would never leave it.
+      .andWhere(
+        `EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscribedEvent} = failure.event` +
+          ` OR (${subscribedEvent} = '*' AND failure.event NOT IN (:...wildcardExcluded)))`,
+        { wildcardExcluded: [...WILDCARD_EXCLUDED_EVENTS] },
+      );
     const limit = Math.min(Math.max(1, request.limit ?? DEFAULT_WEBHOOK_REDRIVE_LIMIT), MAX_WEBHOOK_REDRIVE_LIMIT);
     // A call still queued when shutdown starts reads no rows (or their payloads); it only counts them.
     const rows = this.stop.signal.aborted
