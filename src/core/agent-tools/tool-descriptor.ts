@@ -24,8 +24,6 @@ export interface ToolDescriptor<I = unknown> {
   chatScope?: readonly string[] | 'filtered' | 'agnostic';
   /** The quote resolves within the authorized chat, as it does on the REST reply route. */
   chatQuotedAllowed?: boolean;
-  /** Result rendering hint for the MCP adapter. Default 'smart'. */
-  resultDisposition?: 'json' | 'smart';
   /** Calls the service. Receives validated input + the resolved, scoped key. */
   handler: (input: I, apiKey: ApiKey, chatScope?: ChatScopeService) => Promise<unknown>;
 }

@@ -15,7 +15,7 @@ import { UnresolvedApiKeyException, type AuthService } from '../auth/auth.servic
 import { allowUnauthenticatedAuditRow } from '../audit/auth-failure-audit-limiter';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { handleToolError, jsonToolResult, smartToolResult } from './tool-result';
+import { handleToolError, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { limiterKeyForIp, parseTrustedProxies, resolveClientIp } from '../../common/utils/ip';
 import { resolveBodyLimit } from '../../config/bootstrap-security';
@@ -136,9 +136,7 @@ function buildServer(
             error => auditMcpAuthFailure(auditService, error, reqContext),
             chatScope,
           );
-          return tool.resultDisposition === 'json'
-            ? jsonToolResult(result as object)
-            : smartToolResult(result as object);
+          return smartToolResult(result as object);
         } catch (error) {
           return handleToolError(error);
         }
