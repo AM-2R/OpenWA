@@ -178,6 +178,37 @@ test('NumberChecker: bulk parsing deduplicates explicit international numbers wi
   assert.deepEqual(lookups, ['6581234567']);
 });
 
+test('NumberChecker: bulk parsing also splits on the Arabic comma and semicolon', async () => {
+  stubLookups(registered);
+  renderComponent();
+  const textarea = await openBulkTab();
+  const arabicComma = String.fromCharCode(0x060c);
+  const arabicSemicolon = String.fromCharCode(0x061b);
+
+  rtl.fireEvent.change(textarea, {
+    target: { value: `+6581234567${arabicComma}+6591234567${arabicSemicolon}+6561234567` },
+  });
+
+  assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b3 unique numbers parsed$/);
+});
+
+test('NumberChecker: numbers and ids are isolated as left-to-right, so a right-to-left page keeps them in order', async () => {
+  stubLookups(registered);
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '+65 8123 4567' } });
+  assert.equal(container.querySelector('.nc-format-pill strong')?.getAttribute('dir'), 'ltr');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+
+  const phone = container.querySelector('.nc-result-phone bdi');
+  assert.equal(phone?.getAttribute('dir'), 'ltr');
+  assert.equal(phone?.textContent, '+6581234567');
+  const jid = container.querySelector('.nc-detail-value bdi');
+  assert.equal(jid?.getAttribute('dir'), 'ltr');
+  assert.equal(jid?.textContent, '6581234567@c.us');
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
