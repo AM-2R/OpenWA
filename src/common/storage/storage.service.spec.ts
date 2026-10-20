@@ -296,46 +296,33 @@ describe('StorageService local traversal (async + bounded)', () => {
 
   afterEach(() => {
     fs.rmSync(baseDir, { recursive: true, force: true });
-    delete process.env.STORAGE_LIST_MAX_FILES;
   });
 
-  it('lists files across nested subdirectories (async traversal)', async () => {
+  it('enumerates files across nested subdirectories (async traversal)', async () => {
     await service.putFile('a.txt', Buffer.from('a'));
     await service.putFile('sub/b.txt', Buffer.from('b'));
     await service.putFile('sub/deep/c.txt', Buffer.from('c'));
 
-    const files = await service.listFiles();
+    const files: string[] = [];
+    for await (const file of service.iterateFiles()) files.push(file);
     expect(files.sort()).toEqual(['a.txt', 'sub/b.txt', 'sub/deep/c.txt']);
   });
 
-  it('stops at the STORAGE_LIST_MAX_FILES cap instead of enumerating a huge tree', async () => {
-    process.env.STORAGE_LIST_MAX_FILES = '5';
-    for (let i = 0; i < 20; i++) {
-      await service.putFile(`file${i}.txt`, Buffer.from('x'));
-    }
-
-    const files = await service.listFiles();
-    expect(files.length).toBe(5); // capped, not 20
-  });
-
-  it('iterateFiles enumerates the full tree, ignoring the STORAGE_LIST_MAX_FILES per-call cap', async () => {
-    process.env.STORAGE_LIST_MAX_FILES = '5';
+  it('iterateFiles enumerates every file of a wide directory', async () => {
     for (let i = 0; i < 20; i++) {
       await service.putFile(`file${i}.txt`, Buffer.from('x'));
     }
 
     const seen: string[] = [];
     for await (const file of service.iterateFiles()) seen.push(file);
-    expect(seen.length).toBe(20); // complete where listFiles() above truncates at 5
+    expect(seen.length).toBe(20);
   });
 });
 
 /**
- * The export enumerated with listFiles(), which stops at STORAGE_LIST_MAX_FILES and returns without
- * logging or throwing — so the documented local→S3 migration (export, repoint STORAGE_TYPE, import)
- * silently left media behind, and the operator's own files/count pre-check was truncated by the same
- * path. iterateFiles() exists for exactly this case: its own doc calls the cap "a per-call DoS guard,
- * not a completeness contract" and tells callers needing the whole store to iterate instead.
+ * The export and the files/count pre-check both walk the whole store through iterateFiles(), so the
+ * documented local→S3 migration (export, repoint STORAGE_TYPE, import) cannot silently leave media
+ * behind on the old backend.
  */
 describe('StorageService.createExportStream enumerates the whole store', () => {
   const baseDirs: string[] = [];
@@ -349,9 +336,8 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     for (const dir of baseDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('walks the uncapped iterator rather than the capped listing', async () => {
+  it('walks the whole store through iterateFiles', async () => {
     const { service } = makeService();
-    const listFiles = jest.spyOn(service, 'listFiles');
     const iterateFiles = jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
       yield await Promise.resolve('media/a.bin');
     });
@@ -361,7 +347,6 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     output.destroy();
 
     expect(iterateFiles).toHaveBeenCalled();
-    expect(listFiles).not.toHaveBeenCalled();
   });
 
   // The export fails on any open error other than a missing object, so a listed key openFile always
@@ -399,14 +384,11 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
   });
 
   /**
-   * The count is the OTHER half of the same fix and had no test of its own — reverting it to the
-   * capped listing left the suite green. It is the pre-check an operator runs before that migration,
-   * so a count truncated at the cap hides precisely the gap they are checking for, and hides it
-   * while agreeing with itself.
+   * The count is the pre-check an operator runs before that migration, so it has to see every file
+   * the export will carry.
    */
-  it('counts with the uncapped iterator too, so the pre-check cannot hide the gap', async () => {
+  it('counts through iterateFiles too, so the pre-check sees what the export carries', async () => {
     const { service } = makeService();
-    const listFiles = jest.spyOn(service, 'listFiles');
     const iterateFiles = jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
       yield await Promise.resolve('media/a.bin');
       yield await Promise.resolve('media/b.bin');
@@ -415,14 +397,13 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     const { count } = await service.getFileCount();
 
     expect(iterateFiles).toHaveBeenCalled();
-    expect(listFiles).not.toHaveBeenCalled();
     expect(count).toBe(2); // the iterator's items are what was counted, not an unrelated walk
   });
 
   /**
-   * Removing the cap from the enumeration also removed the bound on the SIZE loop underneath it,
-   * which stat'ed every file synchronously. On a large store that holds the event loop for the whole
-   * walk: health checks, webhooks and every in-flight request wait behind a count.
+   * The size loop under the whole-store walk must not stat every file synchronously: on a large store
+   * that holds the event loop for the whole walk, and health checks, webhooks and every in-flight
+   * request wait behind a count.
    *
    * Measured, not asserted structurally. A single "did something run during the call?" flag is NOT
    * discriminating here — the enumeration awaits before the stat loop begins, so that flag flips

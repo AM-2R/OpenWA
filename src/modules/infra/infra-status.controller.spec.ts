@@ -140,7 +140,7 @@ describe('InfraStatusController.getStatus engine (reads the real engine.puppetee
       {} as never, // engineFactory
       { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      { refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
     );
 
     const status = await controller.getStatus();
@@ -159,7 +159,7 @@ describe('InfraStatusController.getStatus engine (reads the real engine.puppetee
       {} as never,
       { isDockerAvailable: () => false } as never,
       { isAvailable: () => Promise.resolve(false) } as never,
-      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never,
+      { refreshS3Availability: () => Promise.resolve(false) } as never,
     );
 
     const status = await controller.getStatus();
@@ -189,7 +189,7 @@ describe('InfraStatusController.getStatus storage (reads the real storage.localP
       {} as never, // engineFactory
       { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      { refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
     );
   };
 
@@ -240,7 +240,7 @@ describe('InfraStatusController.getStatus envPinned', () => {
       {} as never,
       { isDockerAvailable: () => false } as never,
       { isAvailable: () => Promise.resolve(false) } as never,
-      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never,
+      { refreshS3Availability: () => Promise.resolve(false) } as never,
     );
   };
 

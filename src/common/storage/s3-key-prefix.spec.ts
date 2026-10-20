@@ -80,7 +80,7 @@ describe('StorageService S3 key prefix', () => {
     } as unknown as ConfigService;
     svc = new StorageService(config);
     await new Promise(resolve => setImmediate(resolve));
-    expect(svc.isS3Available()).toBe(true);
+    expect((svc as unknown as { s3Available: boolean }).s3Available).toBe(true);
     return svc;
   }
 

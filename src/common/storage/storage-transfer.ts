@@ -55,9 +55,9 @@ export async function createExportStream(
   logger: LoggerService,
 ): Promise<PassThrough> {
   const files = await listFiles();
-  // The importer aborts a whole archive past STORAGE_IMPORT_MAX_ENTRIES. Now that the export is
-  // uncapped, a large store can produce one this gateway refuses to restore — and the operator would
-  // only find out at restore time, after decommissioning the source. Say it at EXPORT time instead.
+  // The importer aborts a whole archive past STORAGE_IMPORT_MAX_ENTRIES. The export carries the whole
+  // store, so a large one can produce an archive this gateway refuses to restore, and the operator
+  // would only find out at restore time, after decommissioning the source. Say it at EXPORT time instead.
   // Compared against the LOWER of this deployment's configured limit and the shipped default. The
   // default alone is destination-agnostic, which is right when restoring elsewhere — but it stays
   // silent for an operator who LOWERED the limit here and restores onto this same gateway, which is
