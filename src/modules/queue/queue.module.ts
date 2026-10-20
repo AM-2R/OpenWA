@@ -17,9 +17,6 @@ import { IngressEvent } from '../integration/entities/ingress-event.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 import { PluginsModule } from '../../core/plugins/plugins.module';
 
-// Re-export for backward compatibility
-export { QUEUE_NAMES } from './queue-names';
-
 /**
  * Bounded retention for finished webhook-queue jobs. Failed webhook jobs carry their full payload in
  * Redis until eviction, so the window must stay small — the durable record of a lost delivery is the
