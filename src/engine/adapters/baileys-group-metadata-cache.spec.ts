@@ -1,0 +1,214 @@
+import type { GroupMetadata } from '@whiskeysockets/baileys';
+import { GroupMetadataCache, groupMetadataCacheTtlMs } from './baileys-group-metadata-cache';
+
+const GROUP = '120363000000000001@g.us';
+const OTHER = '120363000000000002@g.us';
+
+const group = (id: string, members: string[] = ['628111@s.whatsapp.net']): GroupMetadata =>
+  ({ id, subject: 'Test', participants: members.map(member => ({ id: member })) }) as unknown as GroupMetadata;
+
+describe('GroupMetadataCache', () => {
+  let clock: number;
+  const now = (): number => clock;
+  const build = (ttlMs = 1000, maxEntries = 256): GroupMetadataCache => new GroupMetadataCache(ttlMs, maxEntries, now);
+
+  beforeEach(() => {
+    clock = 1_000_000;
+  });
+
+  describe('reading through', () => {
+    it('queries once and answers from the cache until the TTL ends', async () => {
+      const cache = build();
+      const fetch = jest.fn().mockResolvedValue(group(GROUP));
+
+      const first = await cache.read(GROUP, fetch);
+      clock += 999;
+      const second = await cache.read(GROUP, fetch);
+
+      expect(first).toBe(second);
+      expect(fetch).toHaveBeenCalledTimes(1);
+
+      clock += 1;
+      await cache.read(GROUP, fetch);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps each group apart', async () => {
+      const cache = build();
+      const fetch = jest.fn((jid: string) => Promise.resolve(group(jid)));
+
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+      await cache.read(GROUP, () => fetch(GROUP));
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets concurrent reads of one group share a single query', async () => {
+      const cache = build();
+      let answer!: (metadata: GroupMetadata) => void;
+      const fetch = jest.fn(() => new Promise<GroupMetadata>(resolve => (answer = resolve)));
+
+      const reads = [cache.read(GROUP, fetch), cache.read(GROUP, fetch), cache.read(GROUP, fetch)];
+      answer(group(GROUP));
+      const results = await Promise.all(reads);
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(new Set(results).size).toBe(1);
+    });
+
+    it('does not keep a failed query: the error surfaces and the next read asks again', async () => {
+      const cache = build();
+      const fetch = jest.fn().mockRejectedValueOnce(new Error('rate-overlimit')).mockResolvedValue(group(GROUP));
+
+      await expect(cache.read(GROUP, fetch)).rejects.toThrow('rate-overlimit');
+      await expect(cache.read(GROUP, fetch)).resolves.toMatchObject({ id: GROUP });
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('answers undefined without querying when the TTL is 0, so Baileys queries on its own', async () => {
+      const cache = build(0);
+      const fetch = jest.fn().mockResolvedValue(group(GROUP));
+
+      await expect(cache.read(GROUP, fetch)).resolves.toBeUndefined();
+
+      expect(cache.enabled).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('forgetting', () => {
+    it('reads a group again after it is invalidated, and leaves the others', async () => {
+      const cache = build();
+      const fetch = jest.fn((jid: string) => Promise.resolve(group(jid)));
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+
+      cache.invalidate(GROUP);
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+
+      expect(fetch.mock.calls.map(([jid]) => jid)).toEqual([GROUP, OTHER, GROUP]);
+    });
+
+    it('ignores an invalidation that names no group', () => {
+      const cache = build();
+      expect(() => cache.invalidate(undefined)).not.toThrow();
+    });
+
+    it('does not keep an answer that an invalidation overtook, but still hands it to its callers', async () => {
+      const cache = build();
+      let answer!: (metadata: GroupMetadata) => void;
+      const slow = jest.fn(() => new Promise<GroupMetadata>(resolve => (answer = resolve)));
+      const read = cache.read(GROUP, slow);
+
+      cache.invalidate(GROUP); // the membership changed while the query was out
+      answer(group(GROUP, ['628111@s.whatsapp.net']));
+
+      await expect(read).resolves.toMatchObject({ id: GROUP });
+      const fresh = jest.fn().mockResolvedValue(group(GROUP, ['628111@s.whatsapp.net', '628222@s.whatsapp.net']));
+      await cache.read(GROUP, fresh);
+      expect(fresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears every group, and an answer in flight is not kept either', async () => {
+      const cache = build();
+      await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+      let answer!: (metadata: GroupMetadata) => void;
+      const inFlight = cache.read(OTHER, () => new Promise<GroupMetadata>(resolve => (answer = resolve)));
+
+      cache.clear();
+      answer(group(OTHER));
+      await inFlight;
+
+      expect(cache.size).toBe(0);
+    });
+
+    it('evicts the least recently used group beyond its capacity', async () => {
+      const cache = build(1000, 2);
+      const fetch = jest.fn((jid: string) => Promise.resolve(group(jid)));
+      const third = '120363000000000003@g.us';
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+      await cache.read(GROUP, () => fetch(GROUP)); // GROUP is now the more recent of the two
+
+      await cache.read(third, () => fetch(third)); // pushes OTHER out
+
+      expect(cache.size).toBe(2);
+      fetch.mockClear();
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+      expect(fetch.mock.calls.map(([jid]) => jid)).toEqual([OTHER]);
+    });
+  });
+
+  describe('groups.update batches', () => {
+    it('drops a group whose partial change arrives, and leaves the others', async () => {
+      const cache = build();
+      const fetch = jest.fn((jid: string) => Promise.resolve(group(jid)));
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+
+      cache.applyUpdates([{ id: GROUP, announce: true }]);
+
+      fetch.mockClear();
+      await cache.read(GROUP, () => fetch(GROUP));
+      await cache.read(OTHER, () => fetch(OTHER));
+      expect(fetch.mock.calls.map(([jid]) => jid)).toEqual([GROUP]);
+    });
+
+    it('refreshes a cached group from a whole snapshot, restarting its TTL', async () => {
+      const cache = build();
+      const fetch = jest.fn().mockResolvedValue(group(GROUP, ['628111@s.whatsapp.net']));
+      await cache.read(GROUP, fetch);
+      clock += 900;
+
+      cache.applyUpdates([group(GROUP, ['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
+      clock += 900;
+
+      const hit = await cache.read(GROUP, fetch);
+      expect(hit?.participants).toHaveLength(2);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not add a group nobody has sent to from a snapshot', () => {
+      const cache = build();
+
+      cache.applyUpdates([group(GROUP), group(OTHER)]);
+
+      expect(cache.size).toBe(0);
+    });
+
+    it('skips entries without an id and tolerates a missing batch', () => {
+      const cache = build();
+      expect(() => cache.applyUpdates([{ subject: 'no id' }])).not.toThrow();
+      expect(() => cache.applyUpdates(undefined)).not.toThrow();
+    });
+  });
+});
+
+describe('groupMetadataCacheTtlMs', () => {
+  const KEY = 'BAILEYS_GROUP_METADATA_CACHE_TTL_MS';
+  const saved = process.env[KEY];
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
+  });
+
+  it('defaults to five minutes', () => {
+    delete process.env[KEY];
+    expect(groupMetadataCacheTtlMs()).toBe(300_000);
+  });
+
+  it('takes a configured value, 0 included, and falls back on garbage', () => {
+    process.env[KEY] = '60000';
+    expect(groupMetadataCacheTtlMs()).toBe(60_000);
+    process.env[KEY] = '0';
+    expect(groupMetadataCacheTtlMs()).toBe(0);
+    process.env[KEY] = '5m';
+    expect(groupMetadataCacheTtlMs()).toBe(300_000);
+    process.env[KEY] = '';
+    expect(groupMetadataCacheTtlMs()).toBe(300_000);
+  });
+});

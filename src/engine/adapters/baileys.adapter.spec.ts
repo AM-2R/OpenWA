@@ -10439,3 +10439,166 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     });
   });
 });
+
+describe('BaileysAdapter group metadata cache', () => {
+  const GROUP = '123-456@g.us';
+  const TTL_ENV = 'BAILEYS_GROUP_METADATA_CACHE_TTL_MS';
+  const savedTtl = process.env[TTL_ENV];
+  const meta = (members: string[]) => ({ id: GROUP, subject: 'G', participants: members.map(id => ({ id })) });
+
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    delete process.env[TTL_ENV];
+    fakeSock.groupMetadata.mockReset().mockResolvedValue(meta(['628111@s.whatsapp.net']));
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    if (savedTtl === undefined) delete process.env[TTL_ENV];
+    else process.env[TTL_ENV] = savedTtl;
+  });
+
+  type SocketConfig = { cachedGroupMetadata: (jid: string) => Promise<unknown> };
+  const socketConfig = (): SocketConfig => {
+    const make = jest.requireMock<{ default: jest.Mock }>('@whiskeysockets/baileys').default;
+    const calls = make.mock.calls as Array<[SocketConfig]>;
+    return calls[calls.length - 1][0];
+  };
+  const ready = async (): Promise<BaileysAdapter> => {
+    const adapter = newAdapter();
+    await adapter.initialize({});
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  it('answers a group send from the cache after one query', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+
+    const first = await cachedGroupMetadata(GROUP);
+    const second = await cachedGroupMetadata(GROUP);
+
+    expect(first).toBe(second);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledWith(GROUP);
+  });
+
+  it('lets a failed query surface as the send error and tries again on the next send', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    fakeSock.groupMetadata.mockRejectedValueOnce(Object.assign(new Error('rate-overlimit'), { data: 429 }));
+
+    await expect(cachedGroupMetadata(GROUP)).rejects.toThrow('rate-overlimit');
+    await expect(cachedGroupMetadata(GROUP)).resolves.toMatchObject({ id: GROUP });
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('is off when the TTL is 0: the option answers nothing, so Baileys queries on its own', async () => {
+    process.env[TTL_ENV] = '0';
+    await ready();
+
+    await expect(socketConfig().cachedGroupMetadata(GROUP)).resolves.toBeUndefined();
+    expect(fakeSock.groupMetadata).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a participant is added or removed', 'group-participants.update', { id: GROUP, action: 'add', participants: [] }],
+    ['the group changes a setting', 'groups.update', [{ id: GROUP, announce: true }]],
+    ['the account is added to the group again', 'groups.upsert', [{ id: GROUP, participants: [] }]],
+  ])('reads the group again after %s', async (_label, event, payload) => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    fakeSock.fire(event, payload);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes a cached group from a whole snapshot without another query', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    fakeSock.fire('groups.update', [meta(['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
+    const refreshed = (await cachedGroupMetadata(GROUP)) as { participants: unknown[] };
+
+    expect(refreshed.participants).toHaveLength(2);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports the group events to consumers while it keeps the cache', async () => {
+    const onGroupEvent = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onGroupEvent });
+    fakeSock.fire('connection.update', { connection: 'open' });
+
+    fakeSock.fire('group-participants.update', {
+      id: GROUP,
+      action: 'add',
+      participants: ['628222@s.whatsapp.net'],
+    });
+
+    expect(onGroupEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'join', groupId: GROUP }));
+  });
+
+  it.each([
+    ['addParticipants', (a: BaileysAdapter) => a.addParticipants(GROUP, ['628222@c.us'])],
+    ['removeParticipants', (a: BaileysAdapter) => a.removeParticipants(GROUP, ['628111@c.us'])],
+    ['leaveGroup', (a: BaileysAdapter) => a.leaveGroup(GROUP)],
+  ])('reads the group again after %s, whether or not WhatsApp has reported the change yet', async (_label, write) => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    await write(adapter);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('forgets a group when its write fails too, since the outcome may be partial', async () => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+    fakeSock.groupLeave.mockRejectedValueOnce(new Error('connection closed'));
+
+    await expect(adapter.leaveGroup(GROUP)).rejects.toThrow();
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts every new socket with an empty cache', async () => {
+    const adapter = await ready();
+    await socketConfig().cachedGroupMetadata(GROUP);
+
+    // A transient drop: the lifecycle builds a fresh socket without going through a teardown.
+    jest.useFakeTimers();
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await jest.runAllTimersAsync();
+    await socketConfig().cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+    await adapter.destroy();
+  });
+
+  it.each([
+    ['disconnect', (a: BaileysAdapter) => a.disconnect()],
+    ['destroy', (a: BaileysAdapter) => a.destroy()],
+  ])('empties the cache on %s', async (_label, tearDown) => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    await tearDown(adapter);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+});

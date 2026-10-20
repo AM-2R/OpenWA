@@ -263,6 +263,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'MESSAGE_REAPER_GRACE_MS',
     'WEBHOOK_RECONCILE_GRACE_MS',
     'INGRESS_RECONCILE_GRACE_MS',
+    'BAILEYS_GROUP_METADATA_CACHE_TTL_MS', // 0 = no cache; every group send then queries the participant list
   ]) {
     checkNonNegativeInt(key);
   }
