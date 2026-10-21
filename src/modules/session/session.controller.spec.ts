@@ -407,6 +407,49 @@ describe('SessionController findAll name filter', () => {
   });
 });
 
+// GET /sessions/stats/overview names no :sessionId, so the guard has nothing to scope it against and the
+// key's allowlist handed to the service is the whole fence: without it a key confined to one session reads
+// the gateway-wide totals and status distribution.
+describe('SessionController getStats scope', () => {
+  const stats = {
+    total: 1,
+    active: 0,
+    ready: 1,
+    disconnected: 0,
+    byStatus: { ready: 1 },
+    memoryUsage: { heapUsed: 1, heapTotal: 2, rss: 3 },
+  };
+  let sessionService: { getStats: jest.Mock };
+  let controller: SessionController;
+
+  beforeEach(() => {
+    sessionService = { getStats: jest.fn().mockResolvedValue(stats) };
+    controller = new SessionControllerClass(
+      sessionService as unknown as SessionService,
+      { logInfo: jest.fn() } as unknown as AuditService,
+      new ChatScopeService(),
+    );
+  });
+
+  it("hands the key's allowedSessions to the service and returns its answer", async () => {
+    const apiKey = { allowedSessions: ['sess-uuid-1', 'sess-uuid-2'] } as unknown as ApiKey;
+
+    await expect(controller.getStats(apiKey)).resolves.toBe(stats);
+
+    expect(sessionService.getStats).toHaveBeenCalledTimes(1);
+    expect(sessionService.getStats).toHaveBeenCalledWith(['sess-uuid-1', 'sess-uuid-2']);
+  });
+
+  it('hands over no scope for a key without an allowlist, or for no key', async () => {
+    await controller.getStats({ allowedSessions: null } as unknown as ApiKey);
+    await controller.getStats(undefined);
+
+    // null, undefined and [] all mean "every session" to the service; any list would narrow the totals.
+    const scopes = sessionService.getStats.mock.calls.map((call: unknown[]) => call[0] ?? []);
+    expect(scopes).toEqual([[], []]);
+  });
+});
+
 // The pin route forwards a boolean the engine can refuse. The value worth pinning is that the
 // engine's `false` reaches the caller: WhatsApp caps pinned chats at three, and a controller that
 // hard-coded `{ success: true }` would report a refused pin as done.
