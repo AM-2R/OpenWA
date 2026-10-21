@@ -93,6 +93,23 @@
   stroke: var(--error);
 }
 
+/* On a phone the field and the operator share the first row, and the value and the remove button the second,
+   instead of what the fixed bases above leave of one row. The 3.5rem is the 40px button, a gap and slack. */
+@media (max-width: 600px) {
+  .filter-row {
+    flex-wrap: wrap;
+  }
+
+  .filter-field,
+  .filter-operator {
+    flex: 1 1 6rem;
+  }
+
+  .filter-value {
+    flex: 1 1 calc(100% - 3.5rem);
+  }
+}
+
 .filter-add {
   align-self: flex-start;
   display: inline-flex;
