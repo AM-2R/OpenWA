@@ -274,20 +274,24 @@ export class StorageService implements OnModuleDestroy {
    * `prefix` narrows the walk at the source (the S3 ListObjectsV2 prefix and the local traversal
    * root), so a caller reconciling one subtree neither pages the whole store nor holds every key
    * of it in the dedupe Set.
+   *
+   * A local directory the walk cannot read fails it, so no caller is handed a short listing without
+   * knowing. `skipUnreadable` is for a caller that only acts on the files it was shown (an orphan
+   * sweep): the directory is named in a warning and left alone.
    */
-  async *iterateFiles(prefix = ''): AsyncGenerator<string> {
+  async *iterateFiles(prefix = '', options: { skipUnreadable?: boolean } = {}): AsyncGenerator<string> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       const seen = new Set<string>();
       for await (const file of this.iterateS3Files(prefix)) {
         seen.add(file);
         yield file;
       }
-      for await (const file of this.iterateLocalFiles(prefix)) {
+      for await (const file of this.iterateLocalFiles(prefix, options.skipUnreadable)) {
         if (!seen.has(file)) yield file;
       }
       return;
     }
-    yield* this.iterateLocalFiles(prefix);
+    yield* this.iterateLocalFiles(prefix, options.skipUnreadable);
   }
 
   async getFile(filePath: string): Promise<Buffer> {
@@ -469,8 +473,8 @@ export class StorageService implements OnModuleDestroy {
    * media tree can't block the event loop or stack-overflow; still bounded by the max directory
    * depth so a pathological tree can't descend unbounded.
    */
-  private iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
-    return iterateLocalFiles(this.localPath, prefix);
+  private iterateLocalFiles(prefix = '', skipUnreadable = false): AsyncGenerator<string> {
+    return iterateLocalFiles(this.localPath, prefix, { skipUnreadable, logger: this.logger });
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {
