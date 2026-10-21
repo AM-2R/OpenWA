@@ -743,7 +743,10 @@ export class MessageProjector {
     if (!this.holdsInbound) return false;
     const entry = dbMessage.waMessageId ? this.inboundInFlight.get(`${id}:${dbMessage.waMessageId}`) : undefined;
     if (entry?.revoked) Object.assign(dbMessage, REVOKED_ROW_PATCH);
-    else if (entry?.editedBody !== undefined) dbMessage.body = entry.editedBody;
+    else if (entry?.editedBody !== undefined) {
+      dbMessage.body = entry.editedBody;
+      dbMessage.metadata = { ...dbMessage.metadata, edited: true };
+    }
     return entry?.revoked === true;
   }
 
@@ -860,10 +863,11 @@ export class MessageProjector {
   ): Promise<void> {
     if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
     try {
-      if (pending.editedBody !== undefined) {
-        await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
-      }
+      const edited = pending.editedBody !== undefined;
+      if (edited) await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
       if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
+      // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
+      if (edited) await this.mutationProjector.markMessageEdited(id, waMessageId);
     } catch (err) {
       this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
     }

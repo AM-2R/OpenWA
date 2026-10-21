@@ -258,8 +258,49 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     const calls = hookManager.execute.mock.calls as Array<[string, IncomingMessage]>;
     const hooked = calls.find(c => c[0] === 'message:received')?.[1];
     expect(hooked?.body).toBe('edited');
-    expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+    expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited', metadata: { edited: true } }));
+    // The row `message:persisted` hands out is the one the edit left, marker included.
+    expect(persistedHooks()[0]).toEqual(expect.objectContaining({ body: 'edited', metadata: { edited: true } }));
     expect(dispatched('message.received')[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+  });
+
+  it('marks a message edited while its insert is out, where nothing holds the arrival (SQLite)', async () => {
+    build('better-sqlite3');
+    const stall = deferred<void>();
+    insertGate = () => stall.promise;
+    projector.handleInboundMessage('s1', engine, message('A', 'chat1', { body: 'original' }));
+    await flush();
+    projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'edited' } as never);
+    await flush();
+    stall.resolve();
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ body: 'edited', metadata: { edited: true } })]);
+  });
+
+  // A REST edit of a send the account's phone composed reaches the echo while it waits for its row.
+  describe.each([
+    ['PostgreSQL', 'postgres'],
+    ['SQLite', 'better-sqlite3'],
+  ])('an own-send echo that a REST edit reaches before its row is written, on %s', (_name, type) => {
+    const CHAT = '15550001111@c.us';
+
+    it('stores the row with the edit and its marker', async () => {
+      build(type);
+      const hook = deferred<void>();
+      hookManager.execute.mockImplementationOnce(async (_event: string, data: unknown) => {
+        await hook.promise;
+        return { continue: true, data };
+      });
+      const ticket = type === 'postgres' ? admit(arrival('A', CHAT, false, false, true)) : undefined;
+      projector.handleOwnSendEcho('s1', engine, message('A', CHAT, { fromMe: true, body: 'sent' }), ticket);
+      await flush();
+      await projector.recordOutboundMessageEdit('s1', 'A', 'rest edit', { kind: 'edit', chatId: CHAT, fromMe: true });
+      hook.resolve();
+      await flush();
+
+      expect(rows).toEqual([expect.objectContaining({ body: 'rest edit', metadata: { edited: true } })]);
+    });
   });
 
   // The entry exists from the arrival, and a change that names another chat or the other party has to be
@@ -836,7 +877,9 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     await flush();
 
     expect(rows.find(r => r.waMessageId === 'A')).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
-    expect(rows.find(r => r.waMessageId === 'B')).toEqual(expect.objectContaining({ body: 'rest edit' }));
+    expect(rows.find(r => r.waMessageId === 'B')).toEqual(
+      expect.objectContaining({ body: 'rest edit', metadata: { edited: true } }),
+    );
     // A delete for me: the message still exists for its sender, so it is announced as revoked.
     expect(dispatched('message.received').map(m => [m.id, m.type, m.body])).toEqual([
       ['A', 'revoked', ''],

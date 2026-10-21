@@ -162,7 +162,7 @@ export class MessageMutationProjector {
   }
 
   /** Keep the marker alongside existing reactions, media and quote metadata. */
-  private async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
+  async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
     await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
       ...metadata,
       edited: true,
