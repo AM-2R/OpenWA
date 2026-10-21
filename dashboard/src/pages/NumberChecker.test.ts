@@ -177,6 +177,43 @@ test('NumberChecker: bulk parsing deduplicates explicit international numbers wi
   assert.deepEqual(lookups, ['6581234567']);
 });
 
+// A number typed or pasted with another script's decimal digits is the same number: it reaches the gateway in ASCII.
+const toDigits = (ascii: string, zero: number) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+const DIGIT_SCRIPTS = [
+  ['Arabic-Indic', 0x0660],
+  ['Persian', 0x06f0],
+  ['Devanagari', 0x0966],
+  ['Telugu', 0x0c66],
+  ['full-width', 0xff10],
+] as const;
+
+for (const [script, zero] of DIGIT_SCRIPTS) {
+  test(`NumberChecker: ${script} digits are previewed and looked up as ASCII digits`, async () => {
+    const lookups = stubLookups(registered);
+    const { container } = renderComponent();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), {
+      target: { value: toDigits('6281234567891', zero) },
+    });
+    assert.match(container.querySelector('.nc-format-preview')?.textContent ?? '', /\+6281234567891 \(13 digits\)/);
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+    await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+    assert.deepEqual(lookups, ['6281234567891']);
+  });
+}
+
+test('NumberChecker: a bulk list in several scripts is parsed and deduplicated as ASCII numbers', async () => {
+  const lookups = stubLookups(registered);
+  renderComponent();
+  const textarea = await openBulkTab();
+  const list = [toDigits('6281234567891', 0x0660), toDigits('6281234567892', 0xff10), '6281234567891'].join('\n');
+  rtl.fireEvent.change(textarea, { target: { value: list } });
+  assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b2 unique numbers parsed$/);
+  startBatch();
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['6281234567891', '6281234567892']);
+});
+
 test('NumberChecker: bulk parsing also splits on the Arabic comma and semicolon', async () => {
   stubLookups(registered);
   renderComponent();

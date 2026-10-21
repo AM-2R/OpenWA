@@ -79,6 +79,19 @@ export interface CheckResultItem extends CheckNumberResponse {
 
 const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
 
+// Unicode keeps every script's decimal digits in an unbroken run that starts at its zero.
+function asciiDigit(digit: string): string {
+  const code = digit.codePointAt(0)!;
+  let zero = code;
+  while (/\p{Nd}/u.test(String.fromCodePoint(zero - 1))) zero--;
+  return String((code - zero) % 10);
+}
+
+// The text as typed or pasted, with every script's decimal digits as ASCII ones.
+function normalizePhoneText(text: string): string {
+  return text.replace(/\p{Nd}/gu, asciiDigit);
+}
+
 export function NumberChecker() {
   const { t } = useTranslation();
   useDocumentTitle(t('nav.numberChecker'));
@@ -127,7 +140,8 @@ export function NumberChecker() {
 
   // Format and clean phone number based on digit rules
   const formatNumberForCheck = useCallback(
-    (raw: string, applyPrefix = autoPrefix91) => {
+    (typed: string, applyPrefix = autoPrefix91) => {
+      const raw = normalizePhoneText(typed);
       let digits = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.trim().startsWith('+') || digits.startsWith('00');
       // 1. If international dial exit code 00 is present (e.g. 009196...), strip '00'
@@ -159,7 +173,7 @@ export function NumberChecker() {
 
   // Batch parsing statistics
   const batchParsedStats = useMemo(() => {
-    const lines = batchInput
+    const lines = normalizePhoneText(batchInput)
       .split(/[\n,;\u060C\u061B]+/)
       .map(n => n.trim())
       .filter(n => n.length > 0);
