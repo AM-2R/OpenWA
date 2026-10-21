@@ -138,7 +138,10 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
         ref={triggerRef}
         type="button"
         className="chat-row-menu-trigger"
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          if (!open && chat.kind === 'individual') actions.onMenuOpen?.();
+          setOpen(value => !value);
+        }}
         aria-expanded={open}
         aria-label={t('chats.rowActions.actionsFor', { name: chat.name || chat.id.split('@')[0] })}
         title={t('chats.moreActions')}

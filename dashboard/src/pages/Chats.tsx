@@ -213,6 +213,8 @@ export function Chats() {
   const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
   const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
   const [dialogRunning, setDialogRunning] = useState<Chat | null>(null);
+  // Whether a menu has opened on this session, which is when its entries need the address book (see contactsQuery).
+  const [menuOpened, setMenuOpened] = useState<boolean>(false);
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -519,6 +521,7 @@ export function Chats() {
       setConfirmAction(null);
       setMuteDialogChat(null);
       setContactDialogChat(null);
+      setMenuOpened(false);
       setShowArchived(false);
     }
     return () => {
@@ -1159,13 +1162,17 @@ export function Chats() {
   // so re-filtering on every render is cheap. See utils/chatFilters for the two status orderings.
   // Whether a 1:1 chat's contact is saved comes from the address book (`isMyContact`), not from its
   // display name: Baileys names an unsaved contact by its bare push name too. Undefined until it loads.
+  // Reading it walks every contact, and the engine answers each page from all of them, so it is read only when
+  // something needs it: the Unknown filter, or a chat menu (its Save or Rename entry, and the dialog behind it).
   const contactsQuery = useQuery({
     queryKey: ['contacts', selectedSessionId],
     queryFn: () => contactApi.list(selectedSessionId),
-    enabled: Boolean(selectedSessionId),
+    enabled: Boolean(selectedSessionId) && (menuOpened || chatFilter === 'unknown'),
     staleTime: 5 * 60 * 1000,
     // contactApi.list already retried a throttled page; another attempt would walk every page again.
     retry: false,
+    // Coming back to the tab does not walk it again, except after a read that failed.
+    refetchOnWindowFocus: query => query.state.status === 'error',
   });
   const savedContactKeys = useMemo(() => savedContactKeySet(contactsQuery.data), [contactsQuery.data]);
 
@@ -1342,6 +1349,7 @@ export function Chats() {
   const isSavedContact = (chat: Chat) => savedContactKeys?.has(contactKey(chat.id)) ?? false;
 
   const rowActions: ChatRowActions = {
+    onMenuOpen: () => setMenuOpened(true),
     onGroupInfo: setGroupDialogChat,
     onSaveContact: canWrite ? setContactDialogChat : undefined,
     canSaveContact: chat => addressbookIdOf(chat) !== null,
@@ -1571,7 +1579,9 @@ export function Chats() {
             }
             formatChatTime={formatChatTime}
             chatsTab={{
-              loading: loadingChats,
+              // Unknown is decided by the address book: until it loads the list would claim no chat matches.
+              loading:
+                loadingChats || (chatFilter === 'unknown' && Boolean(selectedSessionId) && contactsQuery.isPending),
               chats: filteredChats,
               activeChatId: activeChat?.id,
               pictures: listPics.data,
@@ -1642,7 +1652,10 @@ export function Chats() {
                         ref={roomMenuTriggerRef}
                         type="button"
                         className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
-                        onClick={() => setRoomMenuOpen(open => !open)}
+                        onClick={() => {
+                          if (activeChat.kind === 'individual') rowActions.onMenuOpen?.();
+                          setRoomMenuOpen(open => !open);
+                        }}
                         title={t('chats.moreActions')}
                         aria-label={t('chats.moreActions')}
                         aria-expanded={roomMenuOpen}

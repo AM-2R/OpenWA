@@ -5,7 +5,7 @@ import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import type { Session, Chat } from '../services/api';
 import { lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 
@@ -104,6 +104,8 @@ let listExtra = false;
 // contact it holds as both a LID and a phone record. The first copy carries another number than the id's.
 const DUPLICATE_CONTACT = { ...CONTACT, number: '262813461250071' };
 let listDuplicateContact = false;
+// When true, the address book answers 503, as it does while the engine is busy.
+let failContacts = false;
 // The number the new-chat tests type, and the id the gateway resolves it to.
 const TYPED_NUMBER = '+1 555 000 9999';
 const RESOLVED_ID = '15550009999@c.us';
@@ -210,13 +212,15 @@ function installFetchStub(): void {
       return gated('check', () => jsonResponse({ exists: true, whatsappId: RESOLVED_ID }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts?`)) {
-      return Promise.resolve(
-        jsonResponse([
-          ALICE_CONTACT,
-          ...(listDuplicateContact ? [DUPLICATE_CONTACT] : []),
-          CONTACT,
-          ...(listExtra ? [PUSH_ONLY_CONTACT, NUMBER_NAMED_CONTACT] : []),
-        ]),
+      return gated('contacts', () =>
+        failContacts
+          ? jsonResponse({ message: 'busy' }, 503)
+          : jsonResponse([
+              ALICE_CONTACT,
+              ...(listDuplicateContact ? [DUPLICATE_CONTACT] : []),
+              CONTACT,
+              ...(listExtra ? [PUSH_ONLY_CONTACT, NUMBER_NAMED_CONTACT] : []),
+            ]),
       );
     }
     if (method === 'GET' && path.startsWith(`${base}/messages?`)) {
@@ -267,6 +271,7 @@ afterEach(async () => {
   listSecond = false;
   listExtra = false;
   listDuplicateContact = false;
+  failContacts = false;
   declineWrites = false;
   for (const id of Object.keys(pictureFor)) delete pictureFor[id];
   gates.clear();
@@ -651,6 +656,13 @@ function pickRowAction(name: string, action: string): void {
   fireEvent.click(screen.getByRole('button', { name: action }));
 }
 
+/** Like pickRowAction, for an entry named by the address book, which the first menu to open has to read. */
+async function pickRowActionOnceLoaded(name: string, action: string): Promise<void> {
+  const { screen, fireEvent } = rtl;
+  fireEvent.click(screen.getByRole('button', { name: `Actions for ${name}` }));
+  fireEvent.click(await screen.findByRole('button', { name: action }));
+}
+
 test("a row's menu sits fixed above the list, and scrolling the list closes it", async () => {
   const { screen, fireEvent } = rtl;
   const { container } = renderPage();
@@ -813,7 +825,7 @@ test('saving a contact sends its name to the address book and renames the row', 
   const { screen, fireEvent, waitFor, within } = rtl;
   renderPage();
   await screen.findByText('Alice');
-  pickRowAction('Alice', 'Rename contact');
+  await pickRowActionOnceLoaded('Alice', 'Rename contact');
   const dialog = await screen.findByRole('dialog');
   fireEvent.change(within(dialog).getByLabelText('First name'), { target: { value: 'Alice' } });
   fireEvent.change(within(dialog).getByLabelText('Last name (optional)'), { target: { value: 'Smith' } });
@@ -975,7 +987,7 @@ test("a dismissed contact save's late answer leaves the next save dialog open an
   const release = hold('saveContact');
   renderPage();
   await screen.findByText('Bobby');
-  pickRowAction('Alice', 'Rename contact');
+  await pickRowActionOnceLoaded('Alice', 'Rename contact');
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save' }));
   await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PUT' && c.path.includes('/contacts/'))));
   fireEvent.keyDown(document, { key: 'Escape' });
@@ -1030,7 +1042,7 @@ test('a contact Baileys knows by push name only is unsaved: Unknown lists it, an
   await screen.findByText('Bobby');
 
   fireEvent.click(screen.getByRole('button', { name: 'Unknown' }));
-  assert.ok(screen.getByText('Bobby'), 'the push-name-only contact left the Unknown filter');
+  await screen.findByText('Bobby');
   assert.ok(!screen.queryByText('Alice'), 'a saved contact is listed as unknown');
 
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Bobby' }));
@@ -1052,7 +1064,7 @@ test("the contact dialog follows the address book the menu read, not the chat's 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
   // Saved under a name that reads like a number: Rename, with nothing to start from.
-  pickRowAction('+1 555 000 3333', 'Rename contact');
+  await pickRowActionOnceLoaded('+1 555 000 3333', 'Rename contact');
   dialog = await screen.findByRole('dialog');
   assert.equal(dialog.querySelector('h2')?.textContent, 'Rename contact');
   assert.equal((within(dialog).getByLabelText('First name') as HTMLInputElement).value, '');
@@ -1062,7 +1074,7 @@ test("the contact dialog's Save button submits its form, so Enter in a name fiel
   const { screen, fireEvent, waitFor, within } = rtl;
   renderPage();
   await screen.findByText('Alice');
-  pickRowAction('Alice', 'Rename contact');
+  await pickRowActionOnceLoaded('Alice', 'Rename contact');
   const dialog = await screen.findByRole('dialog');
   const form = dialog.querySelector('form') as HTMLFormElement;
   const save = within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement;
@@ -1079,6 +1091,102 @@ test("the contact dialog's Save button submits its form, so Enter in a name fiel
       'a click on Save did not send the name exactly once',
     ),
   );
+});
+
+// ── The address book is read when a surface needs it, not when the page opens. ──
+
+const contactReads = () =>
+  fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${SESSION.id}/contacts?`));
+
+test('opening the page reads no address book', async () => {
+  const { screen } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  await settle();
+  assert.equal(contactReads().length, 0, 'the page walked the address book on mount');
+});
+
+test('the first menu to open reads the address book once, and its Save entry then follows it', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  assert.equal(contactReads().length, 1);
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await settle();
+  assert.equal(contactReads().length, 1, 'a second menu read the address book again');
+});
+
+test("a group's menu has no use for the address book and does not read it", async () => {
+  const { screen, fireEvent } = rtl;
+  listGroup = true;
+  renderPage();
+  await screen.findByText('Team');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Team' }));
+  await screen.findByRole('button', { name: 'Group info' });
+  await settle();
+  assert.equal(contactReads().length, 0, "a group's menu read the address book");
+});
+
+test("the room's menu asks for the address book as well", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  assert.equal(contactReads().length, 0);
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  await screen.findByRole('button', { name: 'Rename contact' });
+  assert.equal(contactReads().length, 1);
+});
+
+test('the Unknown filter waits for the address book instead of listing nothing', async () => {
+  const { screen, fireEvent } = rtl;
+  listExtra = true;
+  const release = hold('contacts');
+  renderPage();
+  await screen.findByText('Bobby');
+  assert.equal(contactReads().length, 0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Unknown' }));
+  assert.ok(screen.getByText('Loading chats...'), 'the filter did not wait for the address book');
+  assert.ok(!screen.queryByText('No chats match this filter'), 'the filter claimed no chat matches');
+  release();
+  await screen.findByText('Bobby');
+  assert.ok(!screen.queryByText('Alice'), 'a saved contact is listed as unknown');
+});
+
+test('the address book is not read again when the window regains focus, unless the last read failed', async () => {
+  const { screen, fireEvent, act, waitFor } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  const regainFocus = () =>
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+
+  // Stale, as it is five minutes on, yet not worth another walk of every contact.
+  await queryClients[0].invalidateQueries({ queryKey: ['contacts', SESSION.id], refetchType: 'none' });
+  regainFocus();
+  await settle();
+  assert.equal(contactReads().length, 1, 'focus walked the address book again');
+
+  // A read that failed is tried again on the next focus.
+  rtl.cleanup();
+  failContacts = true;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await waitFor(() => assert.equal(contactReads().length, 2));
+  failContacts = false;
+  regainFocus();
+  await screen.findByRole('button', { name: 'Rename contact' });
+  assert.equal(contactReads().length, 3);
 });
 
 test('a chat keyed by a privacy id offers Save contact disabled, with the reason, and sends nothing', async () => {
