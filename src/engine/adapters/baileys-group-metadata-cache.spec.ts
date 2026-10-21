@@ -218,6 +218,39 @@ describe('GroupMetadataCache', () => {
       expect(jest.getTimerCount()).toBe(0);
     });
 
+    // The handle of a timer that was cleared must not be taken for a pending one, or nothing stored after a
+    // reconnect would ever expire again.
+    it('starts a new timer for what is stored after a clear', async () => {
+      const cache = build();
+      await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+      cache.clear();
+      await cache.read(OTHER, () => Promise.resolve(group(OTHER)));
+      expect(jest.getTimerCount()).toBe(1);
+
+      elapse(1000);
+
+      expect(cache.size).toBe(0);
+    });
+
+    it('does not keep the process alive while it waits', async () => {
+      const fake = global.setTimeout;
+      const unrefs: Array<jest.SpyInstance> = [];
+      const arm = jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+        const handle = fake(fn, ms) as unknown as { unref: () => unknown };
+        if (ms === 1000) unrefs.push(jest.spyOn(handle, 'unref'));
+        return handle;
+      }) as never);
+      try {
+        const cache = build();
+        await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+
+        expect(unrefs).toHaveLength(1);
+        expect(unrefs[0]).toHaveBeenCalledTimes(1);
+      } finally {
+        arm.mockRestore();
+      }
+    });
+
     it('never waits longer than a Node timer accepts, whatever the TTL', async () => {
       const arm = jest.spyOn(global, 'setTimeout');
       try {
