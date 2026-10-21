@@ -44,7 +44,7 @@ export class ErrorBoundary extends Component<Props, State> {
             color: 'var(--text-primary)',
           }}
         >
-          <AlertCircle size={48} style={{ color: 'var(--error)', marginBottom: '1rem' }} />
+          <AlertCircle size={48} style={{ color: 'var(--error-text)', marginBottom: '1rem' }} />
           <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{i18n.t('errorBoundary.title')}</h1>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', textAlign: 'center' }}>
             {i18n.t('errorBoundary.description')}

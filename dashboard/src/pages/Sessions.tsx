@@ -728,7 +728,7 @@ export function Sessions() {
             background: 'rgba(239, 68, 68, 0.12)',
             padding: '1rem',
             borderRadius: '8px',
-            color: 'var(--error)',
+            color: 'var(--error-text)',
             marginBottom: '1rem',
           }}
         >

@@ -1260,7 +1260,7 @@ export function MessageTester() {
                 {response.error && (
                   <div className="detail-row">
                     <span className="detail-label">{t('messageTester.response.error')}</span>
-                    <span className="detail-value" style={{ color: 'var(--error)' }}>
+                    <span className="detail-value" style={{ color: 'var(--error-text)' }}>
                       {response.error}
                     </span>
                   </div>

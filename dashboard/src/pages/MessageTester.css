@@ -479,7 +479,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  color: var(--error);
+  color: var(--error-text);
   text-align: end;
 }
 

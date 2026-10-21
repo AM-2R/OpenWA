@@ -2449,7 +2449,7 @@
 }
 
 .chats-page .group-info-field .required {
-  color: var(--error);
+  color: var(--error-text);
 }
 
 .chats-page .group-info-field input,
