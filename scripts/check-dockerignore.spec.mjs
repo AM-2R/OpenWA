@@ -74,29 +74,69 @@ test('a source spelled ./x, /x, x//y or x/./y, or read by ADD, is the same build
   }
 });
 
-test('a wildcard COPY source is expanded against the tree', () => {
-  const run = runGate({
-    Dockerfile: 'COPY pkg-*.txt ./\n',
-    'pkg-a.txt': '',
-    'pkg-b.txt': '',
-    '.dockerignore': `${REAL_DOCKERIGNORE}\npkg-b.txt\n`,
-  });
-  assert.equal(run.status, 1, run.out);
-  assert.match(run.out, /rejects 'pkg-b\.txt'/);
-  assert.doesNotMatch(run.out, /rejects 'pkg-a\.txt'/);
+test('an indented or lower-case instruction is read like any other', () => {
+  for (const line of [
+    '  COPY ./scripts/new.js ./scripts/',
+    'copy scripts/new.js ./scripts/',
+    '\tADD scripts/new.js ./scripts/',
+  ]) {
+    const run = runGate({
+      Dockerfile: `COPY control.txt ./\n${line}\n`,
+      '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n`,
+    });
+    assert.equal(run.status, 1, `'${line}' is dropped by a rule and the gate passed`);
+    assert.match(run.out, /rejects 'scripts\/new\.js'/, `'${line}': ${run.out}`);
+  }
 });
 
-test('a COPY from another stage, a flag and the destination are not build inputs', () => {
-  const dockerfile = [
-    'COPY --chown=openwa:openwa scripts/lib-env.sh ./scripts/',
-    'COPY --from=builder /app/dist ./dist',
-    'COPY . .',
-    '',
-  ].join('\n');
-  // dist/ is rejected by the real .dockerignore, so counting the stage copy's source or the
-  // destination would fail this run.
-  const run = runGate({ Dockerfile: dockerfile, '.dockerignore': REAL_DOCKERIGNORE });
-  assert.equal(run.status, 0, run.out);
+test('a wildcard COPY source is expanded in its own directory, and only its matches are inputs', () => {
+  const run = runGate({
+    Dockerfile: 'COPY sub/pkg-*.txt ./\n',
+    'sub/pkg-a.txt': '',
+    'sub/pkg-b.txt': '',
+    'sub/other.txt': '',
+    '.dockerignore': `${REAL_DOCKERIGNORE}\nsub/pkg-b.txt\nsub/other.txt\n`,
+  });
+  assert.equal(run.status, 1, run.out);
+  // A match the rules drop is reported under its path in the context, one they keep is not, and a file
+  // the pattern does not match is no input even though a rule drops it.
+  assert.match(run.out, /rejects 'sub\/pkg-b\.txt'/);
+  assert.doesNotMatch(run.out, /rejects 'sub\/pkg-a\.txt'/);
+  assert.doesNotMatch(run.out, /rejects 'sub\/other\.txt'/);
+});
+
+test('a wildcard in a directory name is reported instead of guessed', () => {
+  const run = runGate({ Dockerfile: 'COPY su*/x.txt ./\n', '.dockerignore': REAL_DOCKERIGNORE });
+  assert.equal(run.status, 1, run.out);
+  assert.match(run.out, /expands a wildcard only in the file name/);
+});
+
+test('only the context files a COPY or ADD reads are build inputs', () => {
+  const keptPaths = run => {
+    assert.equal(run.status, 0, run.out);
+    return Number(/(\d+) kept paths asserted/.exec(run.out)?.[1]);
+  };
+  const gate = dockerfile => runGate({ Dockerfile: dockerfile, '.dockerignore': REAL_DOCKERIGNORE });
+  const plain = keptPaths(gate('COPY src-a.txt dest-1\nCOPY src-b.txt dest-2\n'));
+  // Whatever the gate counts beyond a source shows in this number, and no rule has to name it: a flag,
+  // a copy from another stage, a remote ADD source, the destinations and the whole context.
+  const decorated = keptPaths(
+    gate(
+      [
+        'COPY --chown=openwa:openwa src-a.txt dest-1/',
+        'COPY --from=builder /stage-src /stage-dest',
+        'COPY ./src-b.txt dest-2',
+        'ADD https://example.com/tool.tgz /opt/',
+        'ADD git@example.com:org/repo.git /opt/repo',
+        'COPY . .',
+        'COPY ./ ./',
+        '',
+      ].join('\n'),
+    ),
+  );
+  assert.equal(decorated, plain);
+  // The number moves with a real input, so the equality above is not one between constants.
+  assert.equal(keptPaths(gate('COPY src-a.txt dest-1\nCOPY src-b.txt dest-2\nCOPY src-c.txt dest-3\n')), plain + 1);
 });
 
 test('a Dockerfile with no COPY source fails instead of passing for lack of input', () => {
