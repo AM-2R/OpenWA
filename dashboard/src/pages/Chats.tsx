@@ -1770,7 +1770,7 @@ export function Chats() {
           />
 
           {/* RIGHT VIEW: active chat room */}
-          <main className="chats-room">
+          <div className="chats-room">
             {activeChat ? (
               <div className="room-container">
                 {/* Room header */}
@@ -1990,7 +1990,7 @@ export function Chats() {
                 <p>{t('chats.placeholderDesc')}</p>
               </div>
             )}
-          </main>
+          </div>
         </div>
       )}
 

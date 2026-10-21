@@ -930,7 +930,7 @@ export default function Plugins() {
           </div>
         </aside>
 
-        <main className="plugins-main">
+        <div className="plugins-main">
           <div className="plugins-grid">
             {visiblePlugins.map(plugin => {
               const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
@@ -1054,7 +1054,7 @@ export default function Plugins() {
               );
             })}
           </div>
-        </main>
+        </div>
       </div>
 
       {visiblePlugins.length === 0 && !loading && !neverLoaded && (
