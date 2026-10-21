@@ -643,7 +643,7 @@ describe('validateEnv', () => {
 
   // The prefix is joined to the queue name with a colon in every Redis key.
   it('accepts a plain QUEUE_PREFIX, or none, and rejects one that would build ambiguous keys', () => {
-    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', '', '  ']) {
+    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', 'a', '0', '', '  ']) {
       expect(() => validateEnv({ QUEUE_PREFIX: ok })).not.toThrow();
     }
     for (const bad of ['a:b', 'has space', '-lead', '.lead', 'a/b', 'x'.repeat(65)]) {
@@ -676,13 +676,19 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ REDIS_TLS: '' })).not.toThrow();
   });
 
-  it.each(['INGRESS_RETRY_DELAY_MS', 'REDIS_CACHE_DB'])('rejects a negative or non-integer %s and keeps 0', key => {
-    for (const bad of ['-1', '1.5', 'abc']) {
-      expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
-    }
-    expect(() => validateEnv({ [key]: '0' })).not.toThrow();
-    expect(() => validateEnv({ [key]: '' })).not.toThrow();
-  });
+  // BAILEYS_GROUP_METADATA_CACHE_TTL_MS: 0 switches the cache off, and the reader falls back to five minutes
+  // on `5m`, so only boot validation tells the operator the value was refused.
+  it.each(['INGRESS_RETRY_DELAY_MS', 'REDIS_CACHE_DB', 'BAILEYS_GROUP_METADATA_CACHE_TTL_MS'])(
+    'rejects a negative or non-integer %s and keeps 0',
+    key => {
+      for (const bad of ['-1', '1.5', 'abc', '5m']) {
+        expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
+      }
+      expect(() => validateEnv({ [key]: '0' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '300000' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '' })).not.toThrow();
+    },
+  );
 
   it('rejects a unit-suffixed CHAT_MEDIA_ARCHIVE_TTL_DAYS but keeps 0 (keep forever)', () => {
     expect(() => validateEnv({ CHAT_MEDIA_ARCHIVE_TTL_DAYS: '30d' })).toThrow(/CHAT_MEDIA_ARCHIVE_TTL_DAYS/);
