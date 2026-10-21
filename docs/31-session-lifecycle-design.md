@@ -70,7 +70,8 @@ FAILED + reason while an init that never completes returns 504 + eviction.
 
 ### INV-5 — Delete racing a start re-purges auth directories after init resolves
 
-**Interleaving:** delete runs (purges dirs, removes the session row and its child rows in one
+**Interleaving:** delete runs (purges dirs, removes the session's messages, outbox rows and
+delivery failures in batches, then the session row and its other child rows in one
 transaction); the in-flight start's `initialize()` resolves and re-creates the auth dir; a phantom
 session lingers on disk.
 **Defense:** the post-init guards in `start()` (`session-engine-controls.ts`) and `executeReconnect`
