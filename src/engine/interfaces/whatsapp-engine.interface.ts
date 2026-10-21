@@ -1051,8 +1051,9 @@ export interface EngineEventCallbacks {
    * per live row and so covers that directory, so start()/delete()/executeReconnect can wait
    * (bounded, fail-closed) for it to settle before touching that path.
    *
-   * Adapters that never remove credentials on their own (e.g. Baileys until a later task wires its
-   * WhatsApp-originated cleanup) simply never invoke this.
+   * Adapters that never remove credentials on their own simply never invoke this. Baileys invokes it for a
+   * WhatsApp-originated unlink (a remote logout): the promise is the cleanup that wipes the stored account
+   * state and the auth directory.
    */
   onCredentialTeardownStarted?: (operation: Promise<void>) => void;
   /**

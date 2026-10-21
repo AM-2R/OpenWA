@@ -1049,8 +1049,7 @@ export class BaileysLifecycle {
    *
    * The status/socket/live-call teardown happens SYNCHRONOUSLY before any await so the session
    * watchdog never processes a READY socket that is already dead. The strict auth removal is then
-   * awaited as a tracked cleanup (Task 5's onCredentialTeardownStarted registers it under the session
-   * NAME). On success the engine reports DISCONNECTED + onDisconnected('logged out'); on failure it
+   * awaited as a tracked cleanup (onCredentialTeardownStarted registers it under the session NAME). On success the engine reports DISCONNECTED + onDisconnected('logged out'); on failure it
    * reports FAILED + onError (terminal — a reconnect with known-invalid auth would loop forever).
    */
   private async handleRemoteLoggedOut(): Promise<void> {
