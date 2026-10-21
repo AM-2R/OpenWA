@@ -46,6 +46,8 @@ let catalogReads = 0;
 // Further installed plugins listed after PLUGIN, and a gate a POST /disable waits for before answering.
 let extraPlugins: Record<string, unknown>[] = [];
 let disableGate: Promise<void> | undefined;
+// Whether GET /api/plugins answers with a server error, as it does while the plugin registry is unavailable.
+let pluginListFails = false;
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -53,6 +55,7 @@ function installFetchStub(): void {
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     const method = init?.method ?? 'GET';
     if (method === 'GET' && path === '/api/plugins') {
+      if (pluginListFails) return Promise.resolve(jsonResponse({ message: 'plugin registry unavailable' }, 500));
       return Promise.resolve(jsonResponse([{ ...PLUGIN, sessionConfig, ...pluginOverride }, ...extraPlugins]));
     }
     if (method === 'POST' && path.endsWith('/disable')) {
@@ -127,6 +130,7 @@ afterEach(() => {
   catalogReads = 0;
   extraPlugins = [];
   disableGate = undefined;
+  pluginListFails = false;
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
@@ -153,6 +157,34 @@ async function openSessionOverride(sessionLabel: string): Promise<void> {
   await findByText(select, sessionLabel);
   fireEvent.change(select, { target: { value: SESSION.id } });
 }
+
+// A failed read says nothing about what is installed: the banner is the only message, and the page must not
+// count zero plugins or tell the operator to install one.
+test('a failed first plugin read shows the error, not an empty install base', async () => {
+  const { screen } = rtl;
+  pluginListFails = true;
+  renderPlugins();
+
+  await screen.findByText('plugin registry unavailable');
+  assert.equal(screen.queryByText('No plugins installed') === null, true, 'a failed read claimed nothing is installed');
+  assert.equal(screen.queryByText('None enabled yet') === null, true, 'a failed read claimed nothing is enabled');
+  const counts = Array.from(document.querySelectorAll('.rail-stat-num')).map(node => node.textContent);
+  assert.deepEqual(counts, ['-', '-'], 'the rail counted plugins it could not read');
+});
+
+test('a failed refetch keeps the installed plugins and their counts', async () => {
+  const { screen, act } = rtl;
+  renderPlugins();
+  await screen.findByTitle('Configure');
+
+  pluginListFails = true;
+  await act(() => queryClient!.refetchQueries({ queryKey: ['plugins'] }));
+
+  await screen.findByText('plugin registry unavailable');
+  assert.ok(screen.queryByTitle('Configure'), 'the failed refetch dropped the installed plugin');
+  const counts = Array.from(document.querySelectorAll('.rail-stat-num')).map(node => node.textContent);
+  assert.deepEqual(counts, ['1', '1']);
+});
 
 test('a per-session override the server rejects reports the failure, not "Saved"', async () => {
   const { screen, fireEvent } = rtl;
