@@ -171,6 +171,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       ensureReady: () => this.ensureReady(),
       toEngineJid: jid => this.sessionStore.toEngineJid(jid),
       chatJid: chatId => this.sessionStore.chatJid(chatId),
+      forgetGroupMetadata: groupId => this.lifecycle.groupMetadata.invalidate(groupId),
       getEphemeralExpiration: chatId => this.sessionStore.getEphemeralExpiration(chatId),
       getStoredMessage: messageId => this.config.messageStore?.getMessage(this.config.dbSessionId, messageId),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),

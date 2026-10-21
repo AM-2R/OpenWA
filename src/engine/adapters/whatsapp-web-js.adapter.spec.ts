@@ -1,28 +1,32 @@
 import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
+import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
+import { extractLinkedParentJID } from './wwebjs-groups';
 import {
-  WhatsAppWebJsAdapter,
-  extractLinkedParentJID,
+  downloadMediaInPage,
   isHttpUrl,
-  isSupportedProxyUrl,
-  isExecutionContextDestroyedError,
-  buildProxyLaunchConfig,
   loadRemoteMedia,
+  extractWwebjsCall,
+  wwebjsAckToDeliveryStatus,
+} from './wwebjs-messaging';
+import { isSupportedProxyUrl, buildProxyLaunchConfig } from './wwebjs-proxy';
+import { LoggerService } from '../../common/services/logger.service';
+import {
+  resolveOnboardingContinueLabels,
   probeOnboardingModal,
   collectDialogDiagnostics,
-  resolveAuthTimeoutMs,
-  wwebjsAckToDeliveryStatus,
-  extractWwebjsCall,
-  READY_RECONCILE_TIMEOUT_MS,
-  READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS,
+  type WwebjsOnboardingWatcher,
+} from './wwebjs-onboarding';
+import {
+  isExecutionContextDestroyedError,
   NAVIGATION_REINJECT_GRACE_MS,
   NAVIGATION_EPISODE_CAP_MS,
-} from './whatsapp-web-js.adapter';
-import { downloadMediaInPage } from './wwebjs-messaging';
-import { LoggerService } from '../../common/services/logger.service';
-import { resolveOnboardingContinueLabels } from './wwebjs-onboarding';
+  type WwebjsLifecycle,
+} from './wwebjs-lifecycle';
+import { READY_RECONCILE_TIMEOUT_MS, READY_RECONCILE_BRIDGE_RELOAD_GRACE_MS } from './wwebjs-reconcile';
+import { type WwebjsCalls } from './wwebjs-calls';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
-import { resolveEngineInitTimeoutMs } from '../engine-init-timeout';
+import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
 import { createHash } from 'crypto';
 import * as path from 'path';
@@ -1796,7 +1800,7 @@ describe('WhatsAppWebJsAdapter credential-teardown observation', () => {
     const onCredentialTeardownStarted = jest.fn();
     (adapter as unknown as { client: unknown }).client = client;
     (adapter as unknown as { callbacks: unknown }).callbacks = { onCredentialTeardownStarted };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { client, onCredentialTeardownStarted };
   };
 
@@ -1996,7 +2000,7 @@ describe('WhatsAppWebJsAdapter credential-teardown observation', () => {
       onDisconnected,
       onStateChanged,
     };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
 
     client.emit('disconnected', 'LOGOUT');
@@ -2036,7 +2040,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
 
     (adapter as unknown as { client: unknown }).client = client;
     (adapter as unknown as { callbacks: unknown }).callbacks = { onReady, onStateChanged };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     return { client, onReady, onStateChanged };
   };
@@ -2704,7 +2708,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     const pupPage = Object.assign(new EventEmitter(), { evaluate: jest.fn().mockResolvedValue(true) });
     const { client } = attachFakeClient(adapter, { pupPage: pupPage as unknown as FakeClient['pupPage'] });
     // The death listeners are armed by runInitAttempt, not by setupEventHandlers.
-    (adapter as unknown as { attachPuppeteerLifecycleListeners: () => void }).attachPuppeteerLifecycleListeners();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.attachPuppeteerLifecycleListeners();
     const qrDone = deferredVoid();
     (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = jest.fn(() => qrDone.resolve());
 
@@ -3122,7 +3126,7 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
       destroy: jest.fn().mockResolvedValue(undefined),
     } as never);
     (adapter as unknown as { lifecycle: { status: EngineStatus } }).lifecycle.status = EngineStatus.AUTHENTICATING;
-    (adapter as unknown as { attachPuppeteerLifecycleListeners: () => void }).attachPuppeteerLifecycleListeners();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.attachPuppeteerLifecycleListeners();
     const onDisconnected = jest.fn();
     Object.assign((adapter as unknown as { callbacks: object }).callbacks, {
       onDisconnected,
@@ -3665,7 +3669,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessage = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessage };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'MEDIA_OFF_1' },
@@ -3711,7 +3715,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessage = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessage };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'CALL_1' },
@@ -3753,7 +3757,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageCreate = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'OWN_MEDIA_1' },
@@ -3806,7 +3810,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     const onMessageCreate = jest.fn();
     const admitInbound = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate, admitInbound };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     client.emit('message_create', {
       id: { _serialized: 'OWN_UNREADABLE_1' },
@@ -3844,7 +3848,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageCreate = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'OWN_STATUS_1' },
@@ -3888,7 +3892,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageCreate = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'OWN_MEDIA_2' },
@@ -3936,7 +3940,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     (adapter as unknown as { client: unknown }).client = client;
     const onMessage = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessage };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
 
     const mockMsg = {
       id: { _serialized: 'IN_MEDIA_FAIL_1' },
@@ -3982,7 +3986,7 @@ describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web bui
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageReaction = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageReaction };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { onMessageReaction, client };
   };
 
@@ -4044,7 +4048,7 @@ describe('WhatsAppWebJsAdapter message_revoke_everyone (forwards the original de
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageRevoked = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageRevoked };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { onMessageRevoked, client };
   };
 
@@ -4123,7 +4127,7 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageEdited = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageEdited };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { onMessageEdited, client };
   };
 
@@ -4188,7 +4192,7 @@ describe('WhatsAppWebJsAdapter group notifications (group_join / group_leave / g
     (adapter as unknown as { client: unknown }).client = client;
     const onGroupEvent = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onGroupEvent };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { onGroupEvent, client };
   };
 
@@ -4490,7 +4494,7 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
     (adapter as unknown as { client: unknown }).client = client;
     const onCall = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onCall };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { adapter, onCall, client };
   };
 
@@ -4633,7 +4637,7 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
   it('teardown clears the ringing call cache', async () => {
     const { adapter, client } = wireCallHandler();
     client.emit('call', liveCall());
-    const cache = (adapter as unknown as { liveCalls: Map<string, number> }).liveCalls;
+    const cache = (adapter as unknown as { calls: WwebjsCalls }).calls.liveCalls;
     expect(cache.has('CALL1')).toBe(true);
 
     await adapter.disconnect();
@@ -6260,7 +6264,7 @@ describe('WhatsAppWebJsAdapter message_ack (unreadable id)', () => {
     (adapter as unknown as { client: unknown }).client = client;
     const onMessageAck = jest.fn();
     (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageAck };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { onMessageAck, client };
   };
 
@@ -6366,7 +6370,7 @@ describe('WhatsAppWebJsAdapter puppeteer death detection (browser/page silent de
     (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
     (adapter as unknown as { status: EngineStatus }).status = overrides.status ?? EngineStatus.READY;
     (adapter as unknown as { tearingDown: boolean }).tearingDown = overrides.tearingDown ?? false;
-    (adapter as unknown as { attachPuppeteerLifecycleListeners: () => void }).attachPuppeteerLifecycleListeners();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.attachPuppeteerLifecycleListeners();
     return { adapter, client, onDisconnected };
   };
 
@@ -6471,6 +6475,22 @@ describe('WhatsAppWebJsAdapter.probeLiveness (session watchdog probe)', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(false);
   });
 
+  it('asks the page when the session awaits operator action, so the watchdog can tell a live page from a dead one', async () => {
+    // The watchdog probes ACTION_REQUIRED observe-only; a probe that never asked reported "dead" for a
+    // healthy page and could never report the recovery.
+    const alive = adapterWith(
+      { getState: jest.fn().mockResolvedValue(WAState.CONNECTED) },
+      EngineStatus.ACTION_REQUIRED,
+    );
+    const gone = adapterWith(
+      { getState: jest.fn().mockRejectedValue(new Error('Target closed')) },
+      EngineStatus.ACTION_REQUIRED,
+    );
+
+    await expect(alive.probeLiveness()).resolves.toBe(true);
+    await expect(gone.probeLiveness()).resolves.toBe(false);
+  });
+
   it('resolves false without touching the client when the adapter is not READY', async () => {
     const getState = jest.fn();
     const adapter = adapterWith({ getState }, EngineStatus.AUTHENTICATING);
@@ -6533,8 +6553,8 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
     (adapter as unknown as { callbacks: unknown }).callbacks = {};
     (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
     // Mirror the real init order: event handlers first, puppeteer listeners after initialize().
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
-    (adapter as unknown as { attachPuppeteerLifecycleListeners: () => void }).attachPuppeteerLifecycleListeners();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.attachPuppeteerLifecycleListeners();
     return { adapter, client };
   };
 
@@ -6616,7 +6636,7 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
     const { adapter, client } = wireAdapter();
 
     client.pupPage.emit('framenavigated', navFrame());
-    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.ACTION_REQUIRED;
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.DISCONNECTED;
 
     await expect(adapter.probeLiveness()).resolves.toBe(false);
     expect(client.getState).not.toHaveBeenCalled();
@@ -7963,7 +7983,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const onStateChanged = jest.fn();
       (adapter as unknown as { client: unknown }).client = client;
       (adapter as unknown as { callbacks: unknown }).callbacks = { onActionRequired, onStateChanged };
-      (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+      (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
       // Default: window.WWebJS present (reconcile probe) AND no modal (watcher ticks that aren't
       // overridden). mockResolvedValueOnce in a test takes precedence for exactly the next call.
       evaluate.mockResolvedValue(true);
@@ -8318,7 +8338,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       const logger = (adapter as unknown as { logger: { debug: (m: string, meta?: unknown) => void } }).logger;
       const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => undefined);
 
-      (adapter as unknown as { reportActionRequired: (reason: string) => void }).reportActionRequired(
+      (adapter as unknown as { onboardingWatcher: WwebjsOnboardingWatcher }).onboardingWatcher.reportActionRequired(
         'modal stuck after five clicks',
       );
 
@@ -8800,7 +8820,7 @@ describe('WhatsAppWebJsAdapter account-restriction reporting', () => {
     const onDisconnected = jest.fn();
     (adapter as unknown as { client: unknown }).client = client;
     (adapter as unknown as { callbacks: unknown }).callbacks = { onAccountRestriction, onDisconnected };
-    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
     return { client, onAccountRestriction, onDisconnected };
   };
 
@@ -9250,6 +9270,21 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     const missing = readyAdapter({ getNumberId: jest.fn().mockResolvedValue(null) });
     await expect(missing.getNumberId('628111')).resolves.toBeNull();
     await expect(missing.checkNumberExists('628111')).resolves.toBe(false);
+  });
+
+  // The interface answers in the neutral dialect (`<phone>@c.us`), as the Baileys engine does. WhatsApp
+  // Web names a migrated contact by its lid, an engine-private id that the number check must not expose.
+  it.each([
+    ['a bare number', '628111'],
+    ['a phone id', '628111@c.us'],
+    ['a number with a plus', '+628111'],
+  ])('getNumberId answers %s of a migrated contact with the phone id, not its lid', async (_label, input) => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({ getNumberId });
+
+    await expect(adapter.getNumberId(input)).resolves.toBe('628111@c.us');
+    await expect(adapter.checkNumberExists(input)).resolves.toBe(true);
+    expect(getNumberId).toHaveBeenCalledWith(input);
   });
 
   it('getSubscribedChannels reads $1 on a renamed build, never the literal "undefined"', async () => {

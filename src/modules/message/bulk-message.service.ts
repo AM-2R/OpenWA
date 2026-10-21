@@ -40,9 +40,10 @@ import {
 } from './send-pacing.service';
 import { SessionOwnershipService } from '../session/session-ownership.service';
 import { HookManager } from '../../core/hooks';
-import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
+import { assertBase64LengthWithinMediaCap, assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
+import { stripBatchMediaPayloads } from './batch-media.util';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
-import { renderTemplate } from '../../common/utils/template-render';
+import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -225,7 +226,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   ): Promise<boolean> {
     const set: QueryDeepPartialEntity<MessageBatch> = { status: BatchStatus.FAILED, completedAt: new Date() };
     if (batch.messages) {
-      this.stripBatchMediaPayloads(batch.messages);
+      stripBatchMediaPayloads(batch.messages);
       set.messages = batch.messages as QueryDeepPartialEntity<MessageBatch>['messages'];
     }
     if (withRunState) {
@@ -476,7 +477,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     batch.progress.cancelled = batch.progress.pending;
     batch.progress.pending = 0;
     batch.completedAt = new Date();
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
 
     const cancelledRows = await this.batchRepository.update(
       { id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
@@ -577,7 +578,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   private async failBatchWithoutEngine(batch: MessageBatch): Promise<void> {
     batch.status = BatchStatus.FAILED;
     batch.completedAt = new Date();
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
     await this.batchRepository.update({ id: batch.id, status: Not(BatchStatus.CANCELLED) }, {
       status: BatchStatus.FAILED,
       completedAt: batch.completedAt,
@@ -856,7 +857,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     batch.results = results;
     // The batch is terminal now (never resumed), so drop the base64 media payloads before persisting —
     // otherwise the message_batches row retains multi-MB media forever.
-    this.stripBatchMediaPayloads(batch.messages);
+    stripBatchMediaPayloads(batch.messages);
     const terminal = {
       status: batch.status,
       progress: cancelled ? cancelledProgress : batch.progress,
@@ -937,22 +938,6 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     }
   }
 
-  /**
-   * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
-   * terminal (never resumed), so the (often multi-MB) base64 in `message_batches.messages` is dead
-   * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
-   */
-  private stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
-    for (const m of messages ?? []) {
-      for (const key of ['image', 'video', 'audio', 'document']) {
-        const media = m.content[key] as { base64?: unknown } | undefined;
-        if (media && typeof media === 'object' && 'base64' in media) {
-          delete media.base64;
-        }
-      }
-    }
-  }
-
   private applyVariables(content: BulkMessageContent, variables?: Record<string, string>): BulkMessageContent {
     if (!variables) return content;
 
@@ -988,23 +973,62 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       return value;
     };
 
-    const rendered = processValue(content) as BulkMessageContent;
+    // Sizes are measured before anything is rendered. One placeholder repeated through a small string
+    // multiplies a large variable (see renderedLength), so checking the finished text would mean
+    // allocating it first, for every string of the item at once.
+    const lengthOf = (str: string): number => {
+      try {
+        return renderedLength(str, variables);
+      } catch (error) {
+        throw error instanceof TemplateRenderError ? new BadRequestException(error.message) : error;
+      }
+    };
+    // The strings with a cap of their own, which the growth total below leaves out.
+    const hasOwnCap = /^(text|caption|(image|video|audio|document)\.base64)$/;
+    const forEachOtherString = (value: unknown, visit: (str: string) => void, path = ''): void => {
+      if (typeof value === 'string') {
+        if (!hasOwnCap.test(path)) visit(value);
+      } else if (Array.isArray(value)) {
+        value.forEach(item => forEachOtherString(item, visit, path));
+      } else if (typeof value === 'object' && value !== null) {
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+          forEachOtherString(item, visit, path ? `${path}.${key}` : key);
+        }
+      }
+    };
 
     // Cap the MESSAGE, not the payload. Substitution runs over the whole content tree (a URL or a
-    // filename may carry a placeholder too), but only the text-bearing fields are bounded: `base64`
-    // holds media, which `assertBase64WithinMediaCap` governs at up to MEDIA_DOWNLOAD_MAX_BYTES —
-    // three orders of magnitude above this cap. Capping every string rejected the most natural bulk
-    // request there is, a personalised media send, because a 100 KB image is ~137,000 base64
-    // characters.
+    // filename may carry a placeholder too), but this cap bounds the text-bearing fields: `base64` holds
+    // media, which has the media byte cap (MEDIA_DOWNLOAD_MAX_BYTES), three orders of magnitude above this
+    // one. Capping every string rejected the most natural bulk request there is, a personalised media send,
+    // because a 100 KB image is ~137,000 base64 characters.
     for (const field of ['text', 'caption'] as const) {
-      const value = rendered[field];
-      if (typeof value === 'string' && value.length > maxChars) {
+      const value = content[field];
+      const length = typeof value === 'string' ? lengthOf(value) : 0;
+      if (length > maxChars) {
         throw new BadRequestException(
-          `Rendered ${field} is ${value.length} characters, over the ${maxChars}-character limit`,
+          `Rendered ${field} is ${length} characters, over the ${maxChars}-character limit`,
         );
       }
     }
-    return rendered;
+    // Media is held to its own cap on the length it will render to: the exact check on the finished string
+    // (assertContentMediaWithinCap) runs after the render, which would already have built it.
+    for (const kind of ['image', 'video', 'audio', 'document'] as const) {
+      const base64 = content[kind]?.base64;
+      if (typeof base64 === 'string') assertBase64LengthWithinMediaCap(lengthOf(base64));
+    }
+    // The remaining strings (a URL, a filename) are not bounded one by one, but together they may not grow the
+    // item by more than the text cap.
+    let added = 0;
+    forEachOtherString(content, str => {
+      added += Math.max(0, lengthOf(str) - str.length);
+    });
+    if (added > maxChars) {
+      throw new BadRequestException(
+        `Rendered content grows by ${added} characters, over the ${maxChars}-character limit`,
+      );
+    }
+    return processValue(content) as BulkMessageContent;
   }
 
   /**

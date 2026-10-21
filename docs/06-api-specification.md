@@ -1303,7 +1303,7 @@ The key is 1-255 visible ASCII characters (a UUID works), unique per session, an
 | first request still running                                                                     | `409` `IDEMPOTENCY_KEY_IN_PROGRESS`; retry after it finishes                                               |
 | first request failed with an uncertain delivery outcome                                         | `409` `IDEMPOTENCY_OUTCOME_UNKNOWN`: the message may have gone out; check the chat, then use a **new** key |
 | first request was refused with `4xx` or `501` before calling the engine                         | the key was freed, so the retry runs as a new request                                                      |
-| transport explicitly reported that nothing was sent, such as a Baileys recipient lookup timeout | the key was freed, so the retry runs as a new request                                                      |
+| transport explicitly reported that nothing was sent, or WhatsApp rate-limited the request first | the key was freed, so the retry runs as a new request                                                      |
 | different route or body (key order in the JSON does not matter)                                 | `422` `IDEMPOTENCY_KEY_REUSED`                                                                             |
 
 A malformed key, or the header sent twice, gets `400` `IDEMPOTENCY_KEY_INVALID`. A request still pending ten minutes after it was claimed (its node most likely stopped) also reads as `IDEMPOTENCY_OUTCOME_UNKNOWN`. HTTP status alone does not prove that nothing was sent: an engine can report `409` after attempting delivery, so engine-stage failures retain the key unless transport explicitly proves that nothing was sent. Keys are stored in the data database (`send_idempotency_keys`); concurrent processes using that database share the claim, and the session-owner proxy forwards the header. This does not change the deployment support limits in [Horizontal scaling](./13-horizontal-scaling.md). `send-bulk` does not take the header: retrying its request can create another batch. A call that outlives the 24-hour key window is outside the retry guarantee.
@@ -2411,7 +2411,7 @@ Each item must carry what its `type` sends: a non-empty `chatId` of at most 255 
 
 Each item's base64 media is checked against the media byte cap (`MEDIA_DOWNLOAD_MAX_BYTES`) twice: at batch creation, and again per item after `variables` and the `message:sending` plugin gate are applied. An item that outgrows the cap only after rendering fails individually (`failed` in `results`, with `message:failed` fired) instead of being sent. `totalMessages` in the response reflects the de-duplicated item count.
 
-The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (default 64 KiB) — the limit the single-send template path already applied. `content.text` and `content.caption` are length-validated _before_ substitution, so caller-supplied `variables` could otherwise inflate each item without bound while the request body stayed far below the in-flight body budget. An item whose `text` or `caption` exceeds the limit after substitution fails individually with a message naming it, rather than being truncated silently or sent. Media is not bounded by this cap — `MEDIA_DOWNLOAD_MAX_BYTES` governs it, three orders of magnitude higher, because a 100 KB image is already ~137,000 base64 characters and would fail the character limit on every personalised media send.
+The rendered text is bounded the same way, by `TEMPLATE_RENDER_MAX_CHARS` (default 64 KiB) — the limit the single-send template path already applied. `content.text` and `content.caption` are length-validated _before_ substitution, so caller-supplied `variables` could otherwise inflate each item without bound while the request body stayed far below the in-flight body budget. An item whose `text` or `caption` exceeds the limit after substitution fails individually with a message naming it, rather than being truncated silently or sent. Media is not bounded by this cap — `MEDIA_DOWNLOAD_MAX_BYTES` governs it, three orders of magnitude higher, because a 100 KB image is already ~137,000 base64 characters and would fail the character limit on every personalised media send. Sizes are measured before an item is rendered, so an item that would render to something enormous fails without being built. A `url`, `filename` or other string that carries a placeholder may grow the item by no more than the same limit in total, and a `base64` that would render past the media limit fails with the media size message.
 
 ```json
 {
@@ -6205,7 +6205,7 @@ The digest shown is a placeholder: use the SHA-256 of the `.zip` (`sha256sum cha
 
 **Response** `201` — the newly installed `PluginDto`.
 
-**Errors:** `400` invalid URL / download, integrity check, or package invalid · `401` · `403` · `409` already installed
+**Errors:** `400` invalid URL / download, integrity check, or package invalid · `401` · `403` · `409` already installed, or the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6229,7 +6229,7 @@ Enable a plugin.
 
 Enable failures are returned in-band as `{ "success": false, "message": "…" }` (still HTTP 200).
 
-**Errors:** `401` · `403` · `404` unknown id
+**Errors:** `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6256,7 +6256,7 @@ the gateway runs that engine whatever its plugin status says. The request is ref
 `{ "success": false, "message": "…" }` (still HTTP 200) and changes nothing; set `ENGINE_TYPE` and
 restart to switch engines.
 
-**Errors:** `401` · `403` · `404` unknown id
+**Errors:** `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6274,9 +6274,9 @@ Update a plugin's base configuration object.
 
 **Request body** — `PluginConfigDto` (class-validated; body must be exactly `{config:{…}}`)
 
-| Field    | Type   | Required | Constraints   | Description                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------- | ------ | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config` | object | Yes      | `@IsObject()` | Keys to set, merged over the stored config: omitted keys keep their value. Every key sent is stored, and for a built-in engine plugin (`whatsapp-web.js`, `baileys`) a stored key overrides its `.env`-derived setting on every later boot, so send only the keys you mean to change, not the whole object `GET /api/plugins/:id` returns. Masked/sentinel secret values mean "unchanged" and are restored from the stored config |
+| Field    | Type   | Required | Constraints   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | ------ | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config` | object | Yes      | `@IsObject()` | Keys to set, merged over the stored config: omitted keys keep their value. Every key sent is stored, and for a built-in engine plugin (`whatsapp-web.js`, `baileys`) a stored key overrides its `.env`-derived setting on every later boot, so send only the keys you mean to change, not the whole object `GET /api/plugins/:id` returns. Masked/sentinel secret values mean "unchanged" and are restored from the stored config, as does an empty string; send `null` for a secret to remove the stored value |
 
 ```json
 { "config": { "apiKey": "sk-...", "replyDelayMs": 1500 } }
@@ -6309,9 +6309,9 @@ Set (or clear) a plugin config override for a specific session.
 
 **Request body** — `PluginConfigDto`
 
-| Field    | Type   | Required | Constraints   | Description                                                                                                                                         |
-| -------- | ------ | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config` | object | Yes      | `@IsObject()` | Per-session override slice. Empty `{}` clears the override (falls back to base config). Masked secrets restored from the existing per-session value |
+| Field    | Type   | Required | Constraints   | Description                                                                                                                                                                                                                                   |
+| -------- | ------ | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config` | object | Yes      | `@IsObject()` | Per-session override slice. Empty `{}` clears the override (falls back to base config). Masked secrets restored from the existing per-session value; a secret sent as `null` is dropped from the override, so the session uses the base value |
 
 ```json
 { "config": { "replyDelayMs": 3000 } }
@@ -6381,7 +6381,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 **Response** `201` — the updated `PluginDto`.
 
-**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
+**Errors:** `400` download/package invalid, manifest id mismatch, or built-in plugin · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly) · `503` shutdown began before the update of a plugin the operator switched on finished applying (the previous version is kept)
 
 ---
 
@@ -6405,7 +6405,7 @@ Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, dr
 
 Note: this DELETE returns `200` with a body (not the usual `204`).
 
-**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id
+**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6516,10 +6516,10 @@ Search messages across sessions (active search provider).
 | ----------- | ------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `q`         | string                          | **Yes**  | —       | Search term. Must be non-empty after trim; `400` for whitespace-only, over 1000 characters, or over 32 words (punctuation separates words, a symbol or emoji that stands apart counts as a word, a whitespace-separated word said again counts once). Passed to the active provider's native full-text matcher. |
 | `sessionId` | string                          | No       | —       | Restrict to a single session id (intersected with the key's `allowedSessions` scope).                                                                                                                                                                                                                           |
-| `chatId`    | string                          | No       | —       | Restrict to a single chat id. For a key restricted to selected chats this must name an allowed chat (`403` otherwise), and its hits are additionally narrowed to the allowlist.                                                                                                                                 |
+| `chatId`    | string                          | No       | —       | Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it). For a key restricted to selected chats this must name an allowed chat (`403` otherwise), and its hits are additionally narrowed to the allowlist.                    |
 | `direction` | enum (`incoming` \| `outgoing`) | No       | —       | Filter by message direction.                                                                                                                                                                                                                                                                                    |
 | `type`      | string                          | No       | —       | Filter by stored message `type` (e.g. `text`, `image`, `video`). Compared against `messages.type`; not an enum validation, any string is accepted and unmatched values simply return no hits.                                                                                                                   |
-| `from`      | string                          | No       | —       | Filter by sender.                                                                                                                                                                                                                                                                                               |
+| `from`      | string                          | No       | —       | Filter by sender; matches `from` or a group message's `author`. A phone also matches any lid that resolves to it.                                                                                                                                                                                               |
 | `dateFrom`  | integer (epoch ms)              | No       | —       | Inclusive lower bound on `timestamp`. A non-numeric value is rejected with `400`.                                                                                                                                                                                                                               |
 | `dateTo`    | integer (epoch ms)              | No       | —       | Inclusive upper bound on `timestamp`. A non-numeric value is rejected with `400`.                                                                                                                                                                                                                               |
 | `limit`     | integer (≥ 1)                   | No       | `50`    | Max hits to return. Clamped to `SEARCH_LIMIT_MAX` (default `100`). A non-integer value is rejected with `400`.                                                                                                                                                                                                  |
@@ -6764,7 +6764,7 @@ including playlists and manifests, is refused with `400`.
 { "base64": "T2dnUwACAAAA...", "mimetype": "audio/ogg; codecs=opus", "bytes": 14970 }
 ```
 
-**Errors:** `400` neither field given, a `url` that answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
+**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
 
 #### POST /api/sessions/:sessionId/media/convert/video
 
@@ -6772,7 +6772,7 @@ Convert video into an MP4 every WhatsApp client accepts: baseline H.264 with AAC
 fitted inside 1280x720, or 720x1280 for portrait (never upscaled), frame rate capped at 30 fps, index moved to the front so playback can start before the whole
 file arrives.
 
-**Errors:** `400` neither field given, a `url` that answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
+**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
 
 **Response** `200`
 
@@ -6967,7 +6967,7 @@ Update an instance (secret masked in the response). Any subset of:
 | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`      | boolean        | Whether ingress is accepted and dispatch is active                                                                                                                                                                           |
 | `sessionScope` | string \| null | Re-bind to another session, or `null` to serve all sessions again (the new scope must be inside the key's `allowedSessions`, so a key restricted to sessions cannot send `null`; the old scope's binding is torn down first) |
-| `config`       | object         | Replace the per-instance config slice                                                                                                                                                                                        |
+| `config`       | object         | Replace the per-instance config slice; a masked secret is restored from the stored one, and a secret sent as `null` is removed                                                                                               |
 
 **Auth:** API key (ADMIN)
 
@@ -7290,7 +7290,7 @@ Webhook delivery is **at-least-once**. A consumer can legitimately receive the s
 - The underlying WhatsApp engine can re-fire an event for a single message.
 - A failed delivery (non-2xx response, timeout, or network error) is retried.
 
-**Crash boundary.** For an ordinary dispatch, a successfully written outbox record retains the pre-hook event data until delivery succeeds, the subscription becomes ineligible, or the terminal failure is stored. Queued records keep this copy even after enqueue; the worker retires it only after one of those outcomes. If failure recording fails, the copy remains eligible for recovery. The bounded sweep (`WEBHOOK_RECONCILE_INTERVAL_MS`, default 60s) checks the stored job before replaying, leaves active jobs alone, retires the row of a completed job without a replay for as long as the queue still keeps that job (completed jobs are kept for an hour, at most the 1000 most recent), and reuses the stored `X-OpenWA-Idempotency-Key`. If Redis cannot confirm the job state, replay waits. A missing or failed job, or a stranded direct delivery, can be replayed within `WEBHOOK_RECONCILE_MAX_ATTEMPTS`; a completed job already evicted from the queue reads as missing. A replay sent directly (the queue off, or its enqueue failed) that exhausts its retries stores its terminal failure row but keeps the outbox copy pending, so later sweeps replay it until that budget is spent; exhausting it retires the outbox only after terminal failure recording succeeds. Receiver deduplication remains necessary because a crash after receiver processing can cause another POST.
+**Crash boundary.** For an ordinary dispatch, a successfully written outbox record retains the pre-hook event data until delivery succeeds, the subscription becomes ineligible, or the terminal failure is stored. Queued records keep this copy even after enqueue; the worker retires it only after one of those outcomes. If failure recording fails, the copy remains eligible for recovery. The bounded sweep (`WEBHOOK_RECONCILE_INTERVAL_MS`, default 60s) checks the stored job before replaying, leaves active jobs alone, retires the row of a completed job without a replay for as long as the queue still keeps that job (completed jobs are kept for an hour, at most the 1000 most recent), and reuses the stored `X-OpenWA-Idempotency-Key`. If Redis cannot confirm the job state, replay waits. A missing or failed job, or a stranded direct delivery, can be replayed within `WEBHOOK_RECONCILE_MAX_ATTEMPTS`; a completed job already evicted from the queue reads as missing. A replay sent directly (the queue off, or its enqueue failed) that exhausts its retries stores its terminal failure row but keeps the outbox copy pending, so later sweeps replay it until that budget is spent; exhausting it retires the outbox only after terminal failure recording succeeds. Once a replay to a webhook has failed, that webhook's remaining rows in the same sweep make one direct attempt each, so a receiver that is down does not hold the sweep for a full retry schedule per row. Receiver deduplication remains necessary because a crash after receiver processing can cause another POST.
 
 Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs for at most 10 s; direct sends, an operator redrive replay in flight, and an outbox replay in flight with its plugin hooks, get up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). That replay sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and no further row is replayed; the next start replays what it left pending.
 

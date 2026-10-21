@@ -183,6 +183,7 @@ import { ChannelNotFoundError } from '../../common/errors/channel-not-found.erro
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { Boom } from '@hapi/boom';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
@@ -1900,6 +1901,46 @@ describe('BaileysAdapter messaging', () => {
     const failure = new Error('not-acceptable');
     fakeSock.sendMessage.mockRejectedValue(failure);
     await expect(adapter.sendTextMessage('628111@s.whatsapp.net', 'hello')).rejects.toBe(failure);
+  });
+
+  // sendMessage awaits IQs (group roster, devices, sessions) before it relays the message, and WhatsApp
+  // answers a throttled one with a numeric code on the Boom. Every other path maps these to a retryable 503.
+  it.each([
+    [429, EngineThrottledError],
+    [408, EngineTransportError],
+  ])('a WhatsApp %s answer to a query the send awaits is a retryable 503, not a bare 500', async (code, expected) => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: code }));
+    const rejection = adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    await expect(rejection).rejects.toBeInstanceOf(expected);
+    await expect(rejection).rejects.toBeInstanceOf(EngineTransportError);
+  });
+
+  // The throttle is WhatsApp refusing this account's traffic, which is what the breaker watches for; the send
+  // itself provably went nowhere, so its admission is given back.
+  it('a throttled send is known to have sent nothing and still feeds the send breaker', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: 429 }));
+    const error: unknown = await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello').catch((e: unknown) => e);
+    expect(sentNothing(error)).toBe(true);
+    expect(countsTowardSendBreaker(error)).toBe(true);
+  });
+
+  // A query that timed out may have been answered after the caller gave up, so nothing is claimed about the
+  // send: its admission stays held, and the timeout is a transport fault the breaker leaves to reconnects.
+  it('a send whose awaited query timed out is not known to have sent nothing and stays off the breaker', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('timed out', { data: 408 }));
+    const error: unknown = await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello').catch((e: unknown) => e);
+    expect(sentNothing(error)).toBe(false);
+    expect(countsTowardSendBreaker(error)).toBe(false);
+  });
+
+  it('leaves any other WhatsApp refusal code to propagate untouched', async () => {
+    const adapter = await readyAdapter();
+    const refusal = new Boom('forbidden', { data: 403 });
+    fakeSock.sendMessage.mockRejectedValue(refusal);
+    await expect(adapter.sendTextMessage('628111@s.whatsapp.net', 'hello')).rejects.toBe(refusal);
   });
 
   /** An adapter for a session started behind a proxy, which every fetch it makes must leave through. */
@@ -5306,6 +5347,49 @@ describe('BaileysAdapter store-backed ops', () => {
         rmSpy.mockRestore();
       }
     });
+
+    // The rows that survive a failed clear resurface under the next account to link the session, so the
+    // failure is non-fatal for the unlink but must not pass without a trace.
+    const warnOf = (adapter: BaileysAdapter) =>
+      jest
+        .spyOn((adapter as unknown as { logger: { warn: (m: string, ctx?: unknown) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+    const clearFailure = (what: string) => [
+      `Failed to clear the stored ${what} of an unlinked account`,
+      expect.objectContaining({ sessionId: 'sess-1', error: 'SQLITE_BUSY' }) as unknown,
+    ];
+
+    it('logs a failed clear on logout while the unlink still completes', async () => {
+      const adapter = await linked();
+      fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+      const warn = warnOf(adapter);
+
+      await expect(adapter.logout()).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith(...clearFailure('messages'));
+      expect(warn).toHaveBeenCalledWith(...clearFailure('chat states'));
+    });
+
+    it('logs a failed clear when WhatsApp unlinks the device while the unlink still completes', async () => {
+      const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+      try {
+        const onDisconnected = jest.fn();
+        const adapter = await linked(onDisconnected);
+        fakeStore.clearSession.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+        const warn = warnOf(adapter);
+        fakeSock.fire('connection.update', {
+          connection: 'close',
+          lastDisconnect: { error: { output: { statusCode: 401 } } },
+        });
+        await new Promise(r => setImmediate(r));
+
+        expect(warn).toHaveBeenCalledWith(...clearFailure('messages'));
+        expect(warn).toHaveBeenCalledWith(...clearFailure('chat states'));
+        expect(onDisconnected).toHaveBeenCalledWith('logged out');
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
   });
 });
 
@@ -7423,6 +7507,14 @@ describe('BaileysAdapter status posting', () => {
     const failure = new Error('not-acceptable');
     fakeSock.sendMessage.mockRejectedValue(failure);
     await expect(adapter.postTextStatus('hello', { recipients: ['628111@c.us'] })).rejects.toBe(failure);
+  });
+
+  it('a status post throttled by WhatsApp is a retryable 503, not a bare 500', async () => {
+    const adapter = await ready();
+    fakeSock.sendMessage.mockRejectedValue(new Boom('rate-overlimit', { data: 429 }));
+    await expect(adapter.postTextStatus('hello', { recipients: ['628111@c.us'] })).rejects.toBeInstanceOf(
+      EngineThrottledError,
+    );
   });
 });
 
@@ -10345,5 +10437,168 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       expect(fakeStore.remove).not.toHaveBeenCalled();
       expect(copies.has('REUSED')).toBe(true);
     });
+  });
+});
+
+describe('BaileysAdapter group metadata cache', () => {
+  const GROUP = '123-456@g.us';
+  const TTL_ENV = 'BAILEYS_GROUP_METADATA_CACHE_TTL_MS';
+  const savedTtl = process.env[TTL_ENV];
+  const meta = (members: string[]) => ({ id: GROUP, subject: 'G', participants: members.map(id => ({ id })) });
+
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    delete process.env[TTL_ENV];
+    fakeSock.groupMetadata.mockReset().mockResolvedValue(meta(['628111@s.whatsapp.net']));
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    if (savedTtl === undefined) delete process.env[TTL_ENV];
+    else process.env[TTL_ENV] = savedTtl;
+  });
+
+  type SocketConfig = { cachedGroupMetadata: (jid: string) => Promise<unknown> };
+  const socketConfig = (): SocketConfig => {
+    const make = jest.requireMock<{ default: jest.Mock }>('@whiskeysockets/baileys').default;
+    const calls = make.mock.calls as Array<[SocketConfig]>;
+    return calls[calls.length - 1][0];
+  };
+  const ready = async (): Promise<BaileysAdapter> => {
+    const adapter = newAdapter();
+    await adapter.initialize({});
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  it('answers a group send from the cache after one query', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+
+    const first = await cachedGroupMetadata(GROUP);
+    const second = await cachedGroupMetadata(GROUP);
+
+    expect(first).toBe(second);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledWith(GROUP);
+  });
+
+  it('lets a failed query surface as the send error and tries again on the next send', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    fakeSock.groupMetadata.mockRejectedValueOnce(Object.assign(new Error('rate-overlimit'), { data: 429 }));
+
+    await expect(cachedGroupMetadata(GROUP)).rejects.toThrow('rate-overlimit');
+    await expect(cachedGroupMetadata(GROUP)).resolves.toMatchObject({ id: GROUP });
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('is off when the TTL is 0: the option answers nothing, so Baileys queries on its own', async () => {
+    process.env[TTL_ENV] = '0';
+    await ready();
+
+    await expect(socketConfig().cachedGroupMetadata(GROUP)).resolves.toBeUndefined();
+    expect(fakeSock.groupMetadata).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a participant is added or removed', 'group-participants.update', { id: GROUP, action: 'add', participants: [] }],
+    ['the group changes a setting', 'groups.update', [{ id: GROUP, announce: true }]],
+    ['the account is added to the group again', 'groups.upsert', [{ id: GROUP, participants: [] }]],
+  ])('reads the group again after %s', async (_label, event, payload) => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    fakeSock.fire(event, payload);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes a cached group from a whole snapshot without another query', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    fakeSock.fire('groups.update', [meta(['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
+    const refreshed = (await cachedGroupMetadata(GROUP)) as { participants: unknown[] };
+
+    expect(refreshed.participants).toHaveLength(2);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports the group events to consumers while it keeps the cache', async () => {
+    const onGroupEvent = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onGroupEvent });
+    fakeSock.fire('connection.update', { connection: 'open' });
+
+    fakeSock.fire('group-participants.update', {
+      id: GROUP,
+      action: 'add',
+      participants: ['628222@s.whatsapp.net'],
+    });
+
+    expect(onGroupEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'join', groupId: GROUP }));
+  });
+
+  it.each([
+    ['addParticipants', (a: BaileysAdapter) => a.addParticipants(GROUP, ['628222@c.us'])],
+    ['removeParticipants', (a: BaileysAdapter) => a.removeParticipants(GROUP, ['628111@c.us'])],
+    ['leaveGroup', (a: BaileysAdapter) => a.leaveGroup(GROUP)],
+  ])('reads the group again after %s, whether or not WhatsApp has reported the change yet', async (_label, write) => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    await write(adapter);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('forgets a group when its write fails too, since the outcome may be partial', async () => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+    fakeSock.groupLeave.mockRejectedValueOnce(new Error('connection closed'));
+
+    await expect(adapter.leaveGroup(GROUP)).rejects.toThrow();
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts every new socket with an empty cache', async () => {
+    const adapter = await ready();
+    await socketConfig().cachedGroupMetadata(GROUP);
+
+    // A transient drop: the lifecycle builds a fresh socket without going through a teardown.
+    jest.useFakeTimers();
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await jest.runAllTimersAsync();
+    await socketConfig().cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+    await adapter.destroy();
+  });
+
+  it.each([
+    ['disconnect', (a: BaileysAdapter) => a.disconnect()],
+    ['destroy', (a: BaileysAdapter) => a.destroy()],
+  ])('empties the cache on %s', async (_label, tearDown) => {
+    const adapter = await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    await tearDown(adapter);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
   });
 });

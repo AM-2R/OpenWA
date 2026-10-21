@@ -54,9 +54,18 @@ describe('RedisIoAdapter', () => {
     process.env = { ...prevEnv };
   });
 
-  const fakeServer = (): { server: Server; adapterFn: jest.Mock } => {
+  type NamespaceMiddleware = (socket: unknown, next: (error?: Error) => void) => void;
+
+  const fakeServer = (): {
+    server: Server;
+    adapterFn: jest.Mock;
+    namespaceOf: jest.Mock;
+    rootUse: jest.Mock<void, [NamespaceMiddleware]>;
+  } => {
     const adapterFn = jest.fn();
-    return { server: { adapter: adapterFn } as unknown as Server, adapterFn };
+    const rootUse = jest.fn<void, [NamespaceMiddleware]>();
+    const namespaceOf = jest.fn(() => ({ use: rootUse }));
+    return { server: { adapter: adapterFn, of: namespaceOf } as unknown as Server, adapterFn, namespaceOf, rootUse };
   };
 
   /** Stub the base createIOServer so no real socket.io server is spun up. */
@@ -111,6 +120,23 @@ describe('RedisIoAdapter', () => {
         expect(adapter.createIOServer(2785)).toBe(server);
         expect(redisInstances).toHaveLength(0);
         expect(adapterFn).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each(['true', undefined])('refuses the root namespace whether or not Redis is enabled (%s)', enabled => {
+      if (enabled === undefined) delete process.env.REDIS_ENABLED;
+      else process.env.REDIS_ENABLED = enabled;
+      const { server, namespaceOf, rootUse } = fakeServer();
+      const spy = withBaseServer(server);
+      try {
+        new RedisIoAdapter({} as never).createIOServer(2785);
+        expect(namespaceOf).toHaveBeenCalledWith('/');
+        const [middleware] = rootUse.mock.calls[0];
+        const next = jest.fn();
+        middleware({}, next);
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: 'Invalid namespace' }));
       } finally {
         spy.mockRestore();
       }

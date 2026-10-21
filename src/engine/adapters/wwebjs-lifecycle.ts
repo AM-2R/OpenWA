@@ -169,15 +169,14 @@ const WA_STATE_RESTRICTIONS: Readonly<Record<string, AccountRestriction['kind']>
  * Host surface for {@link WwebjsLifecycle}. The adapter keeps the public engine methods as thin
  * forwarders and builds ONE object literal of these closures, so the delegate drives connection
  * state only through the seams named here: the sibling delegates it coordinates (reconcile,
- * onboarding watcher, call cache, stuck-auth) and the adapter-owned event surface.
+ * onboarding watcher, call cache, stuck-auth) and the adapter-owned callbacks and domain-event
+ * registration.
  */
 export interface WwebjsLifecycleHost {
   readonly logger: ReturnType<typeof createLogger>;
   readonly config: WhatsAppWebJsConfig;
   /** Live callbacks bag — read per event, since initialize() installs it after delegates are built. */
   getCallbacks(): EngineEventCallbacks;
-  /** Re-emit a status transition on the adapter's EventEmitter (`stateChanged`). */
-  emitState(status: EngineStatus): void;
   /** Arm / disarm the post-authentication readiness reconciliation (./wwebjs-reconcile). */
   scheduleReadyReconcile(): void;
   clearReadyReconcile(): void;
@@ -920,9 +919,9 @@ export class WwebjsLifecycle {
     void reportRunningWebBuild(page, this.host.logger, this.host.config.sessionId, this.requestedWebVersion);
   }
 
-  /** The single status-transition funnel: latches disconnectReported, fires the callback, re-emits
-   *  on the adapter's EventEmitter. Public because the sibling delegates (reconcile, stuck-auth,
-   *  onboarding watcher) drive transitions through their host slices. */
+  /** The single status-transition funnel: latches disconnectReported and fires the callback. Public
+   *  because the sibling delegates (reconcile, stuck-auth, onboarding watcher) drive transitions
+   *  through their host slices. */
   setStatus(status: EngineStatus): void {
     // Latch before anything observes the transition. The constructor's initial DISCONNECTED is a field
     // initializer and never reaches here, so this only ever fires on a real transition — startup is
@@ -939,7 +938,6 @@ export class WwebjsLifecycle {
     }
     this.status = status;
     this.host.getCallbacks().onStateChanged?.(status);
-    this.host.emitState(status);
   }
 
   private beginClientTeardown(): Client | null {
@@ -1114,7 +1112,11 @@ export class WwebjsLifecycle {
    * failing probe answers alive, since the page is healing, not dead (#1081).
    */
   async probeLiveness(): Promise<boolean> {
-    if (this.status !== EngineStatus.READY || !this.client) return false;
+    // The watchdog also probes an ACTION_REQUIRED session, observe-only (it never reconnects one): the page
+    // is still up while the operator acts. Answering false without asking made every such session look
+    // dead on the first tick, and hid a page that really had died.
+    const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
+    if (!probeable || !this.client) return false;
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1185,7 +1187,8 @@ export class WwebjsLifecycle {
         const transient =
           error instanceof PairingCodeAttemptTimeoutError ||
           isExecutionContextDestroyedError(reason) ||
-          /callfunctionon timed out|timed out\. increase the 'protocoltimeout'/i.test(reason);
+          isProtocolTimeout(error) ||
+          /callfunctionon timed out/i.test(reason);
         if (!transient) {
           throw error;
         }

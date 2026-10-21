@@ -211,7 +211,12 @@ export class WwebjsContacts {
     }
   }
 
-  async getNumberId(number: string): Promise<string | null> {
+  /**
+   * The lookup as WhatsApp Web answers it: `<lid>@lid` for a contact migrated to privacy-id addressing,
+   * else `<phone>@c.us`, or null when the number is not registered. The send path needs the `@lid`
+   * (see WwebjsMessaging.resolveSendId); {@link getNumberId} is the answer that crosses the engine boundary.
+   */
+  async lookupNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
     const numberId = await withPage(this.host, 'getNumberId', () => this.client().getNumberId(number));
     // Read both property names: a WA Web build that renamed `_serialized` would otherwise make
@@ -219,8 +224,16 @@ export class WwebjsContacts {
     return readWid(numberId) ?? null;
   }
 
+  async getNumberId(number: string): Promise<string | null> {
+    const wid = await this.lookupNumberId(number);
+    // The contract is the neutral `<phone>@c.us`, which is what the Baileys engine answers. A migrated
+    // contact's lookup names its `@lid`, the engine's own scheme; the phone the caller supplied is the
+    // stable neutral id, and a send to it re-resolves to the lid.
+    return wid?.endsWith('@lid') ? `${userPart(number).replace(/\D/g, '')}@c.us` : wid;
+  }
+
   async checkNumberExists(number: string): Promise<boolean> {
-    return (await this.getNumberId(number)) !== null;
+    return (await this.lookupNumberId(number)) !== null;
   }
 
   async resolveContactPhone(contactId: string): Promise<string | null> {

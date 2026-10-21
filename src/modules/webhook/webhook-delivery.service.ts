@@ -107,6 +107,13 @@ interface DispatchEventContext {
    */
   singleAttempt?: boolean;
   /**
+   * Like `singleAttempt` for the direct path (the queue off, or the fallback for a failed enqueue), but
+   * an enabled queue is still used. Set by the reconciler, which replays its backlog one row after
+   * another: a retry schedule per row would hold every row behind an unreachable receiver for
+   * minutes, and the next sweep is the retry.
+   */
+  oneDirectAttempt?: boolean;
+  /**
    * Ends a replay's retry backoff early and gives no further attempt. A replay holds no dispatch
    * slot, so the shutdown drain's limiter close cannot stop it; its owner aborts this instead.
    */
@@ -1007,7 +1014,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     event: string,
     idempotencyKey: string,
     data: Record<string, unknown>,
-    options: { singleAttempt?: boolean; signal?: AbortSignal } = {},
+    options: { singleAttempt?: boolean; oneDirectAttempt?: boolean; signal?: AbortSignal } = {},
   ): Promise<WebhookDeliveryOutcome> {
     const deliveryId = generateDeliveryId();
     const outcome = await this.deliverOne(webhook, deliveryId, idempotencyKey, {
@@ -1015,6 +1022,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       event,
       baseData: data,
       singleAttempt: options.singleAttempt,
+      oneDirectAttempt: options.oneDirectAttempt,
       signal: options.signal,
     });
     // The receiver has the event. An operator redrive of a failure row can find the same delivery
@@ -1095,7 +1103,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     return {
       yieldSlot: ctx.yieldSlot,
       replayData: this.keepsFailurePayload() ? ctx.baseData : undefined,
-      singleAttempt: ctx.singleAttempt,
+      singleAttempt: ctx.singleAttempt || ctx.oneDirectAttempt,
       signal: ctx.signal,
     };
   }

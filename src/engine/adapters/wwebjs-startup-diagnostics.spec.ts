@@ -33,7 +33,6 @@ describe('the patch diagnostics at whatsapp-web.js start', () => {
       logger,
       config: { sessionId: 'sess', sessionDataPath: './data/sessions' },
       getCallbacks: () => ({}),
-      emitState: jest.fn(),
       scheduleReadyReconcile: jest.fn(),
       clearReadyReconcile: jest.fn(),
       startOnboardingWatcher: jest.fn(),

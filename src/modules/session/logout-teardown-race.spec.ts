@@ -80,9 +80,10 @@ describe('SessionService logout() name-scoped teardown fence', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       exists: jest.fn().mockResolvedValue(false),
     };
-    const messageRepository = { find: jest.fn().mockResolvedValue([]) };
+    const messageRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn() };
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      getRepository: jest.fn(() => messageRepository) as unknown as DataSource['getRepository'],
       transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
         cb(manager),
       ) as unknown as DataSource['transaction'],
@@ -268,6 +269,10 @@ describe('SessionService logout() name-scoped teardown fence', () => {
   it('old-name teardown still pending past 10s: delete rejects 409, transaction parent removal and purgeSessionData not called (unique name still reserved)', async () => {
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      getRepository: jest.fn(() => ({
+        find: jest.fn().mockResolvedValue([]),
+        delete: jest.fn(),
+      })) as unknown as DataSource['getRepository'],
       transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
         cb(manager),
       ) as unknown as DataSource['transaction'],

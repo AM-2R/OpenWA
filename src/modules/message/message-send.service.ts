@@ -9,13 +9,13 @@ import { MessageProjector } from '../session/message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
+import { resolveMediaBody } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService, SettleAdmission, countsTowardSendBreaker } from './send-pacing.service';
 import { TemplateService } from '../template/template.service';
-import { renderTemplate } from '../../common/utils/template-render';
+import { renderedLength, renderTemplate, TemplateRenderError } from '../../common/utils/template-render';
 import { createLogger } from '../../common/services/logger.service';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -23,7 +23,6 @@ import { isUniqueViolation } from '../../common/utils/db-errors';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
-import { isMediaUrl, MEDIA_URL_MESSAGE } from '../../common/media/media-url';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 
 /** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
@@ -276,7 +275,8 @@ export class MessageSendService {
    *
    * The FINAL rendered text is capped at template.renderMaxChars (default 64 KiB): caller-supplied
    * variables can inflate a small template unboundedly, so an over-cap render is rejected with a
-   * 400 naming the limit rather than truncated silently or pushed to the engine/DB as-is.
+   * 400 naming the limit rather than truncated silently or pushed to the engine/DB as-is. The length
+   * is measured before anything is rendered, so a refused request never allocates the oversized text.
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
     const template = await this.templateService.resolve(sessionId, {
@@ -285,18 +285,28 @@ export class MessageSendService {
     });
 
     const vars = dto.vars ?? {};
-    const segments = [template.header, template.body, template.footer]
-      .filter((segment): segment is string => segment != null && segment.length > 0)
-      .map(segment => renderTemplate(segment, vars));
-    const text = segments.join('\n\n');
+    const parts = [template.header, template.body, template.footer].filter(
+      (segment): segment is string => segment != null && segment.length > 0,
+    );
+    const separator = '\n\n';
 
     const maxChars =
       this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
       DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
-    if (text.length > maxChars) {
-      throw new BadRequestException(
-        `Rendered template is ${text.length} characters, over the ${maxChars}-character limit`,
-      );
+    let text: string;
+    try {
+      const length =
+        parts.reduce((sum, part) => sum + renderedLength(part, vars), 0) +
+        separator.length * Math.max(0, parts.length - 1);
+      if (length > maxChars) {
+        throw new BadRequestException(
+          `Rendered template is ${length} characters, over the ${maxChars}-character limit`,
+        );
+      }
+      text = parts.map(part => renderTemplate(part, vars)).join(separator);
+    } catch (error) {
+      if (error instanceof TemplateRenderError) throw new BadRequestException(error.message);
+      throw error;
     }
 
     return this.sendText(sessionId, {
@@ -626,7 +636,7 @@ export class MessageSendService {
         button: { id: finalDto.buttonId, text: result.body },
       };
     }
-    return this.persistSentState(message, result);
+    return this.persistSentState(message, result, result.body ? { body: result.body } : undefined);
   }
 
   async forward(
@@ -844,7 +854,13 @@ export class MessageSendService {
    * DB fault would otherwise mark a delivered message permanently FAILED and (for text) fire
    * `message:failed`. Log and return success instead.
    */
-  private async persistSentState(message: Message, result: MessageResult): Promise<MessageResponseDto> {
+  private async persistSentState(
+    message: Message,
+    result: MessageResult,
+    // Columns a sender changed in memory after its PENDING insert. The write below is an UPDATE of
+    // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body'> = {},
+  ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
     // engine. Leave waMessageId unset (NULL) so no ack mis-matches it.
@@ -859,6 +875,7 @@ export class MessageSendService {
       const updated = await this.messageRepository.update(
         { id: message.id, sessionId: message.sessionId },
         {
+          ...changed,
           waMessageId: message.waMessageId,
           status: message.status,
           timestamp: message.timestamp,
@@ -902,11 +919,12 @@ export class MessageSendService {
         }
         if (!metadataMerged) {
           // Keep the payload-bearing row when the echo merge fails. Mark it SENT without the
-          // conflicting engine id so the pending reaper cannot strip successfully sent media.
+          // conflicting engine id so the pending reaper cannot strip successfully sent media. This is the
+          // row that survives, so it carries what the send resolved too (a clicked button's label).
           await this.messageRepository
             .update(
               { id: message.id, status: MessageStatus.PENDING },
-              { status: MessageStatus.SENT, timestamp: result.timestamp },
+              { status: MessageStatus.SENT, timestamp: result.timestamp, ...changed },
             )
             .catch(err =>
               this.logger.warn(`Preserving the sent media row failed (id=${message.id})`, {
@@ -991,31 +1009,14 @@ export class MessageSendService {
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {
-    const base64 = stripBase64DataUri(dto.base64);
-    if (!dto.url && !base64) {
-      throw new BadRequestException('Either url or base64 must be provided');
-    }
-    // The DTO checks this too, but a plugin send and a message:sending rewrite reach here without it,
-    // and both engines decode anything that is not an http(s) URL as base64.
-    if (!base64 && !isMediaUrl(dto.url)) {
-      throw new BadRequestException(MEDIA_URL_MESSAGE);
-    }
-
-    if (base64 && !dto.mimetype) {
-      throw new BadRequestException('mimetype is required when using base64 data');
-    }
-
-    // Bound an outbound base64 payload to the same byte cap as URL/inbound media, before it is
-    // persisted or handed to the engine. URL media is already capped while streaming.
-    assertBase64WithinMediaCap(base64);
-
+    const { mimetype, data } = resolveMediaBody(dto, {
+      fallbackMimetype: 'application/octet-stream',
+      requireMimetypeForBase64: true,
+      checkUrl: true,
+    });
     return {
-      mimetype: dto.mimetype || 'application/octet-stream',
-      // base64 wins over url when both are present: it is the explicit local payload, and a stale
-      // `url` (e.g. a Swagger/example default left in the body) must not be fetched in its place.
-      // Aligns the send selection with the base64-first persisted metadata and the url field's check,
-      // which is skipped only when base64 holds data after its data-URI prefix is stripped (#670).
-      data: base64 || dto.url!,
+      mimetype,
+      data,
       filename: dto.filename,
       caption: dto.caption,
       mentions: dto.mentions,

@@ -46,10 +46,20 @@ export class SearchController {
     description: 'Search term (required, non-empty, at most 1000 characters and 32 words)',
   })
   @ApiQuery({ name: 'sessionId', required: false, description: 'Restrict to a single session' })
-  @ApiQuery({ name: 'chatId', required: false, description: 'Restrict to a single chat id' })
+  @ApiQuery({
+    name: 'chatId',
+    required: false,
+    description:
+      "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+  })
   @ApiQuery({ name: 'direction', required: false, description: 'incoming | outgoing' })
   @ApiQuery({ name: 'type', required: false, description: 'Message type filter' })
-  @ApiQuery({ name: 'from', required: false, description: 'Sender filter' })
+  @ApiQuery({
+    name: 'from',
+    required: false,
+    description:
+      "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+  })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Epoch-ms lower bound (inclusive)' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'Epoch-ms upper bound (inclusive)' })
   @ApiQuery({ name: 'limit', required: false, type: 'integer', description: 'Max hits to return' })

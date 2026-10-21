@@ -9,6 +9,7 @@ import { AutomationRulesService } from './automation-rules.service';
 import { AutomationRule } from './entities/automation-rule.entity';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import type { MessageService } from '../message/message.service';
+import type { WebhookFilters } from '../webhook/filters/filter-types';
 import type { ModuleRef } from '@nestjs/core';
 import type { ConfigService } from '@nestjs/config';
 
@@ -114,6 +115,63 @@ describe('AutomationRulesService', () => {
       const rule = await service.create('sessA', { name: 'r', replyText: 'hi' });
       await expect(service.update('sessB', rule.id, { replyText: 'hijacked' })).rejects.toThrow(NotFoundException);
       expect((await ds.getRepository(AutomationRule).findOneByOrFail({ id: rule.id })).replyText).toBe('hi');
+    });
+
+    // Stalls the next findOne after it has read, so a second request can run between the read and
+    // the write of the first, which is the window a read-modify-save update loses writes in.
+    const stallNextRead = (): { release: () => void } => {
+      const repository = ds.getRepository(AutomationRule);
+      const realFindOne = repository.findOne.bind(repository);
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      jest.spyOn(repository, 'findOne').mockImplementationOnce(async options => {
+        const row = await realFindOne(options);
+        await gate;
+        return row;
+      });
+      return { release };
+    };
+
+    it('an overlapping edit does not write back columns it never touched', async () => {
+      const rule = await service.create('sessA', { name: 'r', replyText: 'old' });
+      const { release } = stallNextRead();
+
+      const slow = service.update('sessA', rule.id, { replyText: 'new' });
+      await service.update('sessA', rule.id, { enabled: false });
+      release();
+      await slow;
+
+      const stored = await ds.getRepository(AutomationRule).findOneByOrFail({ id: rule.id });
+      expect(stored.replyText).toBe('new');
+      expect(stored.enabled).toBe(false);
+    });
+
+    it('an edit that loses a race with a delete answers 404 and does not resurrect the rule', async () => {
+      const rule = await service.create('sessA', { name: 'r', replyText: 'old' });
+      const { release } = stallNextRead();
+
+      const slow = service.update('sessA', rule.id, { replyText: 'new' });
+      await service.remove('sessA', rule.id);
+      release();
+
+      await expect(slow).rejects.toThrow(NotFoundException);
+      expect(await ds.getRepository(AutomationRule).countBy({ id: rule.id })).toBe(0);
+    });
+
+    it('update stores conditions and returns the stored row', async () => {
+      const rule = await service.create('sessA', { name: 'r', replyText: 'hi' });
+      const conditions: WebhookFilters = { conditions: [{ field: 'body', operator: 'contains', value: 'refund' }] };
+
+      const updated = await service.update('sessA', rule.id, { conditions, cooldownSeconds: 0 });
+
+      expect(updated.conditions).toEqual(conditions);
+      expect(updated.cooldownSeconds).toBe(0);
+      expect(updated.replyText).toBe('hi');
+    });
+
+    it('update with no fields returns the rule untouched', async () => {
+      const rule = await service.create('sessA', { name: 'r', replyText: 'hi' });
+      expect((await service.update('sessA', rule.id, {})).replyText).toBe('hi');
     });
 
     it('remove refuses (404) a rule owned by another session and does not delete it', async () => {

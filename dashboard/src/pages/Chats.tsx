@@ -70,6 +70,7 @@ import { useChannelMessages } from '../hooks/useChannelMessages';
 import { useContactStatuses } from '../hooks/useContactStatuses';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import { createTrailingCoalescer } from '../utils/trailingCoalescer';
+import { createReloadCoalescer, type ReloadCoalescer } from '../utils/reloadCoalescer';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import KindIcon from '../components/chats/KindIcon';
@@ -89,6 +90,10 @@ import './Chats.css';
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
 const MARK_READ_DEBOUNCE_MS = 750;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
+
+// Longest one background chat-list walk may take before it is abandoned. A walk is a dozen small requests, and
+// the gateway answers a stalled engine at 180 s, so this is far above a healthy walk and below that.
+const BACKGROUND_RELOAD_DEADLINE_MS = 120_000;
 
 // mergeDeliveryStatus (forward-only delivery-tick merge) is shared with mergeOrAppend in utils/chatMessages
 // so the WS append path and the ack path apply the exact same rule.
@@ -396,9 +401,16 @@ export function Chats() {
   // with the browser clock, so only this, not a newer timestamp, shows a row changed after a refetch left.
   const liveRowsRef = useRef(new Map<string, number>());
   const loadChats = useCallback(
-    async (sessionId: string, { background = false } = {}): Promise<boolean> => {
+    async (
+      sessionId: string,
+      { background = false, signal }: { background?: boolean; signal?: AbortSignal } = {},
+    ): Promise<boolean> => {
       if (!sessionId) return false;
       const controller = new AbortController();
+      // The caller's own deadline ends this load the way a session switch does.
+      const abortWithCaller = () => controller.abort();
+      if (signal?.aborted) abortWithCaller();
+      else signal?.addEventListener('abort', abortWithCaller, { once: true });
       chatsLoadsRef.current.add(controller);
       const request = ++chatsRequestRef.current;
       chatsSessionRef.current = sessionId;
@@ -438,6 +450,7 @@ export function Chats() {
         setChats([]);
         return false;
       } finally {
+        signal?.removeEventListener('abort', abortWithCaller);
         chatsLoadsRef.current.delete(controller);
         // Only the call that raised the spinner clears it: a background refetch settling first would
         // otherwise uncover the previous session's list while the switch's own load is still out.
@@ -445,6 +458,29 @@ export function Chats() {
       }
     },
     [showLoadError],
+  );
+
+  // A reload walks every page of the list, and each live event the sidebar cannot apply locally asks for
+  // one, so a burst of them must not start a walk apiece: per session one runs at a time and whatever
+  // arrives meanwhile shares a single trailing reload (utils/reloadCoalescer). Foreground loads stay out of
+  // it. The session effect below drops the trailing reload on a switch or unmount: started after one, it
+  // would point chatsSessionRef back at the session left and strand the new session's own list. A walk
+  // that never answers is abandoned at BACKGROUND_RELOAD_DEADLINE_MS, or every later trigger, the reconnect
+  // refresh included, would wait behind it.
+  const backgroundReloadsRef = useRef(new Map<string, ReloadCoalescer>());
+  const reloadChatsInBackground = useCallback(
+    (sessionId: string): Promise<boolean> => {
+      const reloads = backgroundReloadsRef.current;
+      let reload = reloads.get(sessionId);
+      if (!reload) {
+        reload = createReloadCoalescer(signal => loadChats(sessionId, { background: true, signal }), {
+          deadlineMs: BACKGROUND_RELOAD_DEADLINE_MS,
+        });
+        reloads.set(sessionId, reload);
+      }
+      return reload.run();
+    },
+    [loadChats],
   );
 
   // A send resolves after the await, possibly once another session's list is on screen. That list can
@@ -457,6 +493,7 @@ export function Chats() {
 
   useEffect(() => {
     const loads = chatsLoadsRef.current;
+    const reloads = backgroundReloadsRef.current;
     if (selectedSessionId) {
       void loadChats(selectedSessionId);
       setActiveChat(null);
@@ -482,6 +519,7 @@ export function Chats() {
     return () => {
       for (const controller of loads) controller.abort();
       loads.clear();
+      for (const reload of reloads.values()) reload.cancel();
     };
   }, [selectedSessionId, loadChats]);
 
@@ -616,14 +654,14 @@ export function Chats() {
       const { needsSidebarRefetch } = applyIncomingToChatList(chatsRef.current, newMsg, listOptions);
       setChats(prevChats => applyIncomingToChatList(prevChats, newMsg, listOptions).chats);
       if (needsSidebarRefetch) {
-        void loadChats(selectedSessionId, { background: true });
+        void reloadChatsInBackground(selectedSessionId);
       }
     },
     [
       selectedSessionId,
       activeChat,
       canWrite,
-      loadChats,
+      reloadChatsInBackground,
       markChatRead,
       appendMessage,
       onMessageAppended,
@@ -714,10 +752,10 @@ export function Chats() {
       } else if (!matchedCachedMessage) {
         // No cached thread proves whether the deleted message was the chat's newest; refresh the
         // summaries, as an edit does.
-        void loadChats(selectedSessionId, { background: true });
+        void reloadChatsInBackground(selectedSessionId);
       }
     },
-    [selectedSessionId, queryClient, loadChats],
+    [selectedSessionId, queryClient, reloadChatsInBackground],
   );
 
   const handleIncomingMessageEdited = useCallback(
@@ -746,10 +784,10 @@ export function Chats() {
         // The chat may never have been opened, so there is no message cache from which to prove
         // whether this was its latest row. Refresh summaries instead of guessing and overwriting the
         // sidebar with the body of an older edited message.
-        void loadChats(selectedSessionId, { background: true });
+        void reloadChatsInBackground(selectedSessionId);
       }
     },
-    [selectedSessionId, queryClient, loadChats],
+    [selectedSessionId, queryClient, reloadChatsInBackground],
   );
 
   // A contact's new story lands here instead of in the message pipeline; invalidate the statuses
@@ -810,18 +848,27 @@ export function Chats() {
       // The open chat's gap messages are read on screen, so once the refetch has applied this session's
       // list and the chat is still open, mark it read and zero its row, since the snapshot still counts
       // them (the same rule a live frame and opening a chat follow). An applied list also means the engine
-      // answers again: after a backend restart it may still be starting, and a read sent then fails. A
-      // newer list for this session that overtook the refetch counts as applied. A refetch that failed
-      // with no newer list applied, or a session switch, sends nothing; a chat the user left keeps its
+      // answers again: after a backend restart it may still be starting, and a read sent then fails. When
+      // another reload is already out, this call is answered by the trailing one, which starts after the
+      // gap. A refetch that failed, or a session switch, sends nothing; a chat the user left keeps its
       // count.
       const readChatId = canWrite ? activeChatId : undefined;
-      void loadChats(selectedSessionId, { background: true }).then(applied => {
+      void reloadChatsInBackground(selectedSessionId).then(applied => {
         if (!applied || !readChatId || activeChatIdRef.current !== readChatId) return;
         markChatRead(readChatId);
         setChats(prev => prev.map(c => (c.id === readChatId ? { ...c, unreadCount: 0 } : c)));
       });
     }
-  }, [isConnected, connectionFailed, selectedSessionId, queryClient, loadChats, activeChatId, canWrite, markChatRead]);
+  }, [
+    isConnected,
+    connectionFailed,
+    selectedSessionId,
+    queryClient,
+    reloadChatsInBackground,
+    activeChatId,
+    canWrite,
+    markChatRead,
+  ]);
 
   // The threads cache at staleTime: Infinity, and this session's events were not delivered while
   // another session was selected or the page was away. Mark them stale on a mount or a session switch

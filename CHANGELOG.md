@@ -9,18 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
+- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation, in every dashboard language.
 - Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
-- Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list, where Unread includes chats marked unread and Unknown lists 1:1 chats whose contact is not saved.
-- Add a New chat panel to the dashboard Chats page for operator keys that opens a chat with a saved contact or a typed international number once the gateway confirms the number is on WhatsApp, and on Baileys creates a group from a name and picked contacts or numbers.
-- Add a menu to every dashboard chat row and to the open chat's header that pins, mutes, archives, marks unread, clears or deletes a chat (on whatsapp-web.js only for now, see #1891), saves, renames or blocks its contact, and leaves a group, asking first before an action that cannot be undone; the header's menu also copies the chat id and closes the chat.
-- Add an Archived view to the dashboard chat list; archived chats leave the main list, and pinned chats lead it.
-- Add a group info dialog to the dashboard Chats page that edits a group's name, picture and description and adds, removes, promotes and demotes its participants when the account administers the group.
+- Record plugin install, update, uninstall, enable, disable and configuration changes in the audit log.
+- Add `QUEUE_PREFIX` to set the Redis key prefix of the BullMQ queues, so deployments that share a Redis stop taking each other's webhook jobs.
+- `QUEUE_PREFIX` does not separate the rate-limit store or the WebSocket fan-out.
+- Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list. Thanks @rjsebening.
+- Add a New chat panel to the dashboard Chats page that opens a chat with a saved contact or a number WhatsApp confirms, and on Baileys creates a group. Thanks @rjsebening.
+- Add chat and contact menus to the dashboard Chats page: pin, mute, archive, mark unread, save, rename and block a contact, leave a group, and clear or delete a chat on whatsapp-web.js only until #1891 is fixed. Thanks @rjsebening.
+- Add an Archived view to the dashboard chat list. Thanks @rjsebening.
+- Add a group info dialog to the dashboard Chats page that edits a group and manages its participants. Thanks @rjsebening.
 
 ### Changed
 
 - Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility (#1870).
 - Reject empty PHP SDK `defaultHeaders` lists before sending requests; use `''` for an empty header value (#1870).
+- Convert legacy message types in a one-time migration instead of on every boot, which read the whole messages table before the HTTP port opened.
+- Open the HTTP port after at most 60 s of plugin restore; plugins still restoring finish in the background.
+- Apply the hooks of a plugin still restoring only once it is up, and answer 409 to changes to it until then.
+- Track a plugin's storage use as a running total instead of rescanning every stored key on each write.
+- Request only the profile pictures the dashboard chat list does not hold yet, and keep the current ones on screen while the rest load.
+- Remove the unused `STORAGE_LIST_MAX_FILES` setting; a leftover value is ignored instead of validated at boot.
+- Remove the `INFO` permission from the bundled Docker socket proxy; nothing used it, and `GET /info` through the proxy is now refused.
+- Drop the `archiver` dependency; the storage export writes its tar.gz with `tar-stream` and `zlib`.
+- Remove a stored plugin secret when a config write sends `null` for it; an empty string still keeps it.
+- Send `null` for a cleared secret field in the plugin config form of the dashboard, which removes the stored secret.
+- Reuse the participant list of a Baileys group for up to 5 minutes (`BAILEYS_GROUP_METADATA_CACHE_TTL_MS`, `0` queries for every send) instead of querying it for every group message.
 
 ### Fixed
 
@@ -36,6 +50,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse media exports and file counts when local directories cannot be fully enumerated.
 - Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885).
 - Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).
+- Answer 400 for a template or bulk message whose rendered text would pass `TEMPLATE_RENDER_MAX_CHARS`, instead of exhausting memory.
+- Refuse a bulk media item that would render past the media size limit.
+- Refuse Socket.IO connections to the root namespace, which stayed connected outside the handshake and per-key socket limits; only `/events` accepts clients.
+- Bound a silent Redis connection in the rate-limit store with a socket timeout, so only the first request waits out a timeout.
+- Store the label of a clicked button as the message body; it was returned to the caller but not saved.
+- Leave opt-in events such as `message.receipt` out of the failure redrive batch of a webhook that only subscribes to `*`, where they stayed at the head of every batch.
+- Delete a session's messages, webhook outbox events and webhook delivery failures in batches, with a new index on outbox events by session, so removing a session with a large history does not hold the database in one statement.
+- Answer 503 instead of 500 when WhatsApp answers a Baileys send or status post with a throttle (429) or timeout (408) code, and free the idempotency key of a throttled send.
+- Match a built-in search chat or sender filter against every stored form of the id (`@c.us`, `@s.whatsapp.net`, lid), and a group message's author for the sender.
+- Probe a whatsapp-web.js session that awaits operator action, so the watchdog tells a live page from a dead one.
+- Answer 409 instead of 500 for a whatsapp-web.js send or status post that races a session teardown.
+- Reload the dashboard chat list at most once at a time per session when live events arrive in a burst.
+- Keep storage export entry names identical to the stored keys; a backslash, a doubled slash or a leading `name:` segment used to rewrite them.
+- Leave S3 folder placeholders (keys ending in `/`) out of the storage export.
+- Keep the chat media and status media orphan sweeps from overlapping when a pass outlasts its interval.
+- Answer 400 naming `url` for a media conversion `url` that is not an absolute http(s) address, instead of the blocked-address message.
+- Stop an automation rule edit from undoing an overlapping edit or bringing back a rule deleted meanwhile.
+- Make one direct attempt per further stranded webhook outbox row once its receiver has failed in the same sweep, so an unreachable receiver does not hold the sweep for a full retry schedule per row.
+- Keep a session start that worked when the database fails a read after the engine came up, which made the retry answer "already started".
+- Answer a session delete normally when handing back its claim fails after the delete committed.
+- Clear a logged-out session's phone before the status write, so a failed write cannot leave it in the boot auto-start query.
+- Fail the unfinished bulk batches of a session whose delete fails after it began closing the session, instead of leaving them processing.
+- Log a failed wipe of the stored messages and chat states when a Baileys session is unlinked.
+- Answer the number check with the phone id (`<phone>@c.us`) on whatsapp-web.js for a contact migrated to LID addressing, as Baileys does.
+- Read a list of lid allowlist entries from the database in one query instead of one per unseen entry first.
+- Keep a plugin hook handler that outlives the hook timeout inside the re-entrancy guard, so its late sends no longer re-fire the event and dispatch the handler again.
+- Complete a data import on PostgreSQL when clearing a large messages table outlasts the statement timeout.
+- Create the built-in PostgreSQL container with the saved `DATABASE_PASSWORD`, so a custom password saved with the built-in database no longer fails the next boot.
+- Serialize a plugin upload with an uninstall or update of the same plugin id.
+- Show hours for a session active within the last day on the Sessions page, as the Dashboard does.
 
 ## [0.25.0] - 2026-10-15
 

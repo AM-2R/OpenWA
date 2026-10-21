@@ -8,7 +8,7 @@ import { useProfilePicture } from '../../hooks/useProfilePicture';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import { formatPhoneForDisplay } from '../../utils/formatPhone';
-import { MEDIA_UPLOAD_MAX_BYTES } from './ChatComposer';
+import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import ChatAvatar from './ChatAvatar';
 
 // The gateway's caps (CreateGroupDto / GroupDescriptionDto).

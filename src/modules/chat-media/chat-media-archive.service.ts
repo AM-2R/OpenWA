@@ -6,6 +6,8 @@ import { randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
+import { startGuardedInterval } from '../../common/utils/guarded-interval';
+import { extFromMimetype } from '../../common/media/mime-ext';
 import { createLogger } from '../../common/services/logger.service';
 
 /** Storage key prefix owned by the chat-media archive; the media bucket is shared with statuses. */
@@ -27,16 +29,6 @@ const PURGE_BATCH_SIZE = 500;
 const PURGE_MAX_BATCHES_PER_RUN = 200;
 /** Archive keys reconciled per orphan-sweep query — bounds peak memory independently of store size. */
 const SWEEP_CHUNK_SIZE = 500;
-
-/** Subtypes whose registered mimetype name differs from the conventional file extension. */
-const MIME_SUBTYPE_EXT_OVERRIDES: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov' };
-
-/** File extension to store a blob under, derived from its mimetype; 'bin' when unrecognized. */
-function extFromMimetype(mimetype: string): string {
-  const subtype = mimetype.split('/')[1]?.split(';')[0]?.trim().toLowerCase();
-  if (!subtype || !/^[a-z0-9]+$/.test(subtype)) return 'bin';
-  return MIME_SUBTYPE_EXT_OVERRIDES[subtype] ?? subtype;
-}
 
 /** `metadata.media.data` holding a remote URL (a URL-based send) rather than base64 bytes. */
 const MEDIA_URL_POINTER = /^https?:\/\//i;
@@ -70,14 +62,12 @@ interface InlineMedia {
 @Injectable()
 export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('ChatMediaArchiveService');
-  private purgeTimer?: ReturnType<typeof setInterval>;
-  private orphanSweepTimer?: ReturnType<typeof setInterval>;
+  /** Stops the retention purge and the orphan sweep; set while the service is running. */
+  private stopMaintenance: Array<() => void> = [];
   /** First sweep sighting (epoch ms) of each unreferenced archive file, for the grace window. */
   private readonly orphanFirstSeenAt = new Map<string, number>();
   /** Last row id the retention purge walked past; the next run resumes after it. */
   private purgeCursor?: string;
-  /** A purge is still running, so the next tick is skipped rather than stacked on top of it. */
-  private purging = false;
 
   constructor(
     @InjectRepository(Message, 'data')
@@ -96,34 +86,27 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
-    const runPurge = (): void => {
-      if (this.purging) return;
-      this.purging = true;
-      this.purgeExpired(Date.now())
-        .catch(err => this.logger.error('Chat media purge failed', err instanceof Error ? err.stack : String(err)))
-        .finally(() => (this.purging = false));
-    };
-    runPurge(); // sweep once at startup
-    this.purgeTimer = setInterval(runPurge, PURGE_INTERVAL_MS);
-    this.purgeTimer.unref?.();
-
-    const runOrphanSweep = (): void => {
-      this.sweepOrphanedMedia(Date.now()).catch(err =>
-        this.logger.error('Chat media orphan sweep failed', err instanceof Error ? err.stack : String(err)),
-      );
-    };
-    runOrphanSweep(); // the first pass only records first-seen; nothing is deleted before the grace window
+    const failed = (what: string) => (err: unknown) =>
+      this.logger.error(`${what} failed`, err instanceof Error ? err.stack : String(err));
     const sweepIntervalMs = this.configService.get<number>(
       'chatMedia.orphanSweepIntervalMs',
       DEFAULT_ORPHAN_SWEEP_INTERVAL_MS,
     );
-    this.orphanSweepTimer = setInterval(runOrphanSweep, sweepIntervalMs);
-    this.orphanSweepTimer.unref?.();
+    this.stopMaintenance = [
+      // Once at startup, then on a timer; a pass that outlasts its interval is not stacked on.
+      startGuardedInterval(() => this.purgeExpired(Date.now()), PURGE_INTERVAL_MS, failed('Chat media purge')),
+      // The first pass only records first-seen; nothing is deleted before the grace window.
+      startGuardedInterval(
+        () => this.sweepOrphanedMedia(Date.now()),
+        sweepIntervalMs,
+        failed('Chat media orphan sweep'),
+      ),
+    ];
   }
 
   onModuleDestroy(): void {
-    if (this.purgeTimer) clearInterval(this.purgeTimer);
-    if (this.orphanSweepTimer) clearInterval(this.orphanSweepTimer);
+    for (const stop of this.stopMaintenance) stop();
+    this.stopMaintenance = [];
   }
 
   /**

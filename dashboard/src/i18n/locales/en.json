@@ -993,6 +993,119 @@
       "cancelling": "Cancelling..."
     }
   },
+  "numberChecker": {
+    "subtitle": "Verify if phone numbers have active WhatsApp accounts silently without sending messages",
+    "zeroMessages": "Zero Messages Sent",
+    "noSession": {
+      "title": "No active WhatsApp session connected.",
+      "desc": "To check phone numbers, OpenWA requires at least one authenticated session.",
+      "goToSessions": "Go to Sessions"
+    },
+    "tabs": {
+      "single": "Single Check",
+      "bulk": "Bulk Number Checker"
+    },
+    "session": {
+      "label": "WhatsApp Session",
+      "none": "No ready sessions available",
+      "hint": "Queries are routed through this connected WhatsApp account."
+    },
+    "single": {
+      "title": "Check Single Account",
+      "phoneLabel": "Phone Number",
+      "phonePlaceholder": "e.g. 919876543210 or 6281234567890 (with country code)",
+      "check": "Check",
+      "checking": "Checking...",
+      "autoPrefix": "Auto-prefix <strong>+91</strong> for 10-digit numbers (keep 12-digit numbers as-is)",
+      "silent": "<strong>Completely Silent:</strong> This query queries WhatsApp's registration registry directly. The contact receives no notification, sound, or message.",
+      "resultTitle": "Verification Result",
+      "querying": "Querying WhatsApp servers...",
+      "empty": "Enter a phone number and click \"Check\" to see its WhatsApp status."
+    },
+    "preview": {
+      "prefixed": "Will check as: <strong>+{{number}}</strong> (10 digits → auto-prefixed with 91)",
+      "kept": "Will check as: <strong>+{{number}}</strong> (12 digits → kept as-is)",
+      "digits": "Will check as: <strong>+{{number}}</strong> ({{digits}} digits)"
+    },
+    "prefixHint": {
+      "single": "Adds +91 to 10-digit numbers and to 11 digits with a leading 0. Numbers with + or 00 stay as typed.",
+      "bulk": "Adds +91 to 10-digit numbers (e.g. 96...) and to 11 digits with a leading 0. Numbers with + or 00 stay as typed.",
+      "off": "Numbers are checked as typed, digits only, so include the country code."
+    },
+    "result": {
+      "registered": "Registered on WhatsApp",
+      "notRegistered": "Not Registered",
+      "avatarAlt": "Avatar",
+      "status": "Status",
+      "active": "Active Account",
+      "none": "No Account Found",
+      "jid": "WhatsApp JID",
+      "copyJid": "Copy JID",
+      "copy": "Copy",
+      "copied": "Copied",
+      "checkedAt": "Checked At",
+      "openTester": "Open in Message Tester"
+    },
+    "recent": {
+      "title": "Recent Checks",
+      "clear": "Clear History"
+    },
+    "table": {
+      "phone": "Phone Number",
+      "status": "WhatsApp Status",
+      "id": "WhatsApp ID",
+      "time": "Time"
+    },
+    "status": {
+      "registered": "Registered",
+      "unregistered": "Unregistered",
+      "notRegistered": "Not Registered",
+      "failed": "Failed"
+    },
+    "bulk": {
+      "title": "Bulk Number Checker",
+      "delayLabel": "Safe Pacing Delay (ms)",
+      "delay1": "1000 ms / 1 sec (Recommended)",
+      "delay2": "2000 ms / 2 sec (Extra Safe)",
+      "delay3": "3000 ms / 3 sec (High Volume Safe)",
+      "delayHint": "Waits between lookups to stay under the gateway's request limit (100 a minute by default). The run stops if the gateway refuses further lookups.",
+      "countryRule": "Country Code Rule",
+      "autoPrefix": "Auto-prefix <strong>+91</strong> (India) for 10-digit numbers",
+      "numbersLabel": "Numbers to Check (One per line or comma-separated)",
+      "numbersHint": "Paste phone numbers with the country code, one per line or comma-separated. Up to {{max}} numbers per run.",
+      "parsed": "<strong>{{count}}</strong> unique number parsed",
+      "parsed_other": "<strong>{{count}}</strong> unique numbers parsed",
+      "tenDigitAdded": "({{ten}} ten-digit → +91 added)",
+      "tenDigitAddedPreserved": "({{ten}} ten-digit → +91 added, {{twelve}} twelve-digit preserved)",
+      "tooMany": "Too many numbers: {{parsed}} parsed, at most {{max}} per run. Remove {{excess}} to start.",
+      "start": "Start Batch Check",
+      "stop": "Stop Checking",
+      "export": "Export Results (CSV)",
+      "stoppedTitle": "Batch stopped",
+      "checked": "Checked",
+      "remaining": "Remaining",
+      "all": "All"
+    },
+    "stopped": {
+      "reason409": "The session is not connected",
+      "reason429": "The gateway rate limit was reached",
+      "reason503": "WhatsApp did not answer a lookup",
+      "reasonOther": "The gateway refused a lookup",
+      "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
+      "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",
+      "last": "{{reason}} (HTTP {{status}}). The last lookup failed. Try again later."
+    },
+    "toast": {
+      "enterNumber": "Please enter a phone number to check.",
+      "noSession": "No ready WhatsApp session available.",
+      "checkFailed": "Check failed",
+      "unknownError": "Unknown lookup error",
+      "lookupFailed": "Lookup failed",
+      "enterNumbers": "Please enter valid phone numbers (one per line or comma-separated).",
+      "completed": "Completed checking {{count}} number.",
+      "completed_other": "Completed checking {{count}} numbers."
+    }
+  },
   "infrastructure": {
     "title": "Infrastructure",
     "subtitle": "Configure server, database, cache, storage, and engine settings",

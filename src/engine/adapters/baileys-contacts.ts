@@ -2,7 +2,7 @@ import type { WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys'
 import { ChatSummary, Contact, MediaInput } from '../interfaces/whatsapp-engine.interface';
 import { assertReadableImage, resolveMediaBuffer } from './baileys-messaging';
 import { type createLogger } from '../../common/services/logger.service';
-import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
@@ -61,7 +61,7 @@ export class BaileysContacts {
 
   /** Bound a write whose confirmation the library discards; see baileys-query-deadline.ts. */
   private confirmed<T>(work: Promise<T>, operation: string): Promise<T> {
-    return withQueryDeadline(work, this.queryBudgetMs, `WhatsApp did not confirm ${operation} in time`);
+    return confirmedWrite(work, this.queryBudgetMs, operation);
   }
 
   /** Post-ensureReady socket handle. */

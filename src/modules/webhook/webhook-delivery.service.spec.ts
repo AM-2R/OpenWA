@@ -1760,6 +1760,39 @@ describe('WebhookDeliveryService', () => {
       expect(undiciFetch as unknown as jest.Mock).toHaveBeenCalledTimes(2);
     });
 
+    it('still enqueues a reconciler replay when the queue is enabled', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 4 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+
+      await expect(
+        queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {}, { oneDirectAttempt: true }),
+      ).resolves.toBe('enqueued');
+
+      expect(webhookQueue.add).toHaveBeenCalledTimes(1);
+      expect(undiciFetch as unknown as jest.Mock).not.toHaveBeenCalled();
+    });
+
+    it('limits the direct fallback of a reconciler replay to one attempt when the enqueue fails', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) => {
+        if (key === 'queue.enabled') return true;
+        if (key === 'webhook.retryDelay') return 1;
+        return def;
+      });
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 4 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      (webhookQueue.add as jest.Mock).mockRejectedValueOnce(new Error('Redis unreachable'));
+      (undiciFetch as unknown as jest.Mock).mockRejectedValue(new Error('receiver down'));
+
+      await expect(
+        queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {}, { oneDirectAttempt: true }),
+      ).resolves.toBe('failed');
+
+      expect(undiciFetch as unknown as jest.Mock).toHaveBeenCalledTimes(1);
+    });
+
     it('keys the queue job by the delivery id, so a retried enqueue cannot double-deliver', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) => {
         if (key === 'queue.enabled') return true;
@@ -2253,6 +2286,20 @@ describe('WebhookDeliveryService', () => {
 
       await expect(
         service.redeliver(webhook, 'sess-1', 'message.received', 'k', {}, { singleAttempt: true }),
+      ).resolves.toBe('failed');
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(insertedFailures).toEqual([expect.objectContaining({ attempts: 1, idempotencyKey: 'k' })]);
+    });
+
+    it('makes one direct attempt per reconciler replay (oneDirectAttempt), with no backoff', async () => {
+      const webhook = createMockWebhook({ retryCount: 4 });
+      mockFetch.mockRejectedValue(new Error('receiver down'));
+      (sleep as unknown as jest.Mock).mockClear();
+
+      await expect(
+        service.redeliver(webhook, 'sess-1', 'message.received', 'k', {}, { oneDirectAttempt: true }),
       ).resolves.toBe('failed');
 
       expect(mockFetch).toHaveBeenCalledTimes(1);

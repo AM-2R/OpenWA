@@ -32,6 +32,17 @@ export function wsRedisOptions(): RedisOptions {
 }
 
 /**
+ * Socket.IO always creates the root namespace `/` and accepts a CONNECT to it with no middleware, while
+ * everything this gateway enforces (the handshake limit, the per-key socket cap, the audit rows) lives on
+ * `/events`. The 45 s connect timeout only closes a peer that joined no namespace at all, so a peer that
+ * joins `/` and answers pings would stay connected for ever, outside every limit. Refusing `/` leaves such a
+ * peer unjoined, and the timeout reaps it. No client of this gateway uses the root namespace.
+ */
+export function rejectRootNamespace(server: Server): void {
+  server.of('/').use((_socket, next) => next(new Error('Invalid namespace')));
+}
+
+/**
  * A Socket.IO server whose broadcasts reach clients connected to OTHER replicas, via the Redis
  * pub/sub adapter.
  *
@@ -60,6 +71,7 @@ export class RedisIoAdapter extends IoAdapter {
 
   createIOServer(port: number, options?: ServerOptions): Server {
     const server = super.createIOServer(port, options) as Server;
+    rejectRootNamespace(server);
     if (!isWsRedisEnabled()) return server;
 
     try {

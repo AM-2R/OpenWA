@@ -66,6 +66,8 @@ export class PluginStorageService {
   private readonly dataDir: string;
   private readonly registryPath: string;
   private readonly maxPluginStorageBytes: number;
+  /** Bytes in each plugin's encoded key files, once a write or delete has seeded it. See assertStorageQuota. */
+  private readonly storageUsage = new Map<string, number>();
   private registry: Map<string, PluginRegistryEntry> = new Map();
 
   constructor(private readonly configService: ConfigService) {
@@ -256,6 +258,7 @@ export class PluginStorageService {
     }
     try {
       fs.rmSync(dir, { recursive: true, force: true });
+      this.storageUsage.delete(pluginId);
       this.logger.debug(`Deleted plugin storage: ${pluginId}`, { pluginId, action: 'plugin_storage_deleted' });
     } catch (error) {
       this.logger.warn(`Failed to delete plugin storage for ${pluginId}`, {
@@ -273,17 +276,29 @@ export class PluginStorageService {
    * package files must not eat its quota. The file being overwritten is excluded from the current
    * usage so replacing a large key does not count its bytes twice.
    */
-  private assertStorageQuota(pluginDataDir: string, targetPath: string, incomingBytes: number, pluginId: string): void {
-    let used = 0;
-    for (const entry of fs.readdirSync(pluginDataDir)) {
-      if (!entry.startsWith(ENCODED_KEY_PREFIX) || !entry.endsWith('.json')) continue;
-      const full = path.join(pluginDataDir, entry);
-      if (full === targetPath) continue;
-      try {
-        used += fs.statSync(full).size;
-      } catch {
-        /* vanished between readdir and stat; ignore */
-      }
+  private assertStorageQuota(
+    pluginDataDir: string,
+    targetPath: string,
+    incomingBytes: number,
+    pluginId: string,
+  ): number {
+    let replaced = 0;
+    try {
+      replaced = fs.statSync(targetPath).size;
+    } catch {
+      /* a new key */
+    }
+    // The running total is seeded by one scan and kept in step by set/delete, so a write costs one stat
+    // instead of a read of the whole directory: that read ran synchronously on the host's main thread for
+    // every write and grew with the number of keys the plugin had stored (about 50 ms per write at 20,000).
+    let total = this.storageUsage.get(pluginId) ?? this.scanStorageBytes(pluginDataDir);
+    let used = Math.max(0, total - replaced);
+    if (used + incomingBytes > this.maxPluginStorageBytes) {
+      // Files removed behind the service's back leave the total too high; confirm against the directory
+      // before refusing the write.
+      total = this.scanStorageBytes(pluginDataDir);
+      used = Math.max(0, total - replaced);
+      this.storageUsage.set(pluginId, total);
     }
     if (used + incomingBytes > this.maxPluginStorageBytes) {
       throw new Error(
@@ -292,6 +307,27 @@ export class PluginStorageService {
         } bytes (max ${this.maxPluginStorageBytes}). Delete unused keys or raise PLUGIN_STORAGE_MAX_BYTES.`,
       );
     }
+    return used;
+  }
+
+  /** Bytes held by the plugin's encoded key files, read from the directory. */
+  private scanStorageBytes(pluginDataDir: string): number {
+    let total = 0;
+    for (const entry of fs.readdirSync(pluginDataDir)) {
+      if (!entry.startsWith(ENCODED_KEY_PREFIX) || !entry.endsWith('.json')) continue;
+      try {
+        total += fs.statSync(path.join(pluginDataDir, entry)).size;
+      } catch {
+        /* vanished between readdir and stat; ignore */
+      }
+    }
+    return total;
+  }
+
+  /** Take a removed key's bytes out of the running total, if one has been seeded. */
+  private releaseStorageBytes(pluginId: string, bytes: number): void {
+    const total = this.storageUsage.get(pluginId);
+    if (total !== undefined) this.storageUsage.set(pluginId, Math.max(0, total - bytes));
   }
 
   createPluginStorage(pluginId: string): PluginStorage {
@@ -354,12 +390,14 @@ export class PluginStorageService {
         }
         try {
           const payload = JSON.stringify(value, null, 2);
-          this.assertStorageQuota(pluginDataDir, filePath, Buffer.byteLength(payload, 'utf8'), pluginId);
+          const bytes = Buffer.byteLength(payload, 'utf8');
+          const usedByOtherKeys = this.assertStorageQuota(pluginDataDir, filePath, bytes, pluginId);
           // 0o600 (owner-only): a plugin-persisted secret must not land in a group/other-readable file.
           // The mode on the temp write carries through the rename; chmod is a backstop if the target
           // pre-existed (writeFileSync mode only applies on create). Mirrors saveRegistry's hardening.
           atomicWriteFileSync(filePath, payload, { mode: 0o600 });
           fs.chmodSync(filePath, 0o600);
+          this.storageUsage.set(pluginId, usedByOtherKeys + bytes);
           // Keep any legacy file in place. Encoded-first reads and de-duplicated lists ensure it cannot
           // shadow this write, while avoiding an unlink outside the service-owned key-* namespace.
           return Promise.resolve();
@@ -379,7 +417,10 @@ export class PluginStorageService {
           const candidates = legacyPath && legacyPath !== filePath ? [filePath, legacyPath] : [filePath];
           for (const candidate of candidates) {
             if (fs.existsSync(candidate)) {
+              // Only the encoded file counts toward the quota; a legacy file is never in the total.
+              const bytes = candidate === filePath ? fs.statSync(candidate).size : 0;
               fs.unlinkSync(candidate);
+              this.releaseStorageBytes(pluginId, bytes);
             }
           }
           return Promise.resolve();

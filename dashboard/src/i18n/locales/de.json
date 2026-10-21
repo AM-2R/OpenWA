@@ -993,6 +993,119 @@
       "cancelling": "Wird abgebrochen..."
     }
   },
+  "numberChecker": {
+    "subtitle": "Unbemerkt prüfen, ob Telefonnummern ein aktives WhatsApp-Konto haben, ohne Nachrichten zu senden",
+    "zeroMessages": "Keine Nachrichten gesendet",
+    "noSession": {
+      "title": "Keine aktive WhatsApp-Sitzung verbunden.",
+      "desc": "Zum Prüfen von Telefonnummern benötigt OpenWA mindestens eine authentifizierte Sitzung.",
+      "goToSessions": "Zu den Sitzungen"
+    },
+    "tabs": {
+      "single": "Einzelprüfung",
+      "bulk": "Massenprüfung"
+    },
+    "session": {
+      "label": "WhatsApp-Sitzung",
+      "none": "Keine einsatzbereite Sitzung verfügbar",
+      "hint": "Abfragen laufen über dieses verbundene WhatsApp-Konto."
+    },
+    "single": {
+      "title": "Einzelnes Konto prüfen",
+      "phoneLabel": "Telefonnummer",
+      "phonePlaceholder": "z. B. 919876543210 oder 6281234567890 (mit Ländervorwahl)",
+      "check": "Prüfen",
+      "checking": "Wird geprüft...",
+      "autoPrefix": "<strong>+91</strong> bei 10-stelligen Nummern automatisch voranstellen (12-stellige Nummern bleiben unverändert)",
+      "silent": "<strong>Völlig unbemerkt:</strong> Diese Abfrage geht direkt an das Registrierungsverzeichnis von WhatsApp. Der Kontakt erhält keine Benachrichtigung, keinen Ton und keine Nachricht.",
+      "resultTitle": "Prüfergebnis",
+      "querying": "WhatsApp-Server werden abgefragt...",
+      "empty": "Gib eine Telefonnummer ein und klicke auf „Prüfen“, um den WhatsApp-Status zu sehen."
+    },
+    "preview": {
+      "prefixed": "Zu prüfende Nummer: <strong>+{{number}}</strong> (10 Ziffern → 91 automatisch vorangestellt)",
+      "kept": "Zu prüfende Nummer: <strong>+{{number}}</strong> (12 Ziffern → unverändert)",
+      "digits": "Zu prüfende Nummer: <strong>+{{number}}</strong> ({{digits}} Ziffern)"
+    },
+    "prefixHint": {
+      "single": "Stellt +91 vor 10-stellige Nummern und vor 11-stellige Nummern mit führender 0. Nummern mit + oder 00 bleiben wie eingegeben.",
+      "bulk": "Stellt +91 vor 10-stellige Nummern (z. B. 96...) und vor 11-stellige Nummern mit führender 0. Nummern mit + oder 00 bleiben wie eingegeben.",
+      "off": "Nummern werden wie eingegeben geprüft (nur Ziffern). Gib daher die Ländervorwahl mit an."
+    },
+    "result": {
+      "registered": "Bei WhatsApp registriert",
+      "notRegistered": "Nicht registriert",
+      "avatarAlt": "Avatar",
+      "status": "Status",
+      "active": "Aktives Konto",
+      "none": "Kein Konto gefunden",
+      "jid": "WhatsApp-JID",
+      "copyJid": "JID kopieren",
+      "copy": "Kopieren",
+      "copied": "Kopiert",
+      "checkedAt": "Geprüft um",
+      "openTester": "Im Nachrichtentester öffnen"
+    },
+    "recent": {
+      "title": "Letzte Prüfungen",
+      "clear": "Verlauf löschen"
+    },
+    "table": {
+      "phone": "Telefonnummer",
+      "status": "WhatsApp-Status",
+      "id": "WhatsApp-ID",
+      "time": "Uhrzeit"
+    },
+    "status": {
+      "registered": "Registriert",
+      "unregistered": "Nicht registriert",
+      "notRegistered": "Nicht registriert",
+      "failed": "Fehlgeschlagen"
+    },
+    "bulk": {
+      "title": "Massenprüfung von Nummern",
+      "delayLabel": "Sichere Verzögerung zwischen Abfragen (ms)",
+      "delay1": "1000 ms / 1 Sek. (empfohlen)",
+      "delay2": "2000 ms / 2 Sek. (extra sicher)",
+      "delay3": "3000 ms / 3 Sek. (sicher für große Mengen)",
+      "delayHint": "Wartet zwischen den Abfragen, um unter dem Anfragelimit des Gateways zu bleiben (standardmäßig 100 pro Minute). Die Prüfung stoppt, sobald das Gateway weitere Abfragen ablehnt.",
+      "countryRule": "Regel für die Ländervorwahl",
+      "autoPrefix": "<strong>+91</strong> (Indien) bei 10-stelligen Nummern automatisch voranstellen",
+      "numbersLabel": "Zu prüfende Nummern (eine pro Zeile oder durch Kommas getrennt)",
+      "numbersHint": "Füge Telefonnummern mit Ländervorwahl ein, eine pro Zeile oder durch Kommas getrennt. Bis zu {{max}} Nummern pro Durchlauf.",
+      "parsed": "<strong>{{count}}</strong> eindeutige Nummer erkannt",
+      "parsed_other": "<strong>{{count}}</strong> eindeutige Nummern erkannt",
+      "tenDigitAdded": "({{ten}} zehnstellige → +91 ergänzt)",
+      "tenDigitAddedPreserved": "({{ten}} zehnstellige → +91 ergänzt, {{twelve}} zwölfstellige unverändert)",
+      "tooMany": "Zu viele Nummern: {{parsed}} erkannt, höchstens {{max}} pro Durchlauf. Entferne {{excess}} davon, um zu starten.",
+      "start": "Batch-Prüfung starten",
+      "stop": "Prüfung stoppen",
+      "export": "Ergebnisse exportieren (CSV)",
+      "stoppedTitle": "Batch gestoppt",
+      "checked": "Geprüft",
+      "remaining": "Verbleibend",
+      "all": "Alle"
+    },
+    "stopped": {
+      "reason409": "Die Sitzung ist nicht verbunden",
+      "reason429": "Das Anfragelimit des Gateways wurde erreicht",
+      "reason503": "WhatsApp hat eine Abfrage nicht beantwortet",
+      "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
+      "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
+      "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",
+      "last": "{{reason}} (HTTP {{status}}). Die letzte Abfrage ist fehlgeschlagen. Versuche es später erneut."
+    },
+    "toast": {
+      "enterNumber": "Bitte gib eine Telefonnummer zum Prüfen ein.",
+      "noSession": "Keine einsatzbereite WhatsApp-Sitzung verfügbar.",
+      "checkFailed": "Prüfung fehlgeschlagen",
+      "unknownError": "Unbekannter Fehler bei der Abfrage",
+      "lookupFailed": "Abfrage fehlgeschlagen",
+      "enterNumbers": "Bitte gib gültige Telefonnummern ein (eine pro Zeile oder durch Kommas getrennt).",
+      "completed": "Prüfung von {{count}} Nummer abgeschlossen.",
+      "completed_other": "Prüfung von {{count}} Nummern abgeschlossen."
+    }
+  },
   "infrastructure": {
     "title": "Infrastruktur",
     "subtitle": "Server-, Datenbank-, Cache-, Speicher- und Engine-Einstellungen konfigurieren",

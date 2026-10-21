@@ -122,12 +122,21 @@ export class AutomationRulesService {
 
   async update(sessionId: string, id: string, dto: UpdateAutomationRuleDto): Promise<AutomationRule> {
     const rule = await this.findOne(sessionId, id);
-    if (dto.name !== undefined) rule.name = dto.name;
-    if (dto.replyText !== undefined) rule.replyText = dto.replyText;
-    if (dto.conditions !== undefined) rule.conditions = dto.conditions;
-    if (dto.cooldownSeconds !== undefined) rule.cooldownSeconds = dto.cooldownSeconds;
-    if (dto.enabled !== undefined) rule.enabled = dto.enabled;
-    return this.ruleRepository.save(rule);
+    const patch: Partial<Pick<AutomationRule, 'name' | 'replyText' | 'conditions' | 'cooldownSeconds' | 'enabled'>> =
+      {};
+    if (dto.name !== undefined) patch.name = dto.name;
+    if (dto.replyText !== undefined) patch.replyText = dto.replyText;
+    if (dto.conditions !== undefined) patch.conditions = dto.conditions;
+    if (dto.cooldownSeconds !== undefined) patch.cooldownSeconds = dto.cooldownSeconds;
+    if (dto.enabled !== undefined) patch.enabled = dto.enabled;
+    if (Object.keys(patch).length === 0) return rule;
+
+    // A conditional UPDATE of the carried fields, not save() of the entity read above: save() would
+    // write back stale values of every column this request did not touch (switching a rule off could
+    // be undone by an overlapping edit) and re-insert a rule a concurrent DELETE removed.
+    const result = await this.ruleRepository.update({ id, sessionId }, patch);
+    if (!result.affected) throw new NotFoundException(`Automation rule ${id} not found`);
+    return this.findOne(sessionId, id);
   }
 
   async remove(sessionId: string, id: string): Promise<void> {

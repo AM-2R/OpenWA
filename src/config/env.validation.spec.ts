@@ -641,6 +641,17 @@ describe('validateEnv', () => {
     },
   );
 
+  // The prefix is joined to the queue name with a colon in every Redis key.
+  it('accepts a plain QUEUE_PREFIX, or none, and rejects one that would build ambiguous keys', () => {
+    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', '', '  ']) {
+      expect(() => validateEnv({ QUEUE_PREFIX: ok })).not.toThrow();
+    }
+    for (const bad of ['a:b', 'has space', '-lead', '.lead', 'a/b', 'x'.repeat(65)]) {
+      expect(() => validateEnv({ QUEUE_PREFIX: bad })).toThrow(/QUEUE_PREFIX must be 1 to 64/);
+    }
+    expect(() => validateEnv({ QUEUE_PREFIX: 'x'.repeat(64) })).not.toThrow();
+  });
+
   // Read as an exact 'true'/'false' override; anything else falls back to the NODE_ENV default, so
   // CSP_UPGRADE_INSECURE_REQUESTS=False kept the blank-dashboard trap on in production.
   it.each([
@@ -687,7 +698,6 @@ describe('validateEnv', () => {
     ['STORAGE_IMPORT_MAX_BYTES', '200mb'],
     ['STORAGE_IMPORT_MAX_ENTRIES', '1e5'],
     ['STORAGE_IMPORT_MAX_TOTAL_BYTES', '10gb'],
-    ['STORAGE_LIST_MAX_FILES', '100k'],
     ['BAILEYS_MESSAGE_STORE_LIMIT', '5k'],
   ])('rejects a unit-suffixed or zero %s', (key, bad) => {
     expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a positive integer`));

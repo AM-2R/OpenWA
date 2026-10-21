@@ -26,9 +26,17 @@ export interface SearchQuery {
   chatIds?: string[];
   sessionId?: string;
   chatId?: string;
+  /**
+   * Host-set: every stored form of `chatId` (both user dialects and the lids mapped to the phone), so the
+   * built-in filter finds the chat the message list does. Not part of the plugin provider contract: it is
+   * stripped before a plugin sees the query.
+   */
+  chatIdAliases?: string[];
   direction?: MessageDirection;
   type?: MessageType | MessageType[];
   from?: string;
+  /** Host-set, like `chatIdAliases`: every stored form of `from`, matched against the sender and the author. */
+  fromAliases?: string[];
   dateFrom?: number; // epoch ms
   dateTo?: number; // epoch ms
   limit?: number;

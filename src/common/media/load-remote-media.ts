@@ -3,6 +3,7 @@ import { EngineNotSentError } from '../errors/engine-not-sent.error';
 import { SsrfBlockedError, withSafeFetch } from '../security/ssrf-guard';
 import { urlFetchProxy } from '../security/proxy-dispatcher';
 import { createLogger } from '../services/logger.service';
+import { positiveIntFromEnv } from '../utils/env-int';
 
 const logger = createLogger('RemoteMedia');
 
@@ -10,16 +11,6 @@ const logger = createLogger('RemoteMedia');
 const DEFAULT_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 /** Default timeout for a server-side media download: 30s (overridable via MEDIA_DOWNLOAD_TIMEOUT_MS). */
 const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
-
-/**
- * Read a positive-integer knob. Boot validation rejects a malformed value for every key read here,
- * so the fallback covers unset and empty only: `parseInt` accepts the leading digits of a
- * unit-suffixed value and would silently take `50mb` as 50.
- */
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
 
 /**
  * Fetch remote media as a Buffer for sending, with an SSRF host guard, a byte cap, and a timeout.

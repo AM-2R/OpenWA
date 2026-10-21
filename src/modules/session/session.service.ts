@@ -607,7 +607,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (this.ownership) await this.assertNotHeldElsewhere(id);
       // A failed row read deleted nothing: the lifecycle drops the mark, and the count goes with it.
       await this.engineLifecycle.delete(id, { onReadFailed: () => this.uncountStopRequest(id) });
-      await this.ownership?.release(id);
+      await this.releaseClaimBestEffort(id);
       this.stopRequests.delete(id);
     } catch (error) {
       this.discardStopMarkForMissingSession(id, error);
@@ -975,9 +975,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
     this.releaseOwed.delete(id);
-    // Best-effort: the outcome of the start or the teardown that asks is already decided, and a claim that
-    // cannot be handed back lapses with its lease, which a peer then adopts. A failure here must not
-    // replace that outcome (a started session reported as failed, a stopped one as an error).
+    await this.releaseClaimBestEffort(id);
+  }
+
+  /**
+   * Best-effort: the outcome of the start or the teardown that asks is already decided, and a claim that
+   * cannot be handed back lapses with its lease, which a peer then adopts. A failure here must not
+   * replace that outcome (a started session reported as failed, a stopped one as an error, a committed
+   * delete as a 500 whose retry answers 404 and writes no audit row).
+   */
+  private async releaseClaimBestEffort(id: string): Promise<void> {
+    if (!this.ownership) return;
     try {
       await this.ownership.release(id);
     } catch (error) {

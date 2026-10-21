@@ -18,6 +18,7 @@ import { ShutdownService } from './common/services/shutdown.service';
 import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
+import { parseTrustedProxies } from './common/utils/ip';
 
 /** Where the bundled dashboard documents come from, and whether to serve them at all. */
 export interface DashboardSource {
@@ -259,10 +260,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
   const keyIndex = optional(ActiveKeyIndex);
   app.use(
     createInflightBodyBudget(inflightBudgetBytes, {
-      trustedProxies: (process.env.TRUSTED_PROXIES || '')
-        .split(',')
-        .map(p => p.trim())
-        .filter(Boolean),
+      trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXIES),
       classify: (req, clientIp) => keyIndex?.recognise(req.headers, clientIp),
       bodyLimitBytes: parseBodyLimitBytes(bodyLimit),
       requestTimeoutMs: resolveRequestTimeoutMs(process.env.REQUEST_TIMEOUT_MS),

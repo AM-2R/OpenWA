@@ -4,11 +4,6 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
-// `archiver` v8 ships ESM-only, which ts-jest can't parse transitively. These tests never touch the
-// export path (archiver's only consumer), so a lightweight stub suffices — same approach as the
-// other storage specs. Must run before importing StorageService.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 // Mock the AWS SDK so no real network call is made. Each test drives `mockSend`: HeadBucket probes
 // (boot + re-probe) and GetObject reads are distinguished by the mocked command constructors.
 const mockSend = jest.fn();
@@ -92,13 +87,17 @@ describe('StorageService S3 re-probe and recovery', () => {
     return jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
   }
 
+  function s3AvailableOf(svc: StorageService): boolean {
+    return (svc as unknown as { s3Available: boolean }).s3Available;
+  }
+
   it('falls back to local with a WARN when S3 is down at boot', async () => {
     mockSend.mockRejectedValue(s3Error('NetworkingError'));
     const svc = new StorageService(makeConfig());
     const warn = warnSpyOf(svc);
     await flush();
 
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
     expect(svc.getCurrentStorageType()).toBe('s3');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('degraded'));
   });
@@ -114,7 +113,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     expect(warn).toHaveBeenCalledTimes(2);
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
     expect(warn).toHaveBeenCalledTimes(3);
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
   });
 
   it('recovers to S3 via the periodic probe (no dashboard poll) and stops probing afterwards', async () => {
@@ -122,12 +121,12 @@ describe('StorageService S3 re-probe and recovery', () => {
     const svc = new StorageService(makeConfig());
     const warn = warnSpyOf(svc);
     await flush();
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
 
     mockSend.mockResolvedValue({}); // S3 is back
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
 
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('recovered'));
 
     // Timer stops after recovery: no further probes, and availability never flips back on its own.
@@ -135,7 +134,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     mockSend.mockRejectedValue(s3Error('NetworkingError'));
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS * 5);
     expect(mockSend).not.toHaveBeenCalled();
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
   });
 
   it('creates the bucket on re-probe when the store was down at boot and came back empty', async () => {
@@ -143,7 +142,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     const svc = new StorageService(makeConfig());
     warnSpyOf(svc);
     await flush();
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
 
     // The store is up now, but on a fresh volume: HeadBucket answers NotFound, CreateBucket succeeds.
     mockSend.mockImplementation((cmd: unknown) =>
@@ -152,7 +151,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
 
     expect(mockSend.mock.calls.some(([cmd]) => cmd instanceof CreateBucketCommand)).toBe(true);
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
   });
 
   it('treats losing a concurrent CreateBucket race (BucketAlreadyOwnedByYou) as the bucket being ready', async () => {
@@ -167,7 +166,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     );
 
     await expect(svc.refreshS3Availability()).resolves.toBe(true);
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
   });
 
   it('stays on the local fallback when the bucket name is owned by another account', async () => {
@@ -181,7 +180,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     );
 
     await expect(svc.refreshS3Availability()).resolves.toBe(false);
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
   });
 
   it('stays on the local fallback when the re-probe cannot create the missing bucket, and says why', async () => {
@@ -196,7 +195,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     );
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS);
 
-    expect(svc.isS3Available()).toBe(false);
+    expect(s3AvailableOf(svc)).toBe(false);
     // The store answered: the periodic warning names the refused create, not the boot-time outage.
     expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('AccessDenied'));
   });
@@ -205,14 +204,14 @@ describe('StorageService S3 re-probe and recovery', () => {
     mockSend.mockResolvedValue({}); // boot probe succeeds
     const svc = new StorageService(makeConfig());
     await flush();
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
 
     mockSend.mockClear();
     mockSend.mockRejectedValue(s3Error('NetworkingError'));
     await jest.advanceTimersByTimeAsync(DEFAULT_S3_REPROBE_INTERVAL_MS * 3);
 
     expect(mockSend).not.toHaveBeenCalled(); // no re-probe of a healthy backend
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
   });
 
   it('honors S3_REPROBE_INTERVAL_MS for the periodic probe', async () => {
@@ -248,7 +247,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     });
     const svc = new StorageService(makeConfig());
     await flush();
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
 
     // Simulate gap media: written to the local fallback dir while S3 was down, never uploaded.
     fs.mkdirSync(path.join(localPath, 'sub'), { recursive: true });
@@ -342,7 +341,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     mockSend.mockResolvedValue({}); // HeadBucket at boot, DeleteObject later
     const svc = new StorageService(makeConfig());
     await flush();
-    expect(svc.isS3Available()).toBe(true);
+    expect(s3AvailableOf(svc)).toBe(true);
 
     // Gap media: written to the local fallback dir while S3 was down, never uploaded. Without the
     // delete-through, deleting the (missing) S3 key would leave these bytes orphaned forever.
@@ -426,7 +425,7 @@ describe('StorageService S3 re-probe and recovery', () => {
       warnSpyOf(svc);
       await flush();
       await jest.advanceTimersByTimeAsync(S3_PROBE_TIMEOUT_MS); // the boot probe gives up too
-      expect(svc.isS3Available()).toBe(false);
+      expect(s3AvailableOf(svc)).toBe(false);
 
       await expect(settleWithin(svc.refreshS3Availability())).resolves.toBe(false);
 
@@ -440,7 +439,7 @@ describe('StorageService S3 re-probe and recovery', () => {
     }
   });
 
-  it('listFiles unions S3 objects with the local fallback dir (each key once)', async () => {
+  it('iterateFiles unions S3 objects with the local fallback dir (each key once)', async () => {
     mockSend.mockImplementation((cmd: unknown) => {
       if (cmd instanceof ListObjectsV2Command) {
         return Promise.resolve({ Contents: [{ Key: 'media/s3-only.bin' }, { Key: 'media/shared.bin' }] });
@@ -453,7 +452,8 @@ describe('StorageService S3 re-probe and recovery', () => {
     fs.writeFileSync(path.join(localPath, 'local-only.bin'), 'x');
     fs.writeFileSync(path.join(localPath, 'shared.bin'), 'stale-local-copy');
 
-    const files = await svc.listFiles();
+    const files: string[] = [];
+    for await (const file of svc.iterateFiles()) files.push(file);
     expect(files.sort()).toEqual(['local-only.bin', 's3-only.bin', 'shared.bin']);
   });
 

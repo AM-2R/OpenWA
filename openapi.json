@@ -91,6 +91,13 @@
                 "integration_instance_secret_regenerated",
                 "integration_instance_deleted",
                 "integration_instance_redriven",
+                "plugin_installed",
+                "plugin_updated",
+                "plugin_uninstalled",
+                "plugin_enabled",
+                "plugin_disabled",
+                "plugin_config_updated",
+                "plugin_sessions_updated",
                 "infra_config_saved",
                 "infra_restart_requested",
                 "infra_data_exported",
@@ -15286,7 +15293,7 @@
             }
           },
           "400": {
-            "description": "Neither url nor base64 given, the url answers non-2xx, times out or cannot be reached, or ffmpeg refused the input.",
+            "description": "Neither url nor base64 given, the url is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15378,7 +15385,7 @@
             }
           },
           "400": {
-            "description": "Neither url nor base64 given, the url answers non-2xx, times out or cannot be reached, or ffmpeg refused the input.",
+            "description": "Neither url nor base64 given, the url is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16051,7 +16058,7 @@
             }
           },
           "409": {
-            "description": "Plugin already installed",
+            "description": "Plugin already installed, or the plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {
@@ -16244,6 +16251,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Uninstall a plugin (removes its files; built-ins are protected)",
@@ -16305,6 +16322,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Enable a plugin",
@@ -16359,6 +16386,16 @@
           },
           "404": {
             "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {
@@ -16752,6 +16789,16 @@
           },
           "404": {
             "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The plugin is still being restored after startup; retry shortly",
             "content": {
               "application/json": {
                 "schema": {
@@ -17836,7 +17883,7 @@
             "name": "chatId",
             "required": false,
             "in": "query",
-            "description": "Restrict to a single chat id",
+            "description": "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
             "schema": {
               "type": "string"
             }
@@ -17845,7 +17892,7 @@
             "name": "from",
             "required": false,
             "in": "query",
-            "description": "Sender filter",
+            "description": "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
             "schema": {
               "type": "string"
             }

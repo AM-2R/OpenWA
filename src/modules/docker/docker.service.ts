@@ -67,7 +67,7 @@ export class DockerService implements OnModuleInit {
    * dockerode's runtime takes an options object with `abortSignal` on every call, which its typings
    * declare only for some of them.
    */
-  private abortable<T>(method: 'ping' | 'info', abortSignal: AbortSignal): Promise<T> {
+  private abortable<T>(method: 'ping', abortSignal: AbortSignal): Promise<T> {
     const call = this.docker![method].bind(this.docker) as unknown as (options: {
       abortSignal: AbortSignal;
     }) => Promise<T>;
@@ -275,8 +275,8 @@ export class DockerService implements OnModuleInit {
    *  - Credentials: the compose services are the MANUAL operator path and deliberately ship no
    *    default secret (an empty POSTGRES_PASSWORD fails when the volume is first initialized; a
    *    MINIO_ROOT_PASSWORD left on its sub-minimum placeholder fails at every start). The specs below
-   *    are the dashboard built-in path: they provision the fixed built-in credentials
-   *    (openwa/openwa, minioadmin/minioadmin) that infra-config.controller writes to data/.env.generated
+   *    are the dashboard built-in path: they provision the built-in credentials, by default
+   *    (openwa/openwa, minioadmin/minioadmin), that infra-config.controller writes to data/.env.generated
    *    and that the production boot guard (bootstrap-security.ts) exempts only while the
    *    *_BUILTIN flag is set AND the datastore host resolves to the internal-only container.
    *  - Postgres init script: compose bind-mounts scripts/postgres-init-schema.sh from the host
@@ -333,10 +333,17 @@ export class DockerService implements OnModuleInit {
         image: 'postgres:16-alpine',
         name: 'openwa-postgres',
         alias: 'postgres',
-        // Fixed built-in credentials — the dashboard saves these same values to
-        // data/.env.generated (infra-config.controller) and the production boot guard exempts them only
-        // for the built-in, internal-host deployment (see the getContainerSpec docblock).
-        env: ['POSTGRES_USER=openwa', 'POSTGRES_PASSWORD=openwa', 'POSTGRES_DB=openwa'],
+        // The built-in credentials — the dashboard saves them to data/.env.generated
+        // (infra-config.controller) and the production boot guard exempts the default pair only for the
+        // built-in, internal-host deployment (see the getContainerSpec docblock). The password is the
+        // one the next boot dials with, like the MinIO keys below: a custom one saved with the built-in
+        // database would otherwise never match the role this container initializes, and the app would
+        // exit on its first connection.
+        env: [
+          'POSTGRES_USER=openwa',
+          `POSTGRES_PASSWORD=${nextBoot('DATABASE_PASSWORD') || 'openwa'}`,
+          'POSTGRES_DB=openwa',
+        ],
         volumes: [{ name: 'openwa_postgres-data', path: '/var/lib/postgresql/data' }],
         healthcheck: {
           test: ['CMD-SHELL', 'pg_isready -U openwa'],
@@ -664,47 +671,6 @@ export class DockerService implements OnModuleInit {
     }
 
     return result;
-  }
-
-  /**
-   * Get Docker system info
-   */
-  async getSystemInfo(): Promise<{ available: boolean; info?: Record<string, unknown> }> {
-    if (!this.docker || !this.isAvailable) {
-      return { available: false };
-    }
-
-    try {
-      const info = (await this.answered(
-        abortSignal => this.abortable<unknown>('info', abortSignal),
-        'the daemon info',
-      )) as {
-        Containers: number;
-        ContainersRunning: number;
-        ContainersPaused: number;
-        ContainersStopped: number;
-        Images: number;
-        ServerVersion: string;
-        OperatingSystem: string;
-        Architecture: string;
-      };
-      return {
-        available: true,
-        info: {
-          containers: info.Containers,
-          containersRunning: info.ContainersRunning,
-          containersPaused: info.ContainersPaused,
-          containersStopped: info.ContainersStopped,
-          images: info.Images,
-          serverVersion: info.ServerVersion,
-          operatingSystem: info.OperatingSystem,
-          architecture: info.Architecture,
-        },
-      };
-    } catch (error) {
-      this.logger.error('Failed to get Docker info', error);
-      return { available: false };
-    }
   }
 }
 

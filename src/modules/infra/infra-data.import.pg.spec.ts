@@ -24,10 +24,6 @@ import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.ent
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { postgresUtcExtra } from '../../database/postgres-utc';
 
-// StorageService (imported transitively by the infra controllers) pulls in `archiver`, which is
-// ESM-only and cannot be parsed by ts-jest; the import never touches it.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 /**
  * The replace-all import trims send_idempotency_keys with a statement that compares the claim's
  * varchar sessionId with sessions.id, a uuid on PostgreSQL. The comparison only holds because the
@@ -135,5 +131,45 @@ describePostgres('InfraDataController.importData (postgres)', () => {
     expect(result).toMatchObject({ imported: true });
     expect(result.warnings).toEqual([]);
     expect((await claims.find()).map(claim => claim.sessionId)).toEqual([kept]);
+  });
+
+  // The runtime pool cancels a statement that outlives statement_timeout (30 s by default), and the
+  // clears of a replace-all import scale with the live tables, not with the archive. A slow trigger on
+  // messages stands in for a table that has grown large: with the pool's timeout lowered below it, the
+  // import only completes when it lifts the timeout for its own transaction.
+  it('completes a restore whose clears outlast the runtime statement timeout', async () => {
+    const dump = await controller.exportData();
+    const strict = await new DataSource({
+      type: 'postgres',
+      host: process.env.DATABASE_HOST || 'localhost',
+      port: Number(process.env.DATABASE_PORT || 5432),
+      username: process.env.DATABASE_USERNAME || 'openwa',
+      password: process.env.DATABASE_PASSWORD || 'openwa',
+      database: process.env.DATABASE_NAME || 'openwa',
+      schema,
+      extra: { ...postgresUtcExtra(), options: `-c search_path=${schema},public`, statement_timeout: 250 },
+      entities: ds.options.entities,
+      synchronize: false,
+    }).initialize();
+    const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'postgres' : def) };
+    const strictController = new InfraDataController(
+      new InfraDataService(cfg as never, strict, undefined, undefined, undefined),
+    );
+    await admin.query(
+      `CREATE FUNCTION "${schema}".slow_messages_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.6); RETURN NULL; END $$`,
+    );
+    await admin.query(
+      `CREATE TRIGGER slow_messages_delete BEFORE DELETE ON "${schema}".messages FOR EACH STATEMENT EXECUTE FUNCTION "${schema}".slow_messages_delete()`,
+    );
+    try {
+      // Guard the guard: the lowered timeout does cancel the slow clear outside the import's transaction.
+      await expect(strict.query('DELETE FROM messages')).rejects.toThrow(/statement timeout/);
+
+      await expect(strictController.importData(dump as never)).resolves.toMatchObject({ imported: true });
+    } finally {
+      await admin.query(`DROP TRIGGER IF EXISTS slow_messages_delete ON "${schema}".messages`);
+      await admin.query(`DROP FUNCTION IF EXISTS "${schema}".slow_messages_delete()`);
+      await strict.destroy();
+    }
   });
 });

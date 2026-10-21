@@ -203,7 +203,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   async phonesForLidsPersisted(lids: string[]): Promise<Record<string, string | null>> {
     const out: Record<string, string | null> = {};
     if (lids.length === 0) return out;
-    for (const lid of lids) out[lid] = this.getCached(lid) ?? null;
+    // The mirror is only the fallback for a failed or empty table read, so it is read without getCached:
+    // that warms every miss with a findOne of its own, one per lid ahead of the batched query below.
+    for (const lid of lids) out[lid] = this.lidToPhone.get(lid) ?? null;
     try {
       for (const batch of chunk(lids)) {
         const rows = await this.repo.find({ where: { lid: In(batch) } });

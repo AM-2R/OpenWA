@@ -10,6 +10,7 @@ import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker } from 
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { computeSendPacingConfig, type SendPacingConfig } from './send-pacing.config';
 import { getSendPacingRefusals, resetSendPacingRefusals } from '../../common/metrics/send-pacing-metrics';
@@ -629,6 +630,7 @@ describe('countsTowardSendBreaker', () => {
 
   it.each([
     ['a WhatsApp refusal (403 EngineRefusedError)', new EngineRefusedError('not allowed to send here')],
+    ['a WhatsApp rate limit (503 EngineThrottledError)', new EngineThrottledError('WhatsApp rate-limited the send')],
     ['a raw engine error', new Error('ack error 500')],
     ['a server-side fault', new InternalServerErrorException('boom')],
     [
