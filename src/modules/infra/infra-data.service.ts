@@ -738,20 +738,26 @@ export class InfraDataService {
       // deleted every row — including any the enclosing transaction just wrote. Refusing up front is
       // the only answer that is both honest and non-destructive. On Postgres each runner gets its own
       // pooled client, so this is always false there and the check costs nothing.
-      if (queryRunner.isTransactionActive) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'Conflict',
-          message:
-            'Another database transaction is in progress on this connection, so a restore could not be ' +
-            'made durable. Retry with no other data operation in flight.',
-          code: 'IMPORT_NESTED_TRANSACTION',
-        });
+      //
+      // The try/finally that releases the runner opens only after BEGIN, so the refusal and a failing
+      // BEGIN give the runner back here: a pooled PostgreSQL client would otherwise stay checked out for
+      // the life of the process.
+      try {
+        if (queryRunner.isTransactionActive) {
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            message:
+              'Another database transaction is in progress on this connection, so a restore could not be ' +
+              'made durable. Retry with no other data operation in flight.',
+            code: 'IMPORT_NESTED_TRANSACTION',
+          });
+        }
+        await queryRunner.startTransaction();
+      } catch (error) {
+        await queryRunner.release().catch(() => undefined);
+        throw error;
       }
-
-      // startTransaction is inside the runner's own try/finally, so a throw from it still releases
-      // the runner instead of stranding it for the life of the process.
-      await queryRunner.startTransaction();
 
       try {
         const isPostgres = this.dataDataSource.options.type === 'postgres';

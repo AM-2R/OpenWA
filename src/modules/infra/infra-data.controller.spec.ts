@@ -498,6 +498,62 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     expect(held).toBe(0);
   });
 
+  describe('gives the query runner back when the transaction never opens', () => {
+    const watchRunners = (prepare: (runner: ReturnType<DataSource['createQueryRunner']>) => void) => {
+      const releases: jest.SpyInstance[] = [];
+      const realCreate = ds.createQueryRunner.bind(ds);
+      jest.spyOn(ds, 'createQueryRunner').mockImplementation((...args: Parameters<typeof realCreate>) => {
+        const runner = realCreate(...args);
+        prepare(runner);
+        releases.push(jest.spyOn(runner, 'release'));
+        return runner;
+      });
+      return releases;
+    };
+
+    it('when BEGIN fails', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      const releases = watchRunners(runner => {
+        runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toThrow('BEGIN failed');
+
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toHaveBeenCalledTimes(1);
+      jest.restoreAllMocks();
+    });
+
+    it('when another transaction already holds the connection', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      const releases = watchRunners(runner => {
+        Object.defineProperty(runner, 'isTransactionActive', { value: true });
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toMatchObject({
+        response: { code: 'IMPORT_NESTED_TRANSACTION' },
+      });
+
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toHaveBeenCalledTimes(1);
+      jest.restoreAllMocks();
+    });
+
+    it('and still reports the failure of BEGIN when giving the runner back fails too', async () => {
+      await seedSession('s1');
+      const dump = await controller.exportData();
+      watchRunners(runner => {
+        runner.startTransaction = () => Promise.reject(new Error('BEGIN failed'));
+        runner.release = () => Promise.reject(new Error('release failed'));
+      });
+
+      await expect(controller.importData({ tables: dump.tables })).rejects.toThrow('BEGIN failed');
+      jest.restoreAllMocks();
+    });
+  });
+
   it('does not suspend loss detection on a dialect where each query runner has its own connection', async () => {
     await seedSession('s1');
     const dump = await controller.exportData();
