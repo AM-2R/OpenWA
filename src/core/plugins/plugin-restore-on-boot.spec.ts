@@ -298,12 +298,14 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       expect(loader2.isRestorePending(manifest.id)).toBe(true);
       expect(loader2.isRestorePending(second.id)).toBe(true);
       expect(loader2.isRestorePending('never-queued')).toBe(false);
+      expect(loader2.restorePendingIds().sort()).toEqual([manifest.id, second.id].sort());
 
       releaseFirst();
       await jest.advanceTimersByTimeAsync(0);
 
       expect(loader2.isRestorePending(manifest.id)).toBe(false);
       expect(loader2.isRestorePending(second.id)).toBe(false);
+      expect(loader2.restorePendingIds()).toEqual([]);
     });
 
     // The restore ending clears every id, so only a plugin that finished while a later one is still being

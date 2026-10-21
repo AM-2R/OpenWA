@@ -319,6 +319,11 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.restorePending.has(id);
   }
 
+  /** The ids {@link isRestorePending} answers true for, for a caller that has to leave them out of a query. */
+  restorePendingIds(): string[] {
+    return [...this.restorePending];
+  }
+
   private async restorePlugins(): Promise<void> {
     const restorable = this.getAllPlugins().filter(
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
