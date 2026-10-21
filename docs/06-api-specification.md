@@ -6548,7 +6548,7 @@ Search messages across sessions (active search provider).
       "chatId": "6281234567890@c.us",
       "body": "full original message body...",
       "snippet": "...order <mark>confirmed</mark> for tomorrow…",
-      "timestamp": 1751904000000,
+      "timestamp": 1751904000,
       "type": "text",
       "direction": "incoming",
       "from": "6281234567890@c.us",
@@ -6564,6 +6564,8 @@ Search messages across sessions (active search provider).
 - `snippet` is a text excerpt with `<mark>`/`</mark>` highlight markers around the matched term (both
   dialects emit the same markers). The body text inside it is not HTML-escaped: split on the literal
   markers and render each segment as text, never the raw snippet as HTML.
+- `timestamp` is Unix **seconds**, as in the message routes, while the `dateFrom`/`dateTo` bounds are
+  epoch **milliseconds**.
 - `total` is an exact count for pagination, computed lazily only when the returned page could be full.
 - `provider` names which backend answered (e.g. `builtin-fts`); it is the registered `SearchProvider`
   id, so it changes when a plugin backend is selected via `SEARCH_PROVIDER`.
