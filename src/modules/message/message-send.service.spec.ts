@@ -639,19 +639,20 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
-    it('answers a 400 from the measured length, without building a render of hundreds of megabytes', async () => {
-      // 341 + 1365 + 341 placeholders fit in a header, body and footer at their size limits. One 393 KB value
-      // would build ~800 MB (a RangeError at the join, or an out-of-memory abort in a small container).
+    it('answers a 400 from the measured length, without building a render too large for a string', async () => {
+      // 341 + 1365 + 341 placeholders fit in a header, body and footer at their size limits. One 1 MB value makes
+      // the body alone 1.4 billion characters, more than a string can hold: building any part of it would throw
+      // a RangeError (a 500) instead of answering 400.
       (templateService.resolve as jest.Mock).mockResolvedValue(
         mockTemplate({ header: '{a}'.repeat(341), body: '{a}'.repeat(1365), footer: '{a}'.repeat(341) }),
       );
 
       const error = await service
-        .sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { a: 'x'.repeat(393_000) } })
+        .sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { a: 'x'.repeat(1_000_000) } })
         .catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(BadRequestException);
-      expect((error as Error).message).toContain(`Rendered template is ${2047 * 393_000 + 4} characters`);
+      expect((error as Error).message).toContain(`Rendered template is ${2047 * 1_000_000 + 4} characters`);
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
