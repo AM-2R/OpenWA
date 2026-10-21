@@ -2154,6 +2154,34 @@
   margin-inline: 1.25rem;
 }
 
+/* The clear button at the end of a search field: a small icon button whose block margin keeps it inside the
+   height of the line, so the field does not grow when it appears. */
+.chats-page .search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-block: -0.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chats-page .search-clear:hover {
+  background: var(--border);
+  color: var(--text-primary);
+}
+
+.chats-page .search-clear:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .chats-page .new-chat-hint {
   margin-block: 0.375rem 0;
   margin-inline: 1.25rem;
