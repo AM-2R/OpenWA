@@ -7001,19 +7001,19 @@ response only; the `verifyToken` is also shown (unchanged).
 
 #### GET /api/ingress/:pluginId/:instanceId/:path
 
-**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` the route's plugin is still being restored after startup, or a route declaring a `session-alive` preflight whose bound session has no running engine, or its engine has failed
+**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` a route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session without a running engine or with a failed one
 
 #### POST /api/ingress/:pluginId/:instanceId/:path
 
-**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` the route's plugin is still being restored after startup, or a route declaring a `session-alive` preflight whose bound session has no running engine, or its engine has failed
+**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` a route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session without a running engine or with a failed one
 
 #### PUT /api/ingress/:pluginId/:instanceId/:path
 
-**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` the route's plugin is still being restored after startup, or a route declaring a `session-alive` preflight whose bound session has no running engine, or its engine has failed
+**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` a route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session without a running engine or with a failed one
 
 #### PATCH /api/ingress/:pluginId/:instanceId/:path
 
-**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` the route's plugin is still being restored after startup, or a route declaring a `session-alive` preflight whose bound session has no running engine, or its engine has failed
+**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong per-instance secret) · `413` payload too large · `415` body in a content type no parser reads · `429` rate limit exceeded · `503` a route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session without a running engine or with a failed one
 
 #### DELETE /api/ingress/:pluginId/:instanceId/:path
 
@@ -7036,11 +7036,14 @@ declarative `ack` config (doc 25); the plugin itself always runs async. A re-del
 already-persisted event is answered with the route's ack, with the same status and headers as the
 first delivery, and is not enqueued again. The ack is rendered from the retry, so `{timestamp}` in
 an ack body is the retry's time and `{rawBody}` is the retry's body. A retry still passes the checks
-that run before dedup: while the route's plugin is still being restored after startup, or a
-`session-alive` route's bound session has no running engine, or its engine has failed, it gets the
-`503`, with a `Retry-After` header.
+that run before dedup: on a route that declares a response contract it gets the `503`, with a
+`Retry-After` header, while the route's plugin is still being restored after startup, or while a
+`session-alive` route's bound session has no running engine or its engine has failed. A route without a
+response contract is accepted while its plugin restores: the delivery is stored and dispatched once the
+plugin is up (a queued job waits without spending a retry attempt; with the queue off the reconciler
+dispatches the stored row).
 
-**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong secret) · `403` `GET` verification challenge failed on a route that declares `challenge` (`verifyToken` mismatch) · `404` unknown pluginId/instanceId, or no such claimed route · `413` body over the route's `maxBodyBytes` · `415` a body in a content type no parser reads (only `application/json` and `application/x-www-form-urlencoded` are read) · `429` rate limit: the per-instance bucket (`INGRESS_INSTANCE_LIMIT`, counted only for deliveries that pass signature verification) or the per-client-IP bucket (`INGRESS_IP_LIMIT`), both per `INGRESS_INSTANCE_TTL`; the global per-IP tiers skip this route, so these two are its bounds, and `Retry-After-instance` / `Retry-After-ingress-ip` names the one that shed the request, alongside a plain `Retry-After` carrying the same delay · `503` the route's plugin is still being restored after startup, or a route declaring a `session-alive` preflight whose bound session has no running engine, or its engine has failed (a session that is starting, reconnecting, waiting for a QR scan, or disconnected but still loaded is answered with the route's ack and queued): the delivery is not persisted, so the provider's retry is treated as a new delivery, and `Retry-After` carries the delay
+**Errors:** `400` an encoded NUL (`%00`) in the path or query, or a JSON body that does not parse · `401` signature verification failed (missing, stale, or wrong secret) · `403` `GET` verification challenge failed on a route that declares `challenge` (`verifyToken` mismatch) · `404` unknown pluginId/instanceId, or no such claimed route · `413` body over the route's `maxBodyBytes` · `415` a body in a content type no parser reads (only `application/json` and `application/x-www-form-urlencoded` are read) · `429` rate limit: the per-instance bucket (`INGRESS_INSTANCE_LIMIT`, counted only for deliveries that pass signature verification) or the per-client-IP bucket (`INGRESS_IP_LIMIT`), both per `INGRESS_INSTANCE_TTL`; the global per-IP tiers skip this route, so these two are its bounds, and `Retry-After-instance` / `Retry-After-ingress-ip` names the one that shed the request, alongside a plain `Retry-After` carrying the same delay · `503` a route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session without a running engine or with a failed one (a session that is starting, reconnecting, waiting for a QR scan, or disconnected but still loaded is answered with the route's ack and queued): the delivery is not persisted, so the provider's retry is treated as a new delivery, and `Retry-After` carries the delay
 
 ## 6.5 Real-time API (WebSocket)
 
