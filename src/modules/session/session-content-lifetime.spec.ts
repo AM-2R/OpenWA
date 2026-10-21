@@ -408,10 +408,13 @@ describe('Session content lifetime', () => {
     expect(await outbox.countBy({ sessionId: kept.id })).toBe(3);
     expect(await failures.countBy({ sessionId: kept.id })).toBe(3);
     expect(await db.getRepository(Session).findOneBy({ id: doomed.id })).toBeNull();
-    // Three statements per table instead of one that holds the table for every row at once.
-    expect(deleteMessages.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(deleteOutbox.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(deleteFailures.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // Three statements per table instead of one that holds the table for every row at once, each by
+    // primary key alone: a sessionId condition beside the id list makes the database walk the session's
+    // remaining rows on every batch.
+    for (const spy of [deleteMessages, deleteOutbox, deleteFailures]) {
+      expect(spy).toHaveBeenCalledTimes(3);
+      for (const [criteria] of spy.mock.calls) expect(Object.keys(criteria as object)).toEqual(['id']);
+    }
   }, 60000);
 
   // The write scopes a delete closes stay retired when it fails: a batch running for the session stops at
