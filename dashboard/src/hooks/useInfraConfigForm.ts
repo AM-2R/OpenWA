@@ -240,9 +240,13 @@ export function useInfraConfigForm(
   const buildSavePayload = (): SaveConfigPayload => ({
     // A bundled container never receives a typed password (the field is hidden once built-in is on,
     // but a value typed before the toggle survives in state). '' means "unchanged" on the backend.
-    database: builtInToSave('database', dbConfig.builtIn)
-      ? { ...dbConfig, builtIn: true, password: '' }
-      : { ...dbConfig, builtIn: false },
+    // An emptied pool size is NaN, which JSON writes as null and the backend refuses: leave it out.
+    database: {
+      ...dbConfig,
+      builtIn: builtInToSave('database', dbConfig.builtIn),
+      password: builtInToSave('database', dbConfig.builtIn) ? '' : dbConfig.password,
+      poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
+    },
     // `connected` is runtime-only status, not persisted configuration. Keep it out of the
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {

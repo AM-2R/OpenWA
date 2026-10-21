@@ -343,8 +343,16 @@ export function Infrastructure() {
                         type="number"
                         min="1"
                         max="50"
-                        value={configForm.dbConfig.poolSize}
-                        onChange={e => configForm.updateDbConfig('poolSize', parseInt(e.target.value))}
+                        value={Number.isNaN(configForm.dbConfig.poolSize) ? '' : configForm.dbConfig.poolSize}
+                        onChange={e => {
+                          // An emptied field stays NaN and is left out of the save; a typed size is kept
+                          // inside the range the field offers.
+                          const size = parseInt(e.target.value);
+                          configForm.updateDbConfig(
+                            'poolSize',
+                            Number.isNaN(size) ? size : Math.min(50, Math.max(1, size)),
+                          );
+                        }}
                       />
                     </div>
                   </div>

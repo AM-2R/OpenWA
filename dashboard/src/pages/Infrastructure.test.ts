@@ -392,6 +392,45 @@ test('editing a database field and saving PUTs the edited value in the request b
   });
 });
 
+// Clearing the number input to type a new size leaves NaN, which JSON writes as null, and the gateway
+// refuses the whole save for it.
+test('a save with the pool size cleared leaves the size out instead of sending null', async () => {
+  const { screen, waitFor, fireEvent } = rtl;
+  resetFetchCalls();
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  const poolSize = fieldInput(container, 'Pool Size');
+  fireEvent.change(poolSize, { target: { value: '' } });
+  assert.equal(poolSize.value, '');
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => {
+    const call = findFetchCall('PUT', '/api/infra/config');
+    assert.ok(call, 'expected a PUT to /infra/config');
+    const database = (call!.body as { database: Record<string, unknown> }).database;
+    assert.ok(!('poolSize' in database), `poolSize went out as ${JSON.stringify(database.poolSize)}`);
+  });
+});
+
+test('a pool size typed outside the 1 to 50 the field offers is kept inside it', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  const poolSize = fieldInput(container, 'Pool Size');
+
+  fireEvent.change(poolSize, { target: { value: '100' } });
+  assert.equal(poolSize.value, '50');
+  fireEvent.change(poolSize, { target: { value: '0' } });
+  assert.equal(poolSize.value, '1');
+  fireEvent.change(poolSize, { target: { value: '25' } });
+  assert.equal(poolSize.value, '25');
+});
+
 test('a password typed before switching to a built-in container is not saved', async () => {
   const { screen, waitFor, fireEvent } = rtl;
   resetFetchCalls();

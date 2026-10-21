@@ -220,3 +220,22 @@ test('a refetch after the form is seeded does not overwrite an edit in progress'
 
   assert.equal(result.current.buildSavePayload().database?.host, 'edited-host');
 });
+
+// parseInt('') is NaN, which JSON writes as null, and the gateway refuses a null pool size.
+test('an emptied pool size is left out of the save instead of going out as null', () => {
+  const { result } = renderForm({ status: RUNNING, saved: SAVED });
+  rtl.act(() => result.current.updateDbConfig('poolSize', NaN));
+
+  const sent = JSON.parse(JSON.stringify(result.current.buildSavePayload())) as { database: Record<string, unknown> };
+
+  assert.ok(!('poolSize' in sent.database), `poolSize went out as ${JSON.stringify(sent.database.poolSize)}`);
+});
+
+// The gateway stores any non-negative integer, so a value outside the field's 1 to 50 hint is what was saved
+// and goes back unchanged on a save of something else.
+test('a stored pool size outside the field range is saved as stored', () => {
+  const stored: SavedConfig = { ...SAVED, database: { ...SAVED.database, poolSize: 100 } };
+  const { result } = renderForm({ status: RUNNING, saved: stored });
+
+  assert.equal(result.current.buildSavePayload().database?.poolSize, 100);
+});
