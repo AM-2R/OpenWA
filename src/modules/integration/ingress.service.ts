@@ -70,9 +70,15 @@ export interface IngressDeps {
   // session-alive check skips (passes) rather than false-rejecting.
   sessionStatus?: (scope: string) => EngineStatus | undefined;
   // Optional host-side probe: whether the boot restore has yet to finish with this plugin. A delivery for
-  // such a plugin is refused with a retryable 503 in the preflight stage, since no worker can take it
-  // yet. O(1) (a Set lookup). Absent in pure unit tests: every plugin counts as restored.
+  // such a plugin on a route that declares a response contract is refused with a retryable 503 in the
+  // preflight stage, since no worker can take it yet. O(1) (a Set lookup). Absent in pure unit tests: every
+  // plugin counts as restored.
   restorePending?: (pluginId: string) => boolean;
+  // Optional host-side probe: whether a delivery that was just persisted must not be dispatched yet. True for a
+  // plugin the boot restore has not reached while dispatch runs inline (queue off), where there is no worker
+  // to run it in; the row then stays 'pending' for the reconciler. Absent in pure unit tests: every delivery
+  // is dispatched.
+  deferDispatch?: (pluginId: string) => boolean;
   // Optional structured sink for preflight rejections, so operators can audit deliveries that were
   // rejected host-side (and therefore leave no dedup/DLQ row). Absent in pure unit tests.
   log?: (event: string, meta: Record<string, unknown>) => void;
@@ -187,10 +193,13 @@ export class IngressService {
     // cannot probe liveness) and BEFORE the dedup persist (so a 5xx-rejected delivery never writes a
     // dedup row that would swallow the provider's retry as a 200 'duplicate' — the dedup trap). A
     // rejection leaves no dedup/DLQ row, so log it for operator audit.
-    // A plugin the boot restore has not reached yet is refused in the same stage: no worker can take its delivery.
-    const preflight = this.deps.restorePending?.(req.pluginId)
-      ? pluginRestoringRejection()
-      : evaluatePreflight(route, instance.sessionScope, this.deps.sessionStatus);
+    // A route that declares a response contract wants its answer now, so a plugin the boot restore has not
+    // reached yet is refused in the same stage. Any other route is accepted and persisted below like every
+    // delivery: the queue holds its job until the plugin is up, or the reconciler dispatches the row.
+    const preflight =
+      route.response && this.deps.restorePending?.(req.pluginId)
+        ? pluginRestoringRejection()
+        : evaluatePreflight(route, instance.sessionScope, this.deps.sessionStatus);
     if (preflight) {
       this.deps.log?.('ingress_preflight_rejected', {
         pluginId: req.pluginId,
@@ -264,6 +273,9 @@ export class IngressService {
       sessionId: instance.sessionScope,
     });
     if (!isNew) return ack; // already persisted/acked; a retry gets the route's ack, not enqueued again
+    // Persisted and acked: dispatching it now would run the plugin inline where there is no worker to run it in.
+    // The row stays 'pending', which is where a crash here would leave it too, and the reconciler dispatches it.
+    if (this.deps.deferDispatch?.(req.pluginId)) return ack;
 
     // Best-effort conversation id for P1 ordering. Never throws — a malformed body just yields undefined.
     const providerConversationId = extractConversationId(route.conversationId, req.headers, req.rawBody);

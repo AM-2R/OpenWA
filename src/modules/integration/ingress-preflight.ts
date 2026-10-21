@@ -24,9 +24,11 @@ const retryable503 = (body: string): PreflightRejection => ({
 });
 
 /**
- * The refusal for a delivery whose plugin the boot restore has not finished with. No worker can take it
- * yet, so an ack would only dead-letter it after the retry budget, and the provider would never send it
- * again. IngressService answers it in the same stage as the preflight, so it leaves no dedup row either.
+ * The refusal for a delivery on a route that declares a response contract, to a plugin the boot restore has
+ * not finished with. The provider wants to know now (an OTP delivered a minute late is useless), and no
+ * worker can take the delivery yet, so it is told to retry. A route without a response contract is not
+ * refused: its delivery is accepted and held until the plugin is up. IngressService answers this in the
+ * same stage as the preflight, so it leaves no dedup row either.
  */
 export const pluginRestoringRejection = (): PreflightRejection => retryable503('plugin restoring');
 

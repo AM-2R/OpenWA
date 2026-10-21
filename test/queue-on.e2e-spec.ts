@@ -267,6 +267,49 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
     expect(dispatchedArgs[0][0].deliveryId).toBe(deliveryId);
   }, 30000);
 
+  it('accepts a delivery for a plugin that is still restoring, holds its job without spending an attempt, then dispatches it', async () => {
+    // The held job comes back after the retry delay, at least a second; a short one keeps the test brief.
+    const prevDelay = process.env.INGRESS_RETRY_DELAY_MS;
+    process.env.INGRESS_RETRY_DELAY_MS = '1000';
+    const deliveryId = `queue-on-held-${Date.now()}`;
+    const restoring = jest.spyOn(app.get(PluginLoaderService), 'isRestorePending').mockReturnValue(true);
+    dispatchWebhookForInstance.mockClear();
+    try {
+      const res = await request(app.getHttpServer())
+        .post(INGRESS_PATH)
+        .set('X-Chatwoot-Signature', sig)
+        .set('X-Chatwoot-Delivery', deliveryId)
+        .set('Content-Type', 'application/json')
+        .send(raw);
+
+      // Accepted and queued like any delivery: no refusal for a route without a response contract.
+      expect(res.status).toBe(202);
+      const jobId = sanitizeIngressJobId(deliveryId, 'chatwoot\u0000acct1');
+      // The worker takes the job, sees the plugin is not up, and puts it back in the delayed set. It does this
+      // again at every delay, and spends no attempt, so the retry budget is intact when the plugin is up.
+      await waitFor(
+        async () =>
+          (await ingressQueue.getJob(jobId))?.attemptsStarted !== 0 &&
+          (await ingressQueue.getJobState(jobId)) === 'delayed',
+      );
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      const held = await ingressQueue.getJob(jobId);
+      expect(held?.attemptsStarted).toBeGreaterThan(1);
+      expect(held?.attemptsMade).toBe(0);
+      expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+
+      restoring.mockRestore();
+      await waitFor(() => dispatchWebhookForInstance.mock.calls.length >= 1, 15000);
+      expect((dispatchWebhookForInstance.mock.calls as IngressJobData[][])[0][0].deliveryId).toBe(deliveryId);
+      await waitFor(async () => (await ingressQueue.getJobState(jobId)) === 'completed');
+      expect((await ingressQueue.getJob(jobId))?.attemptsMade).toBe(1);
+    } finally {
+      restoring.mockRestore();
+      if (prevDelay === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+      else process.env.INGRESS_RETRY_DELAY_MS = prevDelay;
+    }
+  }, 60000);
+
   it('enqueues the webhook delivery and the worker POSTs it to the receiver', async () => {
     const session = await sessionRepo.save(sessionRepo.create({ name: `e2e-queue-on-${Date.now()}` }));
     await request(app.getHttpServer())
