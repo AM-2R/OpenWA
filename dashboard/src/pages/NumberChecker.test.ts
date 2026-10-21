@@ -668,6 +668,23 @@ test('NumberChecker: a chosen session that leaves the ready list is replaced by 
   assert.match(checked[0], /\/sessions\/sess-a\/contacts\/check\//);
 });
 
+test('NumberChecker: the session cannot be switched from the Single tab while a bulk run is going', async () => {
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    if (String(input).includes('/contacts/check/')) return new Promise<Response>(() => {});
+    return Promise.resolve(jsonResponse(twoSessions('ready')));
+  }) as typeof fetch;
+  renderComponent();
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  await rtl.screen.findByRole('option', { name: /Beta/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.screen.findByRole('button', { name: /Stop Checking/i });
+
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Single Check/i }));
+  const select = rtl.screen.getByRole('combobox', { name: 'WhatsApp Session' }) as HTMLSelectElement;
+  assert.equal(select.disabled, true);
+});
+
 const statValue = (label: string) =>
   rtl.screen.getByText(label, { selector: '.nc-stat-label' }).parentElement?.querySelector('.nc-stat-number')
     ?.textContent;

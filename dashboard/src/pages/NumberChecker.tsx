@@ -455,7 +455,7 @@ export function NumberChecker() {
                   className="nc-input"
                   value={currentSession}
                   onChange={e => setSelectedSession(e.target.value)}
-                  disabled={readySessions.length === 0}
+                  disabled={readySessions.length === 0 || isCheckingBatch}
                 >
                   {readySessions.length === 0 ? (
                     <option value="">{t('numberChecker.session.none')}</option>
