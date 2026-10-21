@@ -555,6 +555,43 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     await flush();
   });
 
+  it('shares what reached an id between two deliveries of it, and forgets the id after both', async () => {
+    const { client, order } = wire();
+    const first = deferred<null>();
+    const second = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    client.emit('message', incoming('A', 'orig', { contact: second.promise }));
+    editEvent(client, 'A', 'fixed');
+    expect(order).toEqual([]);
+
+    second.resolve(null);
+    await flush();
+    expect(order).toEqual(['message A', 'edit A fixed']);
+
+    first.resolve(null);
+    await flush();
+    editEvent(client, 'A', 'late');
+
+    expect(order).toEqual(['message A', 'edit A fixed', 'message A', 'edit A late']);
+  });
+
+  it('delivers the rest when one kept change fails', async () => {
+    const { client, order } = wire({
+      onMessageEdited: () => {
+        throw new Error('boom');
+      },
+    });
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    editEvent(client, 'A', 'fixed');
+    revokeEvent(client, 'A');
+
+    contact.resolve(null);
+    await flush();
+
+    expect(order).toEqual(['message A', 'revoke A']);
+  });
+
   it('keeps a bounded number of changes for one message, delivering the rest in order at once', async () => {
     const { client, order } = wire();
     const contact = deferred<null>();
