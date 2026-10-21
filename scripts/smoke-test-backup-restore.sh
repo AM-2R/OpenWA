@@ -68,10 +68,12 @@
 #       staging copy is removed after a backup that succeeds and one that fails
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
-#   (am) restore refuses an OPENWA_DATA_DIR that is . or .., the working directory, a parent of it, a
-#       link to it or the home directory, before it reads the archive
-#   (an) restore refuses to empty a state dir that is ., the working directory, the data dir, the home
-#       directory or a directory around the workspace or the data dir, before anything is written
+#   (am) restore refuses an OPENWA_DATA_DIR that is . or .., /, the working directory, a parent of it, a
+#       link to it or the home directory, before it reads the archive (the / case is skipped where a
+#       user can write /)
+#   (an) restore refuses to empty a state dir that is ., /, a link to /, the working directory, the data
+#       dir, the home directory or a directory around the workspace or the data dir, before anything is
+#       written (the / cases are skipped where a user can write /)
 #   (ao) restore refuses an archive member named ../x, a/../x or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
@@ -2323,6 +2325,14 @@ refused_restore() {
   fi
 }
 
+# The / cases matter most: a restore run as root in the container (docker exec) is the one that would
+# take the container's root. They run only where a check that broke would not act on / itself, which
+# holds while / cannot be written: the run then stops at its writability check, or at the first copy.
+ROOT_SAFE=0
+if [ "$(id -u)" -ne 0 ] && [ ! -w / ]; then
+  ROOT_SAFE=1
+fi
+
 echo ""
 echo "==> (am) restore refuses an unsafe OPENWA_DATA_DIR before it reads the archive"
 # The data dir is replaced wholesale, so one that is the working directory, a parent of it, the home
@@ -2348,6 +2358,12 @@ refused_restore "$AM" "am: parent of the working directory" "$AM_WORKSPACE" "$AM
 refused_restore "$AM" "am: link to the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/alias"
 refused_restore "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
 pass "(am) an OPENWA_DATA_DIR that is ., .., the workspace, a parent of it, a link to it or the home directory is refused"
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  refused_restore "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
+  pass "(am) / is refused as OPENWA_DATA_DIR"
+else
+  echo "SKIP: (am) the / case, which needs a user who cannot write /"
+fi
 
 echo ""
 echo "==> (an) restore refuses to empty a broad state directory, before anything is written"
@@ -2371,6 +2387,17 @@ refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target
 refused_restore "$AN" "an: ." 'refusing to replace unsafe whatsapp-web.js sessions target: .' \
   "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=.
 pass "(an) a state dir that is ., the workspace, the data dir, the home directory or around the workspace or the data dir is refused"
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  refused_restore "$AN" "an: /" 'refusing to replace unsafe whatsapp-web.js sessions target: /' \
+    "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=/
+  mkdir -p "$AN/rootlink"
+  ln -s / "$AN/rootlink/root"
+  # Only the resolved comparison sees / behind a link; the literal check never matches it.
+  refused_restore "$AN" "an: link to /" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/rootlink/root"
+  pass "(an) / and a link to / are refused as a state dir"
+else
+  echo "SKIP: (an) the / cases, which need a user who cannot write /"
+fi
 
 echo ""
 echo "==> (ao) restore refuses an archive member that could land outside the staging directory"
