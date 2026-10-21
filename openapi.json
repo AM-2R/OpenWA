@@ -6249,7 +6249,7 @@
             }
           },
           "400": {
-            "description": "Session not active or message not found",
+            "description": "Session not active",
             "content": {
               "application/json": {
                 "schema": {
@@ -6839,7 +6839,7 @@
             }
           },
           "400": {
-            "description": "Session not active or message not found",
+            "description": "Session not active",
             "content": {
               "application/json": {
                 "schema": {

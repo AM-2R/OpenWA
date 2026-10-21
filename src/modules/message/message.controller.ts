@@ -548,7 +548,7 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Session not active or message not found',
+    description: 'Session not active',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
@@ -784,7 +784,7 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Session not active or message not found',
+    description: 'Session not active',
   })
   @ApiResponse({
     status: 503,

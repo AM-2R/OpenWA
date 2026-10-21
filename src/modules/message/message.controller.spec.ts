@@ -316,4 +316,16 @@ describe('MessageController OpenAPI error responses', () => {
     ) as Record<string, unknown>;
     expect(Object.keys(responses)).toContain('400');
   });
+
+  // An unknown message answers 404 (MessageNotFoundError), which these routes declare on its own, so
+  // their 400 is only the missing live engine. A client reading the 400 as "message not found" would
+  // never handle the 404 the engine actually raises.
+  it.each(['react', 'deleteMessage'])('%s keeps "message not found" out of its 400', method => {
+    const responses = Reflect.getMetadata(
+      'swagger/apiResponse',
+      Object.getOwnPropertyDescriptor(MessageController.prototype, method)!.value as object,
+    ) as Record<string, { description: string }>;
+    expect(responses['400'].description).toBe('Session not active');
+    expect(Object.keys(responses)).toContain('404');
+  });
 });
