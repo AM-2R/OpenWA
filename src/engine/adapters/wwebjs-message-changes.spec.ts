@@ -22,12 +22,13 @@ import type {
   InboundTicket,
   IncomingMessage,
   IWhatsAppEngine,
+  ReactionEvent,
   RevokedMessage,
 } from '../interfaces/whatsapp-engine.interface';
 
 /**
  * A message is handed to the session only once its contact, media and quoted message were fetched. A
- * change that reaches it meanwhile (an edit or a delete for everyone) is kept for the row by a
+ * change that reaches it meanwhile (an edit, a delete for everyone or a reaction) is kept for the row by a
  * session that holds each arrival (PostgreSQL), and was lost on the SQLite wiring, which learns of the
  * message only when it is handed over: the message was then stored and announced as it was before.
  */
@@ -96,6 +97,9 @@ const revokeEvent = (client: EventEmitter, id: string, opts: { fromMe?: boolean 
     },
     { id: { _serialized: id } },
   );
+
+const reactionEvent = (client: EventEmitter, id: string, reaction: string) =>
+  client.emit('message_reaction', { msgId: { _serialized: id }, id: { remote: CHAT }, reaction, senderId: CHAT });
 
 describe.each([
   ['PostgreSQL', 'postgres'],
@@ -260,6 +264,51 @@ describe.each([
     expect(events('message.received').map(m => m.body)).toEqual(['v2']);
   });
 
+  it('stores a reaction made during the contact lookup on the row once it is written', async () => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    await flush();
+    reactionEvent(client, 'A', '👍');
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ body: 'orig', metadata: { reactions: { [CHAT]: '👍' } } })]);
+    expect(events('message.reaction')).toHaveLength(1);
+  });
+
+  it('stores a reaction made during the media download beside the media', async () => {
+    const media = download();
+    client.emit('message', incoming('M', 'cap', { page: media.page }));
+    await flush();
+    reactionEvent(client, 'M', '❤️');
+    await flush();
+    media.finish();
+    await flush();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        waMessageId: 'M',
+        metadata: { media: expect.objectContaining({ mimetype: 'image/png' }) as unknown, reactions: { [CHAT]: '❤️' } },
+      }),
+    ]);
+  });
+
+  it('stores a reaction beside the edit that reached the message before it', async () => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    await flush();
+    editEvent(client, 'A', 'fixed');
+    reactionEvent(client, 'A', '👍');
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([
+      expect.objectContaining({ body: 'fixed', metadata: { edited: true, reactions: { [CHAT]: '👍' } } }),
+    ]);
+  });
+
   it('stores a message edited and then deleted during its contact lookup cleared', async () => {
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
@@ -339,6 +388,9 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
       onMessageRevoked: (r: RevokedMessage) => {
         order.push(`revoke ${r.revokedId ?? r.id}`);
       },
+      onMessageReaction: (r: ReactionEvent) => {
+        order.push(`react ${r.messageId} ${r.reaction}`);
+      },
       ...extra,
     };
     const client = new EventEmitter();
@@ -360,6 +412,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'A', 'fixed');
+    reactionEvent(client, 'A', '👍');
     revokeEvent(client, 'A');
     await flush();
     expect(order).toEqual([]);
@@ -367,7 +420,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     contact.resolve(null);
     await flush();
 
-    expect(order).toEqual(['message A', 'edit A fixed', 'revoke A']);
+    expect(order).toEqual(['message A', 'edit A fixed', 'react A 👍', 'revoke A']);
   });
 
   it('delivers at once what reaches a message the session holds from its arrival', async () => {
@@ -395,13 +448,15 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'Z', 'elsewhere');
-    expect(order).toEqual(['edit Z elsewhere']);
+    reactionEvent(client, 'Z', '👍');
+    expect(order).toEqual(['edit Z elsewhere', 'react Z 👍']);
 
     contact.resolve(null);
     await flush();
     editEvent(client, 'A', 'late');
+    reactionEvent(client, 'A', '👍');
 
-    expect(order).toEqual(['edit Z elsewhere', 'message A', 'edit A late']);
+    expect(order).toEqual(['edit Z elsewhere', 'react Z 👍', 'message A', 'edit A late', 'react A 👍']);
   });
 
   it('delivers at once what reaches a status post', async () => {
@@ -487,6 +542,17 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     editEvent(client, 'S', 'later', { media: true, fromMe: true });
 
     expect(order).toEqual(['edit S sent again', 'edit S later']);
+  });
+
+  it('delivers at once a reaction whose message id could not be read', async () => {
+    const { client, order } = wire();
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    client.emit('message_reaction', { msgId: {}, id: { remote: CHAT }, reaction: '👍', senderId: CHAT });
+    expect(order).toEqual(['react  👍']);
+
+    contact.resolve(null);
+    await flush();
   });
 
   it('keeps a bounded number of changes for one message, delivering the rest in order at once', async () => {

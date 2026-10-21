@@ -62,7 +62,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
   // each arrival (a ticket, PostgreSQL) keeps what reaches the message meanwhile for its row. Any other learns of
   // the message only when it is handed over, so an edit or a delete for everyone that came first would find no
   // row to change, and the message would then be stored and announced as it was: a deleted one with its content.
-  // Those changes are kept here, by message id, and delivered right after the message.
+  // A reaction would never reach the row. Those changes are kept here, by message id, and delivered right after
+  // the message.
   const inProcessing = new Map<string, MessageInProcessing>();
 
   const deliverKept = (kept: MessageInProcessing): void => {
@@ -260,7 +261,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         reaction: reaction.reaction,
         senderId: reaction.senderId,
       };
-      host.getCallbacks().onMessageReaction?.(event);
+      afterMessage(event.messageId, () => host.getCallbacks().onMessageReaction?.(event));
     } catch (error) {
       host.logger.error('Error processing message_reaction', String(error));
     }
