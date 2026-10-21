@@ -64,7 +64,7 @@ function stubLookups(answer: (number: string) => Response): string[] {
 const registered = (number: string) => jsonResponse({ number, exists: true, whatsappId: `${number}@c.us` });
 
 async function openBulkTab(): Promise<HTMLTextAreaElement> {
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
   return rtl.screen.getByPlaceholderText(/9612345678/i) as HTMLTextAreaElement;
 }
@@ -108,7 +108,7 @@ test('NumberChecker: renders single check form and tabs', () => {
 
 test('NumberChecker: switches to bulk / batch tab when clicked', () => {
   const { getByRole, getAllByText } = renderComponent();
-  const bulkTab = getByRole('button', { name: /Bulk/i });
+  const bulkTab = getByRole('tab', { name: /Bulk/i });
   rtl.fireEvent.click(bulkTab);
   const headings = getAllByText('Bulk Number Checker');
   assert.ok(headings.length >= 1);
@@ -266,7 +266,7 @@ test('NumberChecker: the number field and the bulk list are typed left to right,
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
   assert.equal(rtl.screen.getByPlaceholderText(/9876543210/).getAttribute('dir'), 'ltr');
 
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   assert.equal(container.querySelector('.nc-textarea')?.getAttribute('dir'), 'ltr');
 });
 
@@ -280,7 +280,7 @@ test('NumberChecker: both result tables sit in a scroll container, so a narrow c
   assert.equal(container.querySelectorAll('.nc-history-table').length, 1);
   assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
 
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '911111111111' } });
   startBatch();
   await rtl.screen.findByText('+911111111111');
@@ -323,11 +323,86 @@ test('NumberChecker: every number and id cell of both result tables is isolated 
     ['ltr', 'ltr'],
   ]);
 
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '911111111111' } });
   startBatch();
   await rtl.screen.findByText('+911111111111');
   assert.deepEqual(isolation([1, 3]), [['ltr', 'ltr']]);
+});
+
+test('NumberChecker: the mode tabs are a tablist that reports the selected tab', () => {
+  renderComponent();
+  assert.ok(rtl.screen.getByRole('tablist'));
+  const tabs = rtl.screen.getAllByRole('tab');
+  assert.deepEqual(
+    tabs.map(tab => tab.getAttribute('aria-selected')),
+    ['true', 'false'],
+  );
+  rtl.fireEvent.click(tabs[1]);
+  assert.deepEqual(
+    tabs.map(tab => tab.getAttribute('aria-selected')),
+    ['false', 'true'],
+  );
+});
+
+test('NumberChecker: the result filters report which one is pressed', async () => {
+  stubLookups(number =>
+    number === '911111111111' ? jsonResponse({ message: 'engine hiccup' }, 500) : registered(number),
+  );
+  renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  startBatch();
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+
+  const pressed = () => rtl.screen.getAllByRole('button', { pressed: true }).map(button => button.textContent);
+  assert.deepEqual(pressed(), ['All (2)']);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /^Failed \(1\)/ }));
+  assert.deepEqual(pressed(), ['Failed (1)']);
+});
+
+test('NumberChecker: the number field and the bulk list are named by their labels, not their placeholders', async () => {
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  assert.equal(rtl.screen.getByLabelText('Phone Number').tagName, 'INPUT');
+
+  rtl.fireEvent.click(container.querySelectorAll('.nc-tab')[1]);
+  assert.equal(rtl.screen.getByLabelText(/Numbers to Check/).tagName, 'TEXTAREA');
+});
+
+test('NumberChecker: the run progress bar is a progressbar that reports how many numbers were checked', async () => {
+  // The first lookup answers, the next ones never do, so the run stays at one of three.
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.includes('/contacts/check/')) return defaultFetch(input);
+    return url.endsWith('/911111111111')
+      ? Promise.resolve(registered('911111111111'))
+      : new Promise<Response>(() => {});
+  }) as typeof fetch;
+  const { container } = renderComponent();
+  rtl.fireEvent.click(container.querySelectorAll('.nc-tab')[1]);
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(container.querySelector('.nc-textarea')!, { target: { value: THREE_NUMBERS } });
+  startBatch();
+
+  const bar = await rtl.screen.findByRole('progressbar');
+  assert.equal(bar.getAttribute('aria-valuemin'), '0');
+  assert.equal(bar.getAttribute('aria-valuemax'), '3');
+  await rtl.waitFor(() => assert.equal(bar.getAttribute('aria-valuenow'), '1'));
+});
+
+test('NumberChecker: a finished single check is announced through a status region that exists beforehand', async () => {
+  stubLookups(registered);
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  const region = container.querySelector('[role="status"]');
+  assert.ok(region, 'there is no status region before the check');
+
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '+65 8123 4567' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Registered on WhatsApp');
+  assert.equal(container.querySelector('[role="status"]') === region, true);
+  assert.match(region.textContent ?? '', /\+6581234567.*Registered on WhatsApp/);
 });
 
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
@@ -347,7 +422,7 @@ test('NumberChecker: viewers cannot start single or bulk lookups, including with
   rtl.fireEvent.change(input, { target: { value: '9876543210' } });
   assert.equal((rtl.screen.getByRole('button', { name: 'Check' }) as HTMLButtonElement).disabled, true);
   await rtl.act(async () => rtl.fireEvent.keyDown(input, { key: 'Enter' }));
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '9876543210' } });
   assert.equal((rtl.screen.getByRole('button', { name: /Start Batch Check/i }) as HTMLButtonElement).disabled, true);
   assert.deepEqual(lookups, []);
@@ -369,7 +444,7 @@ test('NumberChecker: CSV export neutralizes error formulas and releases its obje
   }) as typeof fetch;
 
   renderComponent();
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '919999999999' } });
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
@@ -438,7 +513,7 @@ test('NumberChecker: a rejected lookup is recorded as failed with error status, 
     renderComponent();
 
     // Switch to bulk tab
-    const bulkTab = rtl.screen.getByRole('button', { name: /Bulk/i });
+    const bulkTab = rtl.screen.getByRole('tab', { name: /Bulk/i });
     rtl.fireEvent.click(bulkTab);
 
     // Wait for session to be selected
@@ -506,7 +581,7 @@ test('NumberChecker: Stop followed by Start while lookup is pending cancels earl
   renderComponent();
 
   // Switch to bulk tab
-  const bulkTab = rtl.screen.getByRole('button', { name: /Bulk/i });
+  const bulkTab = rtl.screen.getByRole('tab', { name: /Bulk/i });
   rtl.fireEvent.click(bulkTab);
 
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
@@ -706,13 +781,13 @@ test('NumberChecker: the session cannot be switched from the Single tab while a 
     return Promise.resolve(jsonResponse(twoSessions('ready')));
   }) as typeof fetch;
   renderComponent();
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   await rtl.screen.findByRole('option', { name: /Beta/ });
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: THREE_NUMBERS } });
   startBatch();
   await rtl.screen.findByRole('button', { name: /Stop Checking/i });
 
-  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Single Check/i }));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Single Check/i }));
   const select = rtl.screen.getByRole('combobox', { name: 'WhatsApp Session' }) as HTMLSelectElement;
   assert.equal(select.disabled, true);
 });

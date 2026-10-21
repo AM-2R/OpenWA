@@ -429,11 +429,21 @@ export function NumberChecker() {
       )}
 
       {/* Mode Tabs */}
-      <div className="nc-tabs">
-        <button className={`nc-tab ${activeTab === 'single' ? 'active' : ''}`} onClick={() => setActiveTab('single')}>
+      <div className="nc-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={activeTab === 'single'}
+          className={`nc-tab ${activeTab === 'single' ? 'active' : ''}`}
+          onClick={() => setActiveTab('single')}
+        >
           <Phone size={18} /> {t('numberChecker.tabs.single')}
         </button>
-        <button className={`nc-tab ${activeTab === 'batch' ? 'active' : ''}`} onClick={() => setActiveTab('batch')}>
+        <button
+          role="tab"
+          aria-selected={activeTab === 'batch'}
+          className={`nc-tab ${activeTab === 'batch' ? 'active' : ''}`}
+          onClick={() => setActiveTab('batch')}
+        >
           <UserCheck size={18} /> {t('numberChecker.tabs.bulk')}
         </button>
       </div>
@@ -471,9 +481,12 @@ export function NumberChecker() {
               </div>
 
               <div className="nc-form-group">
-                <label className="nc-label">{t('numberChecker.single.phoneLabel')}</label>
+                <label htmlFor="nc-single-phone" className="nc-label">
+                  {t('numberChecker.single.phoneLabel')}
+                </label>
                 <div className="nc-input-row">
                   <input
+                    id="nc-single-phone"
                     type="text"
                     dir="ltr"
                     className="nc-input"
@@ -552,8 +565,8 @@ export function NumberChecker() {
               </div>
             </div>
 
-            {/* Result Card */}
-            <div className="nc-card">
+            {/* Result Card: always rendered, so a finished check is announced as a change inside it. */}
+            <div className="nc-card" role="status">
               <h2 className="nc-card-title">{t('numberChecker.single.resultTitle')}</h2>
 
               {isCheckingSingle ? (
@@ -779,8 +792,11 @@ export function NumberChecker() {
 
             <div>
               <div className="nc-form-group">
-                <label className="nc-label">{t('numberChecker.bulk.numbersLabel')}</label>
+                <label htmlFor="nc-batch-numbers" className="nc-label">
+                  {t('numberChecker.bulk.numbersLabel')}
+                </label>
                 <textarea
+                  id="nc-batch-numbers"
                   dir="ltr"
                   className="nc-textarea"
                   placeholder="919612345678&#10;6281234567890&#10;14155552671"
@@ -865,7 +881,14 @@ export function NumberChecker() {
           {(isCheckingBatch || batchResults.length > 0) && (
             <>
               {isCheckingBatch && (
-                <div className="nc-progress-bar-container">
+                <div
+                  className="nc-progress-bar-container"
+                  role="progressbar"
+                  aria-label={t('numberChecker.bulk.title')}
+                  aria-valuemin={0}
+                  aria-valuemax={batchProgress.total}
+                  aria-valuenow={batchProgress.current}
+                >
                   <div
                     className="nc-progress-bar"
                     style={{
@@ -910,18 +933,21 @@ export function NumberChecker() {
               <div className="nc-filter-bar">
                 <div className="nc-filter-btns">
                   <button
+                    aria-pressed={batchFilter === 'all'}
                     className={`nc-filter-btn ${batchFilter === 'all' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('all')}
                   >
                     {t('numberChecker.bulk.all')} ({batchResults.length})
                   </button>
                   <button
+                    aria-pressed={batchFilter === 'registered'}
                     className={`nc-filter-btn ${batchFilter === 'registered' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('registered')}
                   >
                     {t('numberChecker.status.registered')} ({registeredCount})
                   </button>
                   <button
+                    aria-pressed={batchFilter === 'unregistered'}
                     className={`nc-filter-btn ${batchFilter === 'unregistered' ? 'active' : ''}`}
                     onClick={() => setBatchFilter('unregistered')}
                   >
@@ -929,6 +955,7 @@ export function NumberChecker() {
                   </button>
                   {failedCount > 0 && (
                     <button
+                      aria-pressed={batchFilter === 'failed'}
                       className={`nc-filter-btn ${batchFilter === 'failed' ? 'active' : ''}`}
                       onClick={() => setBatchFilter('failed')}
                     >
