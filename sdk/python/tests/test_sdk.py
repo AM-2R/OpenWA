@@ -5,12 +5,23 @@ from __future__ import annotations
 import json
 import math
 import time
+import warnings
 from typing import get_args, get_type_hints
 
 import httpx
 import pytest
 
-from openwa import OpenWAClient, OpenWAApiError, OpenWANotFoundError
+from openwa import (
+    OpenWAApiError,
+    OpenWAAuthError,
+    OpenWAClient,
+    OpenWAConflictError,
+    OpenWAForbiddenError,
+    OpenWANotFoundError,
+    OpenWANotImplementedError,
+    OpenWARateLimitError,
+    OpenWATimeoutError,
+)
 from openwa._http import build_url
 from openwa.errors import OpenWAServiceUnavailableError
 from openwa.resources.catalog import CatalogResource
@@ -357,6 +368,99 @@ class TestClientCore:
         })
         with pytest.raises(OpenWAServiceUnavailableError):
             make_client(backend).sessions.get("s1")
+
+    @pytest.mark.parametrize(
+        ("status", "cls"),
+        [
+            (401, OpenWAAuthError),
+            (403, OpenWAForbiddenError),
+            (404, OpenWANotFoundError),
+            (409, OpenWAConflictError),
+            (429, OpenWARateLimitError),
+            (501, OpenWANotImplementedError),
+            (503, OpenWAServiceUnavailableError),
+            (400, OpenWAApiError),
+            (500, OpenWAApiError),
+            (502, OpenWAApiError),
+        ],
+    )
+    def test_each_status_maps_to_its_own_error_class_with_status_body_and_kind(
+        self, status: int, cls: type[OpenWAApiError]
+    ) -> None:
+        envelope = {"statusCode": status, "message": "x", "error": "E"}
+        backend = MockBackend().on("GET", "/api/sessions", status=status, body=envelope)
+        with pytest.raises(OpenWAApiError) as caught:
+            make_client(backend).sessions.list()
+        err = caught.value
+        # The exact class, not isinstance: every one of them is also an OpenWAApiError.
+        assert type(err) is cls
+        assert err.status == status
+        assert err.body == envelope
+        assert err.error_kind == "E"
+        assert "GET /api/sessions: x" in str(err)
+
+    def test_an_error_body_that_is_not_json_is_kept_as_text(self) -> None:
+        # A proxy in front of the gateway answers 502 with a page of its own.
+        page = "<html>Bad Gateway</html>"
+        transport = httpx.MockTransport(
+            lambda _: httpx.Response(502, content=page.encode(), headers={"content-type": "text/html"})
+        )
+        client = OpenWAClient(base_url="https://x", api_key="k", transport=transport)
+        with pytest.raises(OpenWAApiError) as caught:
+            client.health.live()
+        assert caught.value.status == 502
+        assert caught.value.body == page
+        assert page in str(caught.value)
+
+    def test_a_validation_error_names_every_message(self) -> None:
+        backend = MockBackend().on("POST", "/api/sessions", status=400, body={
+            "statusCode": 400, "message": ["name must be a string", "name should not be empty"], "error": "Bad Request"
+        })
+        with pytest.raises(OpenWAApiError) as caught:
+            make_client(backend).sessions.create({"name": ""})
+        assert "name must be a string, name should not be empty" in str(caught.value)
+
+    @pytest.mark.parametrize(
+        "failure",
+        [httpx.ConnectTimeout("t"), httpx.ReadTimeout("t"), httpx.WriteTimeout("t"), httpx.PoolTimeout("t")],
+    )
+    def test_a_transport_timeout_raises_openwa_timeout_error_with_the_configured_seconds(
+        self, failure: httpx.TimeoutException
+    ) -> None:
+        def stall(_: httpx.Request) -> httpx.Response:
+            raise failure
+
+        for timeout, seconds in (
+            (2.5, 2.5),
+            ((1.0, 2.0, 3.0, 4.0), 4.0),  # the longest operation that has a limit
+            (httpx.Timeout(10.0, connect=2.0), 10.0),
+        ):
+            client = OpenWAClient(base_url="https://x", api_key="k", timeout=timeout, transport=httpx.MockTransport(stall))
+            # Both the JSON path and the binary path map it.
+            for call in (client.sessions.list, lambda: client.messages.media("s", "c", "m")):
+                with pytest.raises(OpenWATimeoutError) as caught:
+                    call()
+                assert caught.value.timeout == seconds
+                assert caught.value.__cause__ is failure
+
+    def test_a_remote_http_base_url_warns_and_a_local_or_https_one_does_not(self) -> None:
+        with pytest.warns(UserWarning, match="insecure http://"):
+            OpenWAClient(base_url="http://gateway.example", api_key="k")
+        # Recorded rather than raised: the check swallows any exception, a warning turned into one included.
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            for url in ("http://localhost:2785", "http://127.0.0.1:2785", "http://[::1]:2785", "https://gateway.example"):
+                OpenWAClient(base_url=url, api_key="k")
+        assert [str(w.message) for w in seen] == []
+
+    def test_the_context_manager_closes_the_client(self) -> None:
+        with OpenWAClient(base_url="https://x", api_key="k") as client:
+            assert not client._http._client.is_closed
+        assert client._http._client.is_closed
+
+        closed = OpenWAClient(base_url="https://x", api_key="k")
+        closed.close()
+        assert closed._http._client.is_closed
 
     def test_exposes_all_resources(self):
         client = make_client(MockBackend())
