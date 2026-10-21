@@ -22,3 +22,24 @@ test('the workspace keeps two columns until three of them fit', () => {
   assert.equal(two.length, 1, 'expected one rule for the two-column workspace');
   assert.ok(widthOf(two[0].media) >= 1286, `two columns apply at ${two[0].media || 'every width'}`);
 });
+
+// A native select is as wide as its longest option, and the header column it sits in is sized to that: a session with
+// a long name made the column as wide as the name, the title column shrank to nothing and the select covered the
+// title (between about 770 and 1100px). A percentage in `width` does not count towards the column, so the bound is
+// max-width; the select then cuts a long name inside itself.
+const SELECT = '.templates-page .templates-session-select';
+
+test('the session select is capped so a long session name cannot take the header from the title', () => {
+  const capped = rules.find(r => !r.media && r.selectors.includes(SELECT));
+  assert.ok(capped, 'no base rule for the session select');
+  assert.equal(decl(capped.body, 'max-width'), '20rem');
+});
+
+test('the cap is lifted where the header is one column and the select has no title beside it', () => {
+  // PageHeader.css stacks the title, the subtitle and the actions below 769px.
+  const lifted = rules.filter(r => r.selectors.includes(SELECT) && decl(r.body, 'max-width') === 'none');
+  assert.deepEqual(
+    lifted.map(r => r.media),
+    ['@media (max-width: 768px)'],
+  );
+});

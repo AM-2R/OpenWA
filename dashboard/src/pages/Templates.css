@@ -19,6 +19,9 @@
 
 .templates-page .templates-session-select {
   min-width: 240px;
+  /* A native select is as wide as its longest option, and a percentage width does not bound the header column
+     it sits in; only max-width does. A longer session name is cut inside the select, not over the title. */
+  max-width: 20rem;
 }
 
 .templates-page .templates-workspace {
@@ -475,6 +478,13 @@
   .templates-page .templates-session-select {
     min-width: 0;
     width: 100%;
+  }
+}
+
+/* The page header is one column from here, so the select has no title beside it to cover. */
+@media (max-width: 768px) {
+  .templates-page .templates-session-select {
+    max-width: none;
   }
 }
 
