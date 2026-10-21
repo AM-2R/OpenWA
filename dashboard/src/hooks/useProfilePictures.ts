@@ -3,6 +3,10 @@ import { contactApi } from '../services/api';
 
 // Signed CDN URLs rotate: a held picture is reused for an hour, then asked for again.
 const PICTURE_TTL_MS = 60 * 60 * 1000;
+// The batch route answers null for a hidden or missing picture and also for a lookup that failed (throttled, past
+// its per-id deadline), and the two look alike. A null is held for a minute only: a failure heals on the next
+// change of ids after that, and a real null costs one more lookup then.
+const NULL_TTL_MS = 60 * 1000;
 
 interface ResolvedPicture {
   url: string | null;
@@ -37,8 +41,8 @@ function heldFor(client: QueryClient, sessionId: string): Held {
  * query key uses the sorted id set so reordering the sidebar doesn't refetch.
  *
  * A change of membership (a message from a chat outside the top 50 pushes one out) is a new key, but
- * only the ids not held yet are asked for: every answer is kept per session with the time it arrived,
- * ids that came back null (hidden or no picture) included, and reused for an hour. What is held lives
+ * only the ids not held yet are asked for: every answer is kept per session with the time it arrived and
+ * reused for an hour, a null (hidden, no picture, or a lookup that failed) for a minute. What is held lives
  * in the query cache, so a page that mounts again with the same ids asks for nothing. The data returned
  * covers the requested ids, and the previous data of the same session stays while a smaller batch is
  * out, so the rows keep their pictures instead of dropping to the generic icon. An invalidated batch (a
@@ -67,7 +71,7 @@ export function useProfilePictures(sessionId: string | undefined, contactIds: st
       const invalidated = client.getQueryState(queryKey)?.isInvalidated ?? false;
       const missing = requestIds.filter(id => {
         const entry = held.get(id);
-        return invalidated || !entry || now - entry.at >= PICTURE_TTL_MS;
+        return invalidated || !entry || now - entry.at >= (entry.url === null ? NULL_TTL_MS : PICTURE_TTL_MS);
       });
       if (missing.length > 0) {
         try {
@@ -87,7 +91,8 @@ export function useProfilePictures(sessionId: string | undefined, contactIds: st
     enabled: Boolean(sessionId && requestIds.length > 0),
     // Fresh until the oldest requested picture is an hour old. A missing one (an id the answer left out, a
     // failed top-up) or an expired one makes the query stale at once, so the next focus or mount asks again
-    // for just those, instead of a failed attempt counting as a fresh hour.
+    // for just those, instead of a failed attempt counting as a fresh hour. A null's shorter clock is for the
+    // next change of ids only: counted here, it would send every focus back for all the pictures nobody has.
     staleTime: query => {
       const held = sessionId ? queryClient.getQueryData<Held>(heldKey(sessionId)) : undefined;
       let expiresAt = Infinity;
