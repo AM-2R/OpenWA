@@ -142,6 +142,20 @@ describe('RedisIoAdapter', () => {
       }
     });
 
+    // Gateway options such as the client frame bound reach the Socket.IO server through this call.
+    it.each(['true', undefined])('hands the server options to the base server untouched (%s)', enabled => {
+      if (enabled === undefined) delete process.env.REDIS_ENABLED;
+      else process.env.REDIS_ENABLED = enabled;
+      const spy = withBaseServer(fakeServer().server);
+      try {
+        const options = { maxHttpBufferSize: 8192 };
+        new RedisIoAdapter({} as never).createIOServer(0, options as never);
+        expect(spy).toHaveBeenCalledWith(0, options);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('attaches the Redis adapter with a pub/sub pair when Redis is enabled', () => {
       process.env.REDIS_ENABLED = 'true';
       const { server, adapterFn } = fakeServer();
