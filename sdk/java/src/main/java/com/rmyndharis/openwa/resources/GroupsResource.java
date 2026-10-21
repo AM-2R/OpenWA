@@ -54,7 +54,8 @@ public final class GroupsResource {
     }
 
     /**
-     * Create a group. Answers the group SUMMARY, not the detail shape {@code get} returns — there is
+     * Create a group. Baileys only; whatsapp-web.js answers {@code 501}. Answers the group SUMMARY,
+     * not the detail shape {@code get} returns — there is
      * no participant list, description, owner or creation time on a create response.
      */
     public GroupSummary create(String sessionId, CreateGroupRequest body) {

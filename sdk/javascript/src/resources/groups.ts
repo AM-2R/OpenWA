@@ -49,7 +49,7 @@ export class GroupsResource {
   }
 
   /**
-   * Create a new group.
+   * Create a new group. **Baileys only**: whatsapp-web.js answers 501.
    *
    * Answers the group SUMMARY, not the detail shape `get()` returns — there is no participant list,
    * description, owner or creation time on a create response.

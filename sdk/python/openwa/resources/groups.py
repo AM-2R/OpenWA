@@ -43,7 +43,7 @@ class GroupsResource:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}")
 
     def create(self, session_id: str, body: CreateGroupRequest) -> GroupSummary:
-        """Create a group.
+        """Create a group. Baileys only; whatsapp-web.js answers 501.
 
         Answers the group SUMMARY, not the detail shape ``get()`` returns -- no participant list,
         description, owner or creation time.
