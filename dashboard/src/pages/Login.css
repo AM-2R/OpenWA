@@ -4,7 +4,6 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   background: var(--bg-light);
   padding: 2rem;
   position: fixed;
@@ -12,8 +11,11 @@
   left: 0;
   right: 0;
   bottom: 0;
+  overflow-y: auto;
 }
 
+/* The card and the footer centre as one group with auto margins, not justify-content: when the window is
+   shorter than the group the margins give way and the container scrolls from its top edge. */
 .login-container .login-card {
   background: var(--bg-white);
   border-radius: 12px;
@@ -22,6 +24,7 @@
   width: 100%;
   max-width: 420px;
   text-align: center;
+  margin-top: auto;
 }
 
 .login-container .login-logo {
@@ -177,6 +180,7 @@
 
 .login-container .login-footer {
   margin-top: 2rem;
+  margin-bottom: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
