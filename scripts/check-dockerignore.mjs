@@ -11,11 +11,12 @@
  *   1. Non-build / sensitive material (private working notes, VCS metadata, runtime data, local
  *      env files, agent/tool workspaces, dependency and build-output dirs) is rejected.
  *   2. Every input the multi-stage build actually needs (package manifests, src/, the dashboard
- *      source, the backport patcher, docker-entrypoint.sh, TS configs) still passes.
+ *      source, docker-entrypoint.sh, TS configs, and every file the Dockerfile COPYs by name,
+ *      derived from it) still passes.
  *
  * Run locally: `npm run check:dockerignore`. Runs in CI (lint job).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const text = readFileSync(new URL('.dockerignore', root), 'utf8');
@@ -161,12 +162,44 @@ const mustKeep = [
 ];
 
 const errors = [];
+
+// Everything else the Dockerfile COPYs out of the build context is an input too. Derive those instead
+// of restating them: a hand-written list lost eight of the patchers, and a rule dropping one of them
+// then broke the image build rather than this check. A copy from another stage, a flag, the
+// destination and `.` (the whole context) are not inputs.
+const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8').replace(/\\\n/g, ' ');
+const wildcard = /[*?[]/;
+function copyInputs(source) {
+  if (!wildcard.test(source)) return [source];
+  const cut = source.lastIndexOf('/') + 1;
+  const dir = source.slice(0, cut);
+  if (wildcard.test(dir)) {
+    errors.push(`the Dockerfile COPYs '${source}', and this check expands a wildcard only in the file name.`);
+    return [];
+  }
+  const name = globToRegExp(source.slice(cut));
+  return readdirSync(new URL(dir || './', root))
+    .filter(entry => name.test(entry))
+    .map(entry => dir + entry);
+}
+const copied = [];
+for (const [, args] of dockerfile.matchAll(/^COPY\s+(.+)$/gim)) {
+  const words = args.trim().split(/\s+/);
+  if (words.some(word => word.startsWith('--from='))) continue;
+  const sources = words.filter(word => !word.startsWith('--')).slice(0, -1);
+  copied.push(...sources.filter(source => source !== '.').flatMap(copyInputs));
+}
+if (copied.length === 0) {
+  errors.push('no COPY source found in the Dockerfile; the COPY parser in this check needs updating.');
+}
+const keep = [...new Set([...mustKeep, ...copied])];
+
 for (const path of mustReject) {
   if (!ignored(path)) {
     errors.push(`.dockerignore does not reject '${path}' — it would leak into the Docker build context/cache/layers.`);
   }
 }
-for (const path of mustKeep) {
+for (const path of keep) {
   if (ignored(path)) {
     errors.push(`.dockerignore rejects '${path}' — the Dockerfile build needs it in the context.`);
   }
@@ -178,4 +211,4 @@ if (errors.length) {
   console.error('\nFix .dockerignore so non-build material stays out and build inputs stay in, then re-run `npm run check:dockerignore`.\n');
   process.exit(1);
 }
-console.log(`✓ Docker-context check OK (${rules.length} .dockerignore rules, ${mustReject.length} rejected / ${mustKeep.length} kept paths asserted).`);
+console.log(`✓ Docker-context check OK (${rules.length} .dockerignore rules, ${mustReject.length} rejected / ${keep.length} kept paths asserted).`);
