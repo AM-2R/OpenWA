@@ -2499,7 +2499,7 @@ The `Contact` object returned by the list and get-by-id routes has this shape:
 
 List all contacts for a session, returned as an in-memory paginated window.
 
-On Baileys the list is the saved address book: contacts with a name saved on the phone (`isMyContact: true`), rebuilt from WhatsApp's app-state contact collection on connect, including after a process restart. A peer known only by its pushname is not listed but still resolves through the get-by-id route below with `isMyContact: false`. whatsapp-web.js lists what the WhatsApp Web page holds, which also includes unsaved chat partners (`isMyContact: false`). An entry the page cannot read (for example a device-scoped id), or one without a readable id, is left out of the list; the gateway logs a warning with the count, and the response does not signal it.
+On Baileys the list is the saved address book: contacts with a name saved on the phone (`isMyContact: true`), rebuilt from WhatsApp's app-state contact collection on connect, including after a process restart. A peer known only by its pushname is not listed but still resolves through the get-by-id route below with `isMyContact: false`. whatsapp-web.js lists what the WhatsApp Web page holds, which also includes unsaved chat partners (`isMyContact: false`). A contact the page holds under both its LID and its phone is listed once, under its phone id with the phone as `number`. An entry the page cannot read (for example a device-scoped id), or one without a readable id, is left out of the list; the gateway logs a warning with the count, and the response does not signal it.
 
 **Auth:** API key
 
@@ -2539,7 +2539,8 @@ On Baileys the list is the saved address book: contacts with a name saved on the
 The contacts this account has blocked — the read half of the block/unblock endpoints. A bare array
 of neutral contact ids, and ids only: whatsapp-web.js resolves full contact models, but Baileys'
 blocklist query answers bare jids, and inventing the other fields on one engine would make the two
-engines claim different things about the same account.
+engines claim different things about the same account. An id is listed once, even when whatsapp-web.js
+holds the contact under both its LID and its phone.
 
 **Auth:** API key
 
