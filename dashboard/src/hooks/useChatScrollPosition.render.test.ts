@@ -608,3 +608,73 @@ test('a message announced while its chat is still loading does not override wher
     restore();
   }
 });
+
+// ── Media decoding ───────────────────────────────────────────────────────────
+// Media has no box before it decodes, so a thread grows after it was positioned.
+
+test('a saved position is applied again on each decode until the reader scrolls', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000);
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+
+    g.height = 2000; // back to A before its media has decoded: the thread is short, and the spot out of reach
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 1600);
+
+    g.height = 2600; // the first decodes: the spot is still out of reach
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 2200);
+    fireEvent.scroll(el);
+
+    g.height = 4600; // the rest: the spot is reached
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000);
+    fireEvent.scroll(el);
+
+    readerScrollsTo(el, 2000); // the reader moves: the spot is theirs to leave
+    g.height = 4900;
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 2000, 'a decode took the reader back to the spot they left');
+  } finally {
+    restore();
+  }
+});
+
+test('a thread pinned to the bottom stays there as media decodes, until the reader scrolls away', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 4200);
+
+    g.height = 5000;
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 4600, 'a decode left the newest message below the fold');
+    fireEvent.scroll(el);
+
+    readerScrollsTo(el, 3000);
+    g.height = 5400;
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'a decode pulled a reader who scrolled up back to the bottom');
+  } finally {
+    restore();
+  }
+});
