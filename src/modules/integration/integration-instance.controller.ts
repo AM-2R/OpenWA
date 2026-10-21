@@ -136,6 +136,9 @@ export class IntegrationInstanceController {
     let inst: PluginInstance | null = await this.resolveVisible(pluginId, instanceId, apiKey);
     if (dto.sessionScope !== undefined) this.assertScopeWritable(apiKey, dto.sessionScope);
     const previousScope = inst.sessionScope;
+    // Only a wildcard instance projected its config into the plugin's base config, where a secret it no
+    // longer defines would stay behind (see ScopeBindingService.applyScopeBinding).
+    const previousConfig = !previousScope || previousScope === '*' ? inst.config : undefined;
     // One update() writes every field in a single save. Restoring the masked config can refuse the
     // PATCH with a 400 before that save, so a rejected body changes nothing, `enabled` included.
     if (dto.enabled !== undefined || dto.sessionScope !== undefined || dto.config !== undefined) {
@@ -155,7 +158,9 @@ export class IntegrationInstanceController {
     if (previousScope !== updated.sessionScope) {
       await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false);
     }
-    await this.scopeBinding.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled);
+    await this.scopeBinding.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled, {
+      previousConfig,
+    });
     // Audit the successful update with the CHANGED FIELD NAMES only — never the values: a config patch
     // can carry credentials, and audit metadata is not a credential store.
     const updatedFields = (['enabled', 'sessionScope', 'config'] as const).filter(f => dto[f] !== undefined);

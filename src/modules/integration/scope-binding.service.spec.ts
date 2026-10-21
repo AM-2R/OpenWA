@@ -560,3 +560,115 @@ describe('ScopeBindingService.resyncAfterImport', () => {
     await expect(service.resyncAfterImport([])).rejects.toThrow('db down');
   });
 });
+
+/**
+ * A wildcard instance is projected into the plugin's BASE config, and that write merges, so it cannot
+ * delete a key. A secret the instance no longer defines (the operator revoked it) stayed in the base
+ * config, in registry.json and in every hook and ingress delivery's config, while the instance row and
+ * its GET already showed it gone.
+ */
+describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no longer defines', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      apiToken: { type: 'string', secret: true },
+      baseUrl: { type: 'string' },
+      replyDelayMs: { type: 'number' },
+      crm: { type: 'object', properties: { key: { type: 'string', secret: true }, url: { type: 'string' } } },
+    },
+  };
+
+  function build() {
+    const updatePluginConfig = jest.fn();
+    const setPluginSessionConfig = jest.fn();
+    const loader = {
+      getPlugin: jest
+        .fn()
+        .mockReturnValue({ manifest: { id: 'chatwoot', configSchema: schema }, activeSessions: ['*'] }),
+      setPluginSessionConfig,
+      setPluginSessions: jest.fn(),
+      updatePluginConfig,
+    } as unknown as PluginLoaderService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
+    const sessions = { findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }) } as unknown as Repository<Session>;
+    const list = jest.fn().mockResolvedValue([]);
+    const svc = new ScopeBindingService({ list } as unknown as PluginInstanceService, loader, audit, sessions);
+    return { svc, list, updatePluginConfig, setPluginSessionConfig };
+  }
+
+  const sibling = (
+    instanceId: string,
+    config: Record<string, unknown>,
+    enabled = true,
+    sessionScope: string | null = null,
+  ) => ({
+    pluginId: 'chatwoot',
+    instanceId,
+    sessionScope,
+    config,
+    enabled,
+  });
+
+  it('writes null for the removed secret together with the rest of the instance config', async () => {
+    const { svc, updatePluginConfig } = build();
+
+    await svc.applyScopeBinding('chatwoot', null, { baseUrl: 'https://crm' }, true, {
+      previousConfig: { apiToken: 'LEAKED', baseUrl: 'https://crm' },
+    });
+
+    expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { baseUrl: 'https://crm', apiToken: null });
+  });
+
+  it('retracts a secret nested under a key the instance dropped, and leaves a plain key alone', async () => {
+    const { svc, updatePluginConfig } = build();
+
+    await svc.applyScopeBinding('chatwoot', '*', { baseUrl: 'https://crm' }, true, {
+      previousConfig: { baseUrl: 'https://crm', replyDelayMs: 5, crm: { key: 'K', url: 'https://x' } },
+    });
+
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { baseUrl: 'https://crm', crm: null });
+  });
+
+  it('hands the base the value another enabled wildcard instance still defines, not the removed one', async () => {
+    const { svc, list, updatePluginConfig } = build();
+    list.mockResolvedValue([
+      sibling('a', { baseUrl: 'https://crm' }),
+      sibling('b', { apiToken: 'B-OLD' }),
+      sibling('c', { apiToken: 'C-TOKEN' }),
+      sibling('d', { apiToken: 'D-DISABLED' }, false),
+      sibling('e', { apiToken: 'E-CONCRETE' }, true, 'sess-1'),
+    ]);
+
+    await svc.applyScopeBinding('chatwoot', null, { baseUrl: 'https://crm' }, true, {
+      previousConfig: { apiToken: 'LEAKED', baseUrl: 'https://crm' },
+    });
+
+    // The last wildcard instance by id wins, as it does when boot reconciliation replays them.
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { baseUrl: 'https://crm', apiToken: 'C-TOKEN' });
+  });
+
+  it('only looks at siblings when a secret was removed', async () => {
+    const { svc, list, updatePluginConfig } = build();
+
+    await svc.applyScopeBinding('chatwoot', null, { apiToken: 'NEW' }, true, {
+      previousConfig: { apiToken: 'OLD' },
+    });
+    await svc.applyScopeBinding('chatwoot', null, { baseUrl: 'https://crm' }, true);
+
+    expect(list).not.toHaveBeenCalled();
+    expect(updatePluginConfig).toHaveBeenNthCalledWith(1, 'chatwoot', { apiToken: 'NEW' });
+    expect(updatePluginConfig).toHaveBeenNthCalledWith(2, 'chatwoot', { baseUrl: 'https://crm' });
+  });
+
+  it('never touches the base config for a concrete scope, whose slice is replaced whole', async () => {
+    const { svc, updatePluginConfig, setPluginSessionConfig } = build();
+
+    await svc.applyScopeBinding('chatwoot', 'sess-1', { baseUrl: 'https://crm' }, true, {
+      previousConfig: { apiToken: 'LEAKED', baseUrl: 'https://crm' },
+    });
+
+    expect(updatePluginConfig).not.toHaveBeenCalled();
+    expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot', 'sess-1', { baseUrl: 'https://crm' });
+  });
+});

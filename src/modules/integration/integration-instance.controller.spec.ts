@@ -193,6 +193,89 @@ describe('IntegrationInstanceController provisioning bridge', () => {
     expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-2', { baseUrl: 'https://y' }); // new bound
   });
 
+  describe('a secret removed from a wildcard instance', () => {
+    const manifest = {
+      id: 'chatwoot-adapter',
+      ingress: [{ route: 'chatwoot' }],
+      permissions: ['webhook:ingress'],
+      configSchema: {
+        type: 'object',
+        properties: { apiToken: { type: 'string', secret: true }, baseUrl: { type: 'string' } },
+      },
+    };
+    const row = (sessionScope: string | null, config: Record<string, unknown>) => ({
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      sessionScope,
+      config,
+      enabled: true,
+    });
+
+    /** `before` is the row PATCH reads; `after` is what update() stores once the null secret is dropped. */
+    function patchWith(before: ReturnType<typeof row>, after: ReturnType<typeof row>) {
+      const { loader, audit, updatePluginConfig, setPluginSessionConfig } = build();
+      (loader.getPlugin as jest.Mock).mockReturnValue({ manifest, activeSessions: ['*'] });
+      const instances = {
+        resolve: jest.fn().mockResolvedValue(before),
+        update: jest.fn().mockResolvedValue(after),
+        list: jest.fn().mockResolvedValue([after]),
+        maskedView: (i: unknown) => i,
+      } as unknown as PluginInstanceService;
+      const controller = new IntegrationInstanceController(
+        instances,
+        loader,
+        audit,
+        new ScopeBindingService(instances, loader, audit, sessions),
+      );
+      return { controller, updatePluginConfig, setPluginSessionConfig };
+    }
+
+    it('is retracted from the plugin base config, where the earlier projection left it', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row(null, { apiToken: 'LEAKED', baseUrl: 'https://crm' }),
+        row(null, { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { config: { apiToken: null, baseUrl: 'https://crm' } });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm', apiToken: null });
+    });
+
+    it('is also retracted when the config is replaced without it', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row('*', { apiToken: 'LEAKED', baseUrl: 'https://crm' }),
+        row('*', { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://crm' } });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm', apiToken: null });
+    });
+
+    it('leaves the base config alone when the instance moves in from a concrete session', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row('sess-1', { apiToken: 'SLICE-ONLY', baseUrl: 'https://crm' }),
+        row(null, { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: null });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm' });
+    });
+
+    it('leaves the base config alone when the instance moves out to a concrete session', async () => {
+      const { controller, updatePluginConfig, setPluginSessionConfig } = patchWith(
+        row(null, { apiToken: 'LEAKED', baseUrl: 'https://crm' }),
+        row('sess-1', { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: 'sess-1' });
+
+      expect(updatePluginConfig).not.toHaveBeenCalled();
+      expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-1', { baseUrl: 'https://crm' });
+    });
+  });
+
   it('returns a bound instance to all sessions on PATCH sessionScope:null', async () => {
     const { loader, audit, setPluginSessionConfig, setPluginSessions, updatePluginConfig } = build();
     (loader.getPlugin as jest.Mock).mockReturnValue({
