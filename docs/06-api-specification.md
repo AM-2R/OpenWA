@@ -5263,7 +5263,7 @@ Prometheus exposition scrape of OpenWA process + session + message metrics; gate
 
 **Response** `200`
 
-Content-Type `text/plain; version=0.0.4; charset=utf-8`, `Cache-Control: no-store`. Raw text (no JSON envelope):
+Content-Type `text/plain` with the parameters `version=0.0.4` and `charset=utf-8` (the gateway sends `text/plain; charset=utf-8; version=0.0.4`; parameter order is not significant, so do not compare the header as a string), `Cache-Control: no-store`. Raw text (no JSON envelope):
 
 When the data database cannot be read the database-derived series (`openwa_sessions*`,
 `openwa_messages*`) are OMITTED rather than reported as zero — a zero would fire an alert
