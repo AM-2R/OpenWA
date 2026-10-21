@@ -93,7 +93,9 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
     const top = fitsBelow ? anchor.bottom + gap : Math.max(margin, anchor.top - gap - height);
     const start = rtl ? anchor.left : anchor.right - width;
     const left = Math.min(Math.max(margin, start), window.innerWidth - width - margin);
-    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, insetInlineEnd: 'auto' });
+    // Physical edges: the stylesheet pins the end edge, and releasing it as inset-inline-end would release `left`
+    // in a right-to-left page, throwing the computed position away.
+    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, right: 'auto' });
   }, [open]);
 
   // Closes on a press outside and on Escape, which it takes in the capture phase so the page leaves the

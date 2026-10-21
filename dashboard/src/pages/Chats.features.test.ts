@@ -710,6 +710,19 @@ test("dismissing a dialog the room's menu opened, or the menu itself, returns fo
   assert.equal(focusedName(), 'More actions', 'focus fell to the page after Escape');
 });
 
+test("a row's menu is placed by physical edges, so a right-to-left page keeps the position it computed", async () => {
+  const { screen, fireEvent } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  const popover = container.querySelector('.chat-row-menu-popover') as HTMLElement;
+  assert.notEqual(popover.style.left, '', 'no horizontal position was set');
+  // The stylesheet pins the end edge with inset-inline-end. Releasing it with that same logical property would,
+  // right-to-left, release the left edge that was just set; the physical right edge is the one to release.
+  assert.equal(popover.style.right, 'auto', 'the stylesheet still pins the popover by its end edge');
+  assert.ok(!/inset-inline/.test(popover.getAttribute('style') ?? ''), 'a logical edge can undo the physical one');
+});
+
 test('archiving a chat moves it into the archive view, and unarchiving brings it back', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   renderPage();
