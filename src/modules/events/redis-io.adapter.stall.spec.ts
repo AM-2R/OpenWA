@@ -26,7 +26,10 @@ class FakeRedis {
         pending = Buffer.concat([pending, chunk]);
         for (const command of FakeRedis.takeCommands(pending, rest => (pending = rest))) {
           if (command[0].toUpperCase() === 'PUBLISH') this.published.push(command[2]);
-          if (!this.silent) socket.write(FakeRedis.reply(command));
+          // A stalled peer answers nothing the publisher or its reconnect asks. Subscriptions are exempt: the adapter
+          // issues them without a handler, when a namespace is first used, and a SUBSCRIBE that no reply ever
+          // settles is rejected as an unhandled rejection when the client is closed, which ends a Jest worker.
+          if (!this.silent || /^p?subscribe$/i.test(command[0])) socket.write(FakeRedis.reply(command));
         }
       });
     });
