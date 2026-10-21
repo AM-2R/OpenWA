@@ -1007,7 +1007,11 @@ test("a row's menu sits fixed above the list, and scrolling the list closes it",
   const popover = container.querySelector('.chat-row-menu-popover') as HTMLElement;
   assert.equal(popover.style.position, 'fixed', 'the menu can be clipped by the scrolling list');
   fireEvent.scroll(popover.closest('.chat-item-wrap')?.parentElement as HTMLElement);
-  assert.equal(container.querySelector('.chat-row-menu-popover'), null, 'the menu stayed open, adrift from its row');
+  assert.equal(
+    container.querySelectorAll('.chat-row-menu-popover').length,
+    0,
+    'the menu stayed open, adrift from its row',
+  );
 });
 
 /** The accessible name of the element that has focus: DOM nodes are compared by name, as a failed deepEqual on them hangs. */
@@ -1072,7 +1076,11 @@ test('a row menu stays open while the open thread scrolls, which does not move i
 
   // The list the row sits in does move it.
   fireEvent.scroll(container.querySelector('.chats-list') as HTMLElement);
-  assert.equal(container.querySelector('.chat-row-menu-popover'), null, 'the menu stayed open, adrift from its row');
+  assert.equal(
+    container.querySelectorAll('.chat-row-menu-popover').length,
+    0,
+    'the menu stayed open, adrift from its row',
+  );
 });
 
 test("a row's menu is placed by physical edges, so a right-to-left page keeps the position it computed", async () => {
@@ -1223,7 +1231,7 @@ test('a number lookup that answers after the panel closed and the session change
   release();
   await settle();
 
-  assert.equal(container.querySelector('.room-header'), null, "A's lookup opened a chat on B");
+  assert.equal(container.querySelectorAll('.room-header').length, 0, "A's lookup opened a chat on B");
   assert.ok(!screen.queryByText('15550009999'), "A's lookup added a row to B's list");
 });
 
@@ -1243,7 +1251,7 @@ test('a group created after the session changed is not opened on the new session
   // Back to the new-chat view, Back again out of the panel, then to the other session.
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-  await waitFor(() => assert.equal(container.querySelector('.new-chat-panel'), null, 'the panel stayed open'));
+  await waitFor(() => assert.equal(container.querySelectorAll('.new-chat-panel').length, 0, 'the panel stayed open'));
   switchSession(container, SECOND_SESSION.id);
   await waitFor(() =>
     assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
@@ -1251,7 +1259,7 @@ test('a group created after the session changed is not opened on the new session
   release();
   await settle();
 
-  assert.equal(container.querySelector('.room-header'), null, 'the new group opened on the other session');
+  assert.equal(container.querySelectorAll('.room-header').length, 0, 'the new group opened on the other session');
   assert.ok(!screen.queryByText('Late team'), "the group was added to the other session's list");
 });
 

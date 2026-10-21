@@ -125,7 +125,7 @@ test('the quick filters show the active one as pressed, on the Chats tab only', 
   rtl.cleanup();
 
   const channels = renderSidebar('channels', [], { all: [], shown: [] });
-  assert.equal(channels.container.querySelector('.chat-filters'), null);
+  assert.equal(channels.container.querySelectorAll('.chat-filters').length, 0);
 });
 
 test('a channel search with no match says so instead of showing a blank list', () => {
