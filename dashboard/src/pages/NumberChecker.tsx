@@ -170,6 +170,7 @@ export function NumberChecker() {
   const singleFormattedNumber = useMemo(() => {
     return formatNumberForCheck(phoneNumber);
   }, [phoneNumber, formatNumberForCheck]);
+  const singleTypedDigits = normalizePhoneText(phoneNumber).replace(/[^0-9]/g, '');
 
   // Batch parsing statistics
   const batchParsedStats = useMemo(() => {
@@ -509,8 +510,7 @@ export function NumberChecker() {
 
                 {phoneNumber.trim() && (
                   <div className="nc-format-preview">
-                    {phoneNumber.replace(/[^0-9]/g, '').length === 10 &&
-                    singleFormattedNumber === '91' + phoneNumber.replace(/[^0-9]/g, '') ? (
+                    {singleTypedDigits.length === 10 && singleFormattedNumber === '91' + singleTypedDigits ? (
                       <span className="nc-format-pill highlight">
                         <Trans
                           i18nKey="numberChecker.preview.prefixed"
@@ -518,7 +518,7 @@ export function NumberChecker() {
                           components={{ strong: <strong dir="ltr" /> }}
                         />
                       </span>
-                    ) : phoneNumber.replace(/[^0-9]/g, '').length === 12 ? (
+                    ) : singleFormattedNumber.length === 12 && singleFormattedNumber === singleTypedDigits ? (
                       <span className="nc-format-pill">
                         <Trans
                           i18nKey="numberChecker.preview.kept"

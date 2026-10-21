@@ -155,6 +155,22 @@ for (const [raw, autoPrefix, expected] of [
   });
 }
 
+// The preview describes the number that will be looked up, not the digits that were typed.
+for (const [typed, autoPrefix, expected] of [
+  ['0065 8123 4567', false, 'Will check as: +6581234567 (10 digits)'],
+  ['+65 8123 4567', true, 'Will check as: +6581234567 (10 digits)'],
+  ['916581234567', false, 'Will check as: +916581234567 (12 digits \u2192 kept as-is)'],
+  ['9876543210', true, 'Will check as: +919876543210 (10 digits \u2192 auto-prefixed with 91)'],
+] as const) {
+  test(`NumberChecker: the preview for ${typed} with auto-prefix ${autoPrefix} reads ${expected}`, async () => {
+    const { container } = renderComponent();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+    if (autoPrefix) rtl.fireEvent.click(rtl.screen.getByRole('checkbox'));
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: typed } });
+    assert.equal(container.querySelector('.nc-format-preview')?.textContent, expected);
+  });
+}
+
 test('NumberChecker: bulk parsing deduplicates explicit international numbers without adding +91', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
