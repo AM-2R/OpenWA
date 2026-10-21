@@ -578,14 +578,24 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
     },
   };
 
-  function build() {
+  // What the earlier projection of the instance left in the plugin's base config.
+  const projected = {
+    apiToken: 'LEAKED',
+    baseUrl: 'https://crm',
+    replyDelayMs: 5,
+    crm: { key: 'K', url: 'https://x' },
+  };
+
+  function build(baseConfig: Record<string, unknown> = projected) {
     const updatePluginConfig = jest.fn();
     const setPluginSessionConfig = jest.fn();
     const setPluginSessions = jest.fn();
     const loader = {
-      getPlugin: jest
-        .fn()
-        .mockReturnValue({ manifest: { id: 'chatwoot', configSchema: schema }, activeSessions: ['*'] }),
+      getPlugin: jest.fn().mockReturnValue({
+        manifest: { id: 'chatwoot', configSchema: schema },
+        activeSessions: ['*'],
+        config: baseConfig,
+      }),
       setPluginSessionConfig,
       setPluginSessions,
       updatePluginConfig,
@@ -679,6 +689,22 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
 
     expect(updatePluginConfig).not.toHaveBeenCalled();
     expect(list).toHaveBeenCalledTimes(3); // only the '*' retirement check reads the siblings
+  });
+
+  // The base config is shared. A value the operator has set on the plugin since, or one a sibling projected
+  // after this instance, is not this instance's to take back.
+  it('leaves a base value that is no longer the one the instance put there', async () => {
+    const operator = build({ ...projected, apiToken: 'OPERATOR' });
+
+    await operator.svc.applyScopeBinding('chatwoot', null, {}, false, { previousConfig: { apiToken: 'LEAKED' } });
+    expect(operator.updatePluginConfig).not.toHaveBeenCalled();
+    expect(operator.list).toHaveBeenCalledTimes(1); // only the '*' retirement check reads the siblings
+
+    const partial = build({ ...projected, crm: { key: 'OTHER', url: 'https://x' } });
+    await partial.svc.applyScopeBinding('chatwoot', null, { baseUrl: 'https://crm' }, true, {
+      previousConfig: projected,
+    });
+    expect(partial.updatePluginConfig).toHaveBeenCalledWith('chatwoot', { apiToken: null, baseUrl: 'https://crm' });
   });
 
   it('only looks at siblings when a secret was removed', async () => {

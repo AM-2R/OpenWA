@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -285,9 +286,10 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * defines (none, for a teardown). The wildcard projection only merges, so on its own it cannot delete a
    * key: a secret the operator revoked, or one of an instance that was disabled, deleted or moved off the
    * wildcard scope, would stay in the base config, in registry.json and in the config of every hook and
-   * ingress delivery. Each is written as the value another enabled wildcard instance still defines (the
-   * last by id, as boot reconciliation replays them), else as null, which is how a removed top-level
-   * secret is stored there. Siblings are read only when a secret was actually removed.
+   * ingress delivery. A key is taken back only while the base config still holds the value the instance
+   * put there. It is written as the value another enabled wildcard instance still defines (the last by id,
+   * as boot reconciliation replays them), else as null, which is how a removed top-level secret is stored
+   * there. Siblings are read only when a secret was actually removed.
    */
   private async retractedSecrets(
     pluginId: string,
@@ -295,9 +297,16 @@ export class ScopeBindingService implements OnApplicationBootstrap {
     previous: Record<string, unknown> | null | undefined,
   ): Promise<Record<string, unknown>> {
     const before = previous ?? {};
-    const properties = this.loader.getPlugin(pluginId)?.manifest.configSchema?.properties ?? {};
+    const plugin = this.loader.getPlugin(pluginId);
+    const properties = plugin?.manifest.configSchema?.properties ?? {};
     const removed = Object.keys(before).filter(
-      key => holdsSecret(properties[key]) && isDefined(before[key]) && !isDefined(config[key]),
+      key =>
+        holdsSecret(properties[key]) &&
+        isDefined(before[key]) &&
+        !isDefined(config[key]) &&
+        // Only what this instance put there: a value set on the plugin since, or one a sibling projected
+        // after it, is not the instance's to take back.
+        isDeepStrictEqual(plugin?.config[key], before[key]),
     );
     if (removed.length === 0) return {};
     const siblings = (await this.instances.list(pluginId))

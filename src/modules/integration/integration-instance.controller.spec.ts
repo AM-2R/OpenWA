@@ -211,10 +211,18 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       enabled,
     });
 
-    /** `before` is the row PATCH reads; `after` is what update() stores; `others` are the sibling rows. */
-    function patchWith(before: ReturnType<typeof row>, after: ReturnType<typeof row>, others: unknown[] = []) {
+    /**
+     * `before` is the row PATCH reads; `after` is what update() stores; `others` are the sibling rows. The
+     * plugin's base config holds what the instance projected into it, unless `base` says otherwise.
+     */
+    function patchWith(
+      before: ReturnType<typeof row>,
+      after: ReturnType<typeof row>,
+      others: unknown[] = [],
+      base: Record<string, unknown> = before.config,
+    ) {
       const { loader, audit, updatePluginConfig, setPluginSessionConfig } = build();
-      (loader.getPlugin as jest.Mock).mockReturnValue({ manifest, activeSessions: ['*'] });
+      (loader.getPlugin as jest.Mock).mockReturnValue({ manifest, activeSessions: ['*'], config: base });
       const instances = {
         resolve: jest.fn().mockResolvedValue(before),
         update: jest.fn().mockResolvedValue(after),
@@ -232,8 +240,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
     }
 
     /** DELETE reads the row, removes it, then lists what is left: only `others`. */
-    function deleteWith(before: ReturnType<typeof row>, others: unknown[] = []) {
-      const built = patchWith(before, before, others);
+    function deleteWith(
+      before: ReturnType<typeof row>,
+      others: unknown[] = [],
+      base: Record<string, unknown> = before.config,
+    ) {
+      const built = patchWith(before, before, others, base);
       const instances = (built.controller as unknown as { instances: { list: jest.Mock } }).instances;
       instances.list.mockResolvedValue(others);
       return built;
@@ -305,6 +317,14 @@ describe('IntegrationInstanceController provisioning bridge', () => {
 
       expect(updatePluginConfig).toHaveBeenCalledTimes(1);
       expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { apiToken: null });
+    });
+
+    it('is left alone when the plugin config no longer holds the value the instance put there', async () => {
+      const { controller, updatePluginConfig } = deleteWith(row(null, held), [], { ...held, apiToken: 'OPERATOR' });
+
+      await controller.remove('chatwoot-adapter', 'acct1');
+
+      expect(updatePluginConfig).not.toHaveBeenCalled();
     });
 
     it('is handed back as the value another enabled wildcard instance still defines', async () => {
