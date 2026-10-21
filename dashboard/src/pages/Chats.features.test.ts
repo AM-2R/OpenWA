@@ -113,6 +113,8 @@ const lidPhones: Record<string, string> = {};
 let failLidPhones = false;
 // When true, it answers a phone that is no string, which nothing in the page expects.
 let garbleLidPhones = false;
+// When true, the number check answers that the number is not on WhatsApp.
+let numberNotRegistered = false;
 // How many more privacy-id chats the list holds, none of which resolves to a phone.
 let extraLidChats = 0;
 const extraLidChat = (n: number): Chat => ({
@@ -292,7 +294,11 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts/check/`)) {
-      return gated('check', () => jsonResponse({ exists: true, whatsappId: RESOLVED_ID }));
+      return gated('check', () =>
+        numberNotRegistered
+          ? jsonResponse({ number: '15550009999', exists: false, whatsappId: null })
+          : jsonResponse({ exists: true, whatsappId: RESOLVED_ID }),
+      );
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts?`)) {
       return gated('contacts', () =>
@@ -358,6 +364,7 @@ afterEach(async () => {
   failContacts = false;
   failLidPhones = false;
   garbleLidPhones = false;
+  numberNotRegistered = false;
   extraLidChats = 0;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
@@ -521,6 +528,63 @@ test('an answer about a privacy id that the page cannot read does not stop a cha
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
   await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
+});
+
+// ── A phone number inside a sentence is placed in a left-to-right isolate: its plus sign and spaces are neutral to
+// the bidi algorithm, so in a right-to-left sentence the digit groups would be shown in reverse order. ──
+
+const LTR_NUMBER = `${String.fromCodePoint(0x2066)}+1 555 000 9999${String.fromCodePoint(0x2069)}`;
+
+test('the typed number keeps its digit groups together in the start chat label', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
+    target: { value: TYPED_NUMBER },
+  });
+  const start = await screen.findByRole('button', { name: /^Start chat with/ });
+  assert.equal(start.textContent?.includes(LTR_NUMBER), true, `the label is not isolated: "${start.textContent}"`);
+});
+
+test('the typed number keeps its digit groups together in the add to group label', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  fireEvent.click(screen.getByRole('button', { name: 'New group' }));
+  fireEvent.change(screen.getByLabelText('Search participants or enter a number'), { target: { value: TYPED_NUMBER } });
+  const add = await screen.findByRole('button', { name: /^Add \S/ });
+  assert.equal(add.textContent?.includes(LTR_NUMBER), true, `the label is not isolated: "${add.textContent}"`);
+});
+
+test('the number a check finds unregistered is named inside an isolate in the panel toast', async () => {
+  const { screen, fireEvent } = rtl;
+  numberNotRegistered = true;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
+    target: { value: TYPED_NUMBER },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: /^Start chat with/ }));
+  const toast = await screen.findByText(/is not registered on WhatsApp/);
+  assert.equal(toast.textContent?.includes(LTR_NUMBER), true, `the toast is not isolated: "${toast.textContent}"`);
+});
+
+test('the number a check finds unregistered is named inside an isolate when adding to a group', async () => {
+  const { screen, fireEvent, within } = rtl;
+  listGroup = true;
+  numberNotRegistered = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  fireEvent.change(within(dialog).getByLabelText('Add a number with country code'), {
+    target: { value: TYPED_NUMBER },
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+  const toast = await screen.findByText(/is not registered on WhatsApp/);
+  assert.equal(toast.textContent?.includes(LTR_NUMBER), true, `the toast is not isolated: "${toast.textContent}"`);
 });
 
 test('only the newest privacy-id chats are asked about, not every one the list holds', async () => {

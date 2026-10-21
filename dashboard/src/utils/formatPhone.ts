@@ -61,3 +61,12 @@ export function formatPhoneForDisplay(phoneOrJid: string): string | null {
   const prefixGroups = prefix.match(/.{1,3}/g) ?? [prefix];
   return `+${cc} ${[...prefixGroups, last4].join(' ')}`;
 }
+
+/**
+ * A phone number to place inside a sentence. Its plus sign and the spaces between its digit groups are neutral to
+ * the bidi algorithm, so inside a right-to-left sentence the groups are shown in reverse order; a left-to-right
+ * isolate keeps the number one run, whatever the sentence around it does.
+ */
+export function isolateNumber(number: string): string {
+  return `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
+}

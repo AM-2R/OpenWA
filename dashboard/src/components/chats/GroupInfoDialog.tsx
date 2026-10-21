@@ -15,7 +15,7 @@ import {
 import { useProfilePicture } from '../../hooks/useProfilePicture';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
-import { formatPhoneForDisplay } from '../../utils/formatPhone';
+import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import ChatAvatar from './ChatAvatar';
 
@@ -166,7 +166,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       const digits = newMember.replace(/\D/g, '').replace(/^00/, '');
       const check = await contactApi.checkNumber(session.id, digits);
       if (!check.exists || !check.whatsappId) {
-        throw new Error(t('chats.newChat.notOnWhatsApp', { number: formatPhoneForDisplay(digits) ?? `+${digits}` }));
+        const number = isolateNumber(formatPhoneForDisplay(digits) ?? `+${digits}`);
+        throw new Error(t('chats.newChat.notOnWhatsApp', { number }));
       }
       return sessionApi.addGroupParticipants(session.id, group.id, [check.whatsappId]);
     });

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Check, Loader2, Phone, Search, Users, X } from 'lucide-react';
 import { contactApi, sessionApi, type Chat, type Contact } from '../../services/api';
-import { formatPhoneForDisplay } from '../../utils/formatPhone';
+import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import ChatAvatar from './ChatAvatar';
@@ -126,7 +126,8 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
     : contacts;
 
   const typedNumber = toInternationalDigits(query);
-  const typedNumberLabel = typedNumber ? (formatPhoneForDisplay(typedNumber) ?? `+${typedNumber}`) : '';
+  // Placed in sentences (the start and add buttons, the not-registered toast), so it goes in as an isolate.
+  const typedNumberLabel = typedNumber ? isolateNumber(formatPhoneForDisplay(typedNumber) ?? `+${typedNumber}`) : '';
   const showNumberHint = Boolean(query.trim()) && !typedNumber && /^[\d\s+()-]+$/.test(query.trim());
 
   // Resolve a typed number to its canonical WhatsApp id. The send routes accept an unregistered number
