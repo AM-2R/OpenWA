@@ -22,6 +22,10 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { SendIdempotencyKey } from './entities/send-idempotency-key.entity';
 import { SendIdempotencyService } from './idempotency/send-idempotency.service';
 import { SendIdempotencyInterceptor } from './idempotency/send-idempotency.interceptor';
+import * as sessionWriteScope from '../../common/utils/session-write-scope';
+
+// The real function, held before any test spies on the module export.
+const realCaptureSessionWrites = sessionWriteScope.captureSessionWrites;
 
 /** Pacing is off by default in these tests; the governor's own spec covers its behaviour. */
 const inertPacing = (): SendPacingService =>
@@ -353,6 +357,36 @@ describe('MessageSendService', () => {
       expect(calls).toHaveLength(2);
       expect(calls[0][1]).toMatchObject({ message: { status: MessageStatus.PENDING } });
       expect(calls[1][1]).toMatchObject({ message: { status: MessageStatus.FAILED } });
+    });
+
+    // The row went with its session between the PENDING insert and this write: a provider must not be
+    // handed a terminal state for a row that no longer exists, or it would index a ghost document.
+    it.each([
+      [
+        'FAILED',
+        async () => {
+          mockEngine.sendTextMessage.mockRejectedValueOnce(new Error('engine down'));
+          await expect(service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' })).rejects.toThrow();
+        },
+      ],
+      [
+        'SENT',
+        async () => {
+          await expect(service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' })).resolves.toMatchObject({
+            messageId: 'wa-msg-1',
+          });
+        },
+      ],
+    ])('does not re-emit message:persisted with %s when the update matched no row', async (_state, run) => {
+      (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+
+      await run();
+
+      const calls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      ) as unknown[][];
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1]).toMatchObject({ message: { status: MessageStatus.PENDING } });
     });
 
     it('logs an engine-side send failure with the session, chat and type', async () => {
@@ -836,6 +870,13 @@ describe('MessageSendService', () => {
       expect(media?.data).toBeUndefined();
       expect(media?.mimetype).toBe('image/png');
       expect(media?.filename).toBe('pic.png');
+      // `saved` is the entity handed to save() and mutated afterwards, so it proves nothing about what
+      // was written: the UPDATE is what has to carry the stripped metadata.
+      const [, patch] = (repository.update as jest.Mock).mock.calls.at(-1) as [unknown, Record<string, unknown>];
+      expect(patch).toEqual({
+        status: MessageStatus.FAILED,
+        metadata: { media: { mimetype: 'image/png', filename: 'pic.png' } },
+      });
     });
   });
 
@@ -1547,6 +1588,57 @@ describe('MessageSendService', () => {
       expect(release).toHaveBeenCalledTimes(1);
       expect(release).toHaveBeenCalledWith(true);
     });
+
+    // Retiring a session settles every admission whose send still holds a subscription. A send that has
+    // finished must hold none, or each one leaves a closure in the session's generation for good.
+    it('leaves no retire subscription behind once the send settles', async () => {
+      await service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' });
+      expect(release).toHaveBeenCalledTimes(1);
+
+      sessionWriteScope.closeSessionWrites(repository, 'sess-1').release();
+
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('write scopes', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    const closeSpies = () => {
+      const closes: jest.SpyInstance[] = [];
+      jest.spyOn(sessionWriteScope, 'captureSessionWrites').mockImplementation((...args) => {
+        const scope = realCaptureSessionWrites(...args);
+        closes.push(jest.spyOn(scope, 'close'));
+        return scope;
+      });
+      return closes;
+    };
+
+    // Left open, a scope keeps its session's write state from ever being released.
+    it('closes the scope a direct row save captures for itself', async () => {
+      const closes = closeSpies();
+
+      await service.saveOutgoingMessage('sess-1', { chatId: 'test@c.us', type: 'text', body: 'x' });
+
+      expect(closes).toHaveLength(1);
+      expect(closes[0]).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['succeeds', () => undefined],
+      [
+        'is refused by the engine',
+        () => mockEngine.sendTextMessage.mockRejectedValueOnce(new BadRequestException('refused')),
+      ],
+    ])('closes the scope of a send that %s', async (_outcome, arrange) => {
+      const closes = closeSpies();
+      arrange();
+
+      await service.sendText('sess-1', { chatId: 'test@c.us', text: 'hi' }).catch(() => undefined);
+
+      expect(closes).toHaveLength(1);
+      expect(closes[0]).toHaveBeenCalled();
+    });
   });
 
   // ── buildMediaInput (via sendImage) ───────────────────────────────
@@ -1921,6 +2013,16 @@ describe('MessageSendService', () => {
         status: MessageStatus.SENT,
         metadata: { media: { mimetype: 'image/png', data: 'QUJD' } },
       });
+
+      expect(archive.archive).not.toHaveBeenCalled();
+    });
+
+    it('archives nothing for a SENT update that matched no row, whose row went with its session', async () => {
+      const archive = { archive: jest.fn() };
+      const svc = withFlag(true, archive);
+      (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+
+      await svc.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
 
       expect(archive.archive).not.toHaveBeenCalled();
     });

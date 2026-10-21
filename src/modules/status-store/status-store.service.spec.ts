@@ -81,6 +81,33 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     expect(stored).toEqual(['dup', 'other']);
   });
 
+  // Left open, the scope an ingest captures for itself keeps its session's write state from ever being released.
+  it('closes the scope it captures for itself, for a new status and for one already stored', async () => {
+    const closes: jest.SpyInstance[] = [];
+    const capture = service.captureWrites.bind(service);
+    const spy = jest.spyOn(service, 'captureWrites').mockImplementation(sessionId => {
+      const scope = capture(sessionId);
+      closes.push(jest.spyOn(scope, 'close'));
+      return scope;
+    });
+    const status = {
+      waStatusId: 'scope-close',
+      contactJid: '628111@c.us',
+      type: 'text' as const,
+      caption: 'hi',
+      postedAt: Date.now(),
+    };
+    try {
+      expect((await service.ingest('sess-scope', status)).created).toBe(true);
+      expect((await service.ingest('sess-scope', status)).created).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(closes).toHaveLength(2);
+    for (const close of closes) expect(close).toHaveBeenCalled();
+  });
+
   it('ingest writes a text row with expiresAt = postedAt + 24h, flagged as created', async () => {
     const postedAt = Date.now();
     const { row, created } = await service.ingest('sess', {
