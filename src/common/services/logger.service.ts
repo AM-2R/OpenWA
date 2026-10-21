@@ -80,6 +80,9 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
   return walk(value, []);
 }
 
+/** Written in place of a message or trace that cannot be read. */
+const UNPRINTABLE = '[Unprintable]';
+
 /** A non-string, non-Error message as one line of text (redacted like metadata, never throwing). */
 function stringifyMessage(message: unknown): string {
   try {
@@ -88,7 +91,7 @@ function stringifyMessage(message: unknown): string {
     try {
       return String(message);
     } catch {
-      return '[Unprintable]';
+      return UNPRINTABLE;
     }
   }
 }
@@ -174,18 +177,29 @@ export class LoggerService implements NestLoggerService {
   private writeLog(level: LogLevel, rawMessage: unknown, context?: string | LogContext, rawTrace?: unknown): void {
     if (!this.shouldLog(level)) return;
 
-    // An Error serializes to `{}`, so take its message and stack apart instead of losing both.
-    if (rawMessage instanceof Error) {
-      rawTrace ??= rawMessage.stack;
-      rawMessage = rawMessage.message;
+    // The message and trace are whatever the caller (or Nest) handed over, so reading them is guarded like the metadata.
+    let message: string;
+    try {
+      // An Error serializes to `{}`, so take its message and stack apart instead of losing both.
+      if (rawMessage instanceof Error) {
+        rawTrace ??= rawMessage.stack;
+        rawMessage = rawMessage.message;
+      }
+      message = typeof rawMessage === 'string' ? rawMessage : stringifyMessage(rawMessage);
+    } catch {
+      message = UNPRINTABLE;
     }
-    const message = typeof rawMessage === 'string' ? rawMessage : stringifyMessage(rawMessage);
-    const trace =
-      rawTrace === undefined || typeof rawTrace === 'string'
-        ? rawTrace
-        : rawTrace instanceof Error
-          ? (rawTrace.stack ?? rawTrace.message)
-          : stringifyMessage(rawTrace);
+    let trace: string | undefined;
+    try {
+      trace =
+        rawTrace === undefined || typeof rawTrace === 'string'
+          ? rawTrace
+          : rawTrace instanceof Error
+            ? (rawTrace.stack ?? rawTrace.message)
+            : stringifyMessage(rawTrace);
+    } catch {
+      trace = UNPRINTABLE;
+    }
 
     const timestamp = new Date().toISOString();
     const contextName = typeof context === 'string' ? context : this.context;

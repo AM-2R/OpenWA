@@ -302,6 +302,79 @@ describe('LoggerService', () => {
     });
   });
 
+  // Nest passes the framework's own message and trace through, so the two slots hold whatever it was handed.
+  describe('a message or trace that cannot be read', () => {
+    const revokedProxy = (): object => {
+      const { proxy, revoke } = Proxy.revocable({}, {});
+      revoke();
+      return proxy;
+    };
+    const throwingPrototype = (): object =>
+      new Proxy(
+        {},
+        {
+          getPrototypeOf: (): never => {
+            throw new Error('getPrototypeOf');
+          },
+        },
+      );
+    const throwingMessage = (): Error =>
+      Object.defineProperty(new Error('boom'), 'message', {
+        get: (): never => {
+          throw new Error('message getter');
+        },
+      });
+
+    describe.each([LogFormat.JSON, LogFormat.PRETTY])('in %s output', format => {
+      beforeEach(() => {
+        LoggerService.setLogFormat(format);
+      });
+
+      it.each([
+        ['a revoked proxy', revokedProxy],
+        ['a proxy whose prototype read throws', throwingPrototype],
+        ['an Error whose message getter throws', throwingMessage],
+      ])('writes %s passed as the message as [Unprintable]', (_name, unreadable) => {
+        const errorSpy = jest.spyOn(console, 'error');
+
+        expect(() => logger.log(unreadable())).not.toThrow();
+        expect(() => logger.error(unreadable())).not.toThrow();
+
+        expect(getRawOutput(consoleSpy)).toContain('[Unprintable]');
+        expect(getRawOutput(errorSpy)).toContain('[Unprintable]');
+      });
+
+      it.each([
+        ['a revoked proxy', revokedProxy],
+        ['a proxy whose prototype read throws', throwingPrototype],
+      ])('writes %s passed as the trace as [Unprintable] and keeps the message', (_name, unreadable) => {
+        const errorSpy = jest.spyOn(console, 'error');
+
+        expect(() => logger.error('saved-message', unreadable())).not.toThrow();
+
+        expect(getRawOutput(errorSpy)).toContain('saved-message');
+        expect(getRawOutput(errorSpy)).toContain('[Unprintable]');
+      });
+
+      it('keeps the message when an Error whose message getter throws is passed as the trace', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+
+        expect(() => logger.error('saved-message', throwingMessage())).not.toThrow();
+
+        expect(getRawOutput(errorSpy)).toContain('saved-message');
+      });
+
+      it('keeps a readable trace when the message cannot be read', () => {
+        const errorSpy = jest.spyOn(console, 'error');
+
+        logger.error(revokedProxy(), 'saved-trace');
+
+        expect(getRawOutput(errorSpy)).toContain('[Unprintable]');
+        expect(getRawOutput(errorSpy)).toContain('saved-trace');
+      });
+    });
+  });
+
   describe('error', () => {
     it('should log error messages to console.error', () => {
       const errorSpy = jest.spyOn(console, 'error');
