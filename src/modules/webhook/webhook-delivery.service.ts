@@ -194,6 +194,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * The promise is cached, not its result, so a burst of receipts on a cold entry shares one lookup.
    */
   private readonly optInSubscriptions = new Map<string, { events: Promise<ReadonlySet<string>>; expiresAt: number }>();
+  /**
+   * Opt-in events admitted by dispatch() and not yet settled. One flush of buffered receipts is
+   * thousands of dispatches in a tick, so they hold at most a quarter of the park budget, as a session
+   * gate does; the excess is dropped before it opens an outbox row, a failure row or a hook call.
+   */
+  private optInPending = 0;
+  /** Opt-in events dropped since the allowance last emptied, reported when it does. */
+  private optInDropped = 0;
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -285,9 +293,34 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data);
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
-    if (WILDCARD_EXCLUDED_EVENTS.includes(event) && !(await this.sessionNamesOptInEvent(sessionId, event))) return;
+    if (!(await this.sessionNamesOptInEvent(sessionId, event))) return;
+    if (this.optInPending >= Math.max(1, Math.floor(this.dispatchMaxQueued / 4))) {
+      if (this.optInDropped++ === 0) {
+        this.logger.warn(
+          `Dropping ${event} events: more are pending than a quarter of WEBHOOK_DISPATCH_MAX_QUEUED allows`,
+          { event, pending: this.optInPending, action: 'webhook_opt_in_dropping' },
+        );
+      }
+      return;
+    }
+    this.optInPending++;
+    try {
+      await this.fanOut(sessionId, event, data);
+    } finally {
+      if (--this.optInPending === 0 && this.optInDropped > 0) {
+        this.logger.warn(`Dropped ${this.optInDropped} opt-in events while their allowance was full`, {
+          dropped: this.optInDropped,
+          action: 'webhook_opt_in_dropped',
+        });
+        this.optInDropped = 0;
+      }
+    }
+  }
+
+  private async fanOut(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
     const webhooks = await this.loadActiveWebhooks(sessionId, event);
     const matchingWebhooks = this.filterMatchingWebhooks(webhooks, event, data);
 

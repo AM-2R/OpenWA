@@ -2822,6 +2822,116 @@ describe('WebhookDeliveryService', () => {
       hanging.forEach(release => release());
       await a;
     });
+
+    // An opt-in event fires once per recipient and status, so one flush of buffered receipts can be
+    // thousands of dispatches in a single tick. They must not spend the budget every session shares.
+    describe('a burst of opt-in events', () => {
+      const receipt = (i: number) => ({ id: 'OUT1', participant: `${i}@c.us`, status: 'read' });
+      const hangingReceipts: Array<() => void> = [];
+      const warnSpy = () =>
+        jest.spyOn((service as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn');
+      const burst = (size: number) =>
+        Array.from({ length: size }, (_, i) => service.dispatch('sess-r', 'message.receipt', receipt(i)));
+      // Answers the receipts' receiver until every dispatch has settled, parked ones included.
+      const drain = async (dispatches: Array<Promise<void>>): Promise<void> => {
+        let settled = false;
+        void Promise.all(dispatches).then(() => (settled = true));
+        while (!settled) {
+          hangingReceipts.splice(0).forEach(release => release());
+          await new Promise(resolve => setImmediate(resolve));
+        }
+      };
+
+      beforeEach(() => {
+        hangingReceipts.length = 0;
+        // 4 slots and a park bound of 8, so the opt-in allowance, a quarter of 8, is 2 events at a time.
+        internals().dispatchLimiter = new ConcurrencyLimiter(4, 8);
+        internals().dispatchMaxQueued = 8;
+        hooksBySession['sess-r'] = [
+          createMockWebhook({ id: 'wh-r', url: 'https://receipt.example/hook', events: ['message.receipt'] }),
+        ];
+        hooksBySession['sess-o'] = [
+          createMockWebhook({ id: 'wh-o', url: 'https://other.example/hook', events: ['message.received'] }),
+        ];
+        mockFetch.mockImplementation((url: string) =>
+          url.startsWith('https://receipt.')
+            ? new Promise(resolve => hangingReceipts.push(() => resolve({ ok: true, status: 200 })))
+            : Promise.resolve({ ok: true, status: 200 }),
+        );
+      });
+
+      it('leaves the shared dispatch budget to the other sessions and records no failure for the excess', async () => {
+        const receipts = burst(14);
+        await settle(() => hangingReceipts.length > 1);
+
+        await service.dispatch('sess-o', 'message.received', {});
+
+        // The other session's event went out while the receipts were still waiting on their receiver.
+        expect(urlsCalled().filter(url => url.startsWith('https://other.'))).toHaveLength(1);
+        expect(insertedFailures).toEqual([]);
+        expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+        // Only the admitted receipts and the other session's event ever opened an outbox row.
+        expect(outboxService.open).toHaveBeenCalledTimes(3);
+
+        await drain(receipts);
+        expect(outboxService.close).toHaveBeenCalledTimes(3);
+      });
+
+      it('warns when it starts dropping, and again with the count once the admitted events are done', async () => {
+        const warn = warnSpy();
+        const receipts = burst(14);
+        await settle(() => hangingReceipts.length > 1);
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ action: 'webhook_opt_in_dropping' }),
+        );
+
+        await drain(receipts);
+
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn).toHaveBeenLastCalledWith(
+          expect.any(String),
+          expect.objectContaining({ action: 'webhook_opt_in_dropped', dropped: 12 }),
+        );
+      });
+
+      it('admits opt-in events again once the admitted ones are done, and warns again on the next burst', async () => {
+        const warn = warnSpy();
+        for (let round = 0; round < 2; round++) {
+          const receipts = burst(5);
+          await settle(() => hangingReceipts.length > 1);
+          await drain(receipts);
+        }
+
+        expect(urlsCalled()).toHaveLength(4);
+        expect(warn.mock.calls.filter(([, meta]) => (meta as { dropped?: number }).dropped === 3)).toHaveLength(2);
+      });
+
+      it('gives its place back when a dispatch throws', async () => {
+        const original = (configService.get as jest.Mock).getMockImplementation() as (key: string) => unknown;
+        (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) => {
+          if (key === 'webhook.mediaInlineMaxBytes') throw new Error('config unavailable');
+          return original(key) ?? def;
+        });
+        await Promise.allSettled(burst(2));
+        (configService.get as jest.Mock).mockImplementation(original);
+
+        const receipts = burst(2);
+        await settle(() => hangingReceipts.length > 1);
+
+        expect(hangingReceipts).toHaveLength(2);
+        await drain(receipts);
+      });
+
+      it('never holds back an event that is not opt-in', async () => {
+        await Promise.all(Array.from({ length: 6 }, () => service.dispatch('sess-o', 'message.received', {})));
+
+        expect(urlsCalled()).toHaveLength(6);
+        expect(insertedFailures).toEqual([]);
+      });
+    });
   });
 
   describe('delivery-failure dead-letter', () => {
