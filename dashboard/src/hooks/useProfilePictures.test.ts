@@ -73,9 +73,9 @@ interface Props {
   ids: string[];
 }
 
-function renderPictures(sessionId: string | undefined, ids: string[]) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
-  clients.push(client);
+function renderPictures(sessionId: string | undefined, ids: string[], existing?: QueryClient) {
+  const client = existing ?? new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  if (!existing) clients.push(client);
   const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
   return rtl.renderHook(({ sessionId, ids }: Props) => useProfilePictures(sessionId, ids), {
     wrapper,
@@ -323,6 +323,48 @@ test('an invalidated batch asks again for every id it holds, so a changed pictur
     ['a', 'b'],
     ['a', 'b'],
   ]);
+});
+
+test('a page that mounts again with the same ids reads the pictures from the cache and asks for nothing', async () => {
+  const first = renderPictures('s1', ['a', 'b', 'c']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 3));
+  const client = clients[clients.length - 1];
+  first.unmount();
+
+  const second = renderPictures('s1', ['a', 'b', 'c'], client);
+  await rtl.waitFor(() => assert.equal(Object.keys(second.result.current.data ?? {}).length, 3));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(requests.length, 1, 'a second mount asked for pictures the cache already held');
+  assert.equal(second.result.current.isStale, false);
+  assert.equal(second.result.current.data?.a, urlFor('s1', 'a'));
+});
+
+test('a page that mounts again with one more id asks for that id alone', async () => {
+  const first = renderPictures('s1', ['a', 'b', 'c']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 3));
+  const client = clients[clients.length - 1];
+  first.unmount();
+
+  const second = renderPictures('s1', ['b', 'c', 'd'], client);
+  await rtl.waitFor(() => assert.equal(second.result.current.data?.d, urlFor('s1', 'd')));
+  assert.deepEqual(asked(), [['a', 'b', 'c'], ['d']]);
+});
+
+test('signing out drops the held pictures, so the next actor is shown none of them', async () => {
+  const first = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.equal(Object.keys(first.result.current.data ?? {}).length, 2));
+  const client = clients[clients.length - 1];
+  first.unmount();
+  // What the dashboard does on logout (clearActorState).
+  client.clear();
+
+  const second = renderPictures('s1', ['a', 'b'], client);
+  await rtl.waitFor(() => assert.equal(requests.length, 2));
+  assert.deepEqual(asked(), [
+    ['a', 'b'],
+    ['a', 'b'],
+  ]);
+  await rtl.waitFor(() => assert.equal(Object.keys(second.result.current.data ?? {}).length, 2));
 });
 
 test('asks for nothing without a session or without ids', async () => {

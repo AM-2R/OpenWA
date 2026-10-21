@@ -1,5 +1,4 @@
-import { useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { contactApi } from '../services/api';
 
 // Signed CDN URLs rotate: a held picture is reused for an hour, then asked for again.
@@ -8,6 +7,24 @@ const PICTURE_TTL_MS = 60 * 60 * 1000;
 interface ResolvedPicture {
   url: string | null;
   at: number;
+}
+
+type Held = Map<string, ResolvedPicture>;
+
+// What each session's batches were told, with the time it arrived. It is kept in the query cache, beside the data
+// of the batches it came with, and not with the page: a page that mounts again finds it instead of asking for every
+// picture once more, and signing out, which clears the cache, drops it. Nothing collects it on its own, as it is
+// small and its entries age out by their own clock.
+const HELD_KEY = 'profilePicturesHeld';
+const heldKey = (sessionId: string) => [HELD_KEY, sessionId] as const;
+function heldFor(client: QueryClient, sessionId: string): Held {
+  client.setQueryDefaults([HELD_KEY], { gcTime: Infinity });
+  let held = client.getQueryData<Held>(heldKey(sessionId));
+  if (!held) {
+    held = new Map();
+    client.setQueryData(heldKey(sessionId), held);
+  }
+  return held;
 }
 
 /**
@@ -21,7 +38,8 @@ interface ResolvedPicture {
  *
  * A change of membership (a message from a chat outside the top 50 pushes one out) is a new key, but
  * only the ids not held yet are asked for: every answer is kept per session with the time it arrived,
- * ids that came back null (hidden or no picture) included, and reused for an hour. The data returned
+ * ids that came back null (hidden or no picture) included, and reused for an hour. What is held lives
+ * in the query cache, so a page that mounts again with the same ids asks for nothing. The data returned
  * covers the requested ids, and the previous data of the same session stays while a smaller batch is
  * out, so the rows keep their pictures instead of dropping to the generic icon. An invalidated batch (a
  * picture was changed) asks for every id again, held or not.
@@ -30,16 +48,13 @@ interface ResolvedPicture {
  * id that comes back null just keeps the icon fallback.
  */
 export function useProfilePictures(sessionId: string | undefined, contactIds: string[]) {
-  // Kept with the page, not in a module: signing out unmounts it and drops every picture, and a session's
-  // are never offered to another.
-  const resolvedRef = useRef(new Map<string, Map<string, ResolvedPicture>>());
+  const queryClient = useQueryClient();
   const requestIds = contactIds.slice(0, 50); // list order: the visible top rows win the cap
   const sortedKey = [...requestIds].sort().join(',');
   return useQuery<Record<string, string | null>, Error>({
     queryKey: ['profilePictures', sessionId, sortedKey] as const,
     queryFn: async ({ client, queryKey }) => {
-      const held = resolvedRef.current.get(sessionId!) ?? new Map<string, ResolvedPicture>();
-      resolvedRef.current.set(sessionId!, held);
+      const held = heldFor(client, sessionId!);
       const view = () => {
         const pictures: Record<string, string | null> = {};
         for (const id of requestIds) {
@@ -74,7 +89,7 @@ export function useProfilePictures(sessionId: string | undefined, contactIds: st
     // failed top-up) or an expired one makes the query stale at once, so the next focus or mount asks again
     // for just those, instead of a failed attempt counting as a fresh hour.
     staleTime: query => {
-      const held = sessionId ? resolvedRef.current.get(sessionId) : undefined;
+      const held = sessionId ? queryClient.getQueryData<Held>(heldKey(sessionId)) : undefined;
       let expiresAt = Infinity;
       for (const id of requestIds) {
         const entry = held?.get(id);
