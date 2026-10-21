@@ -306,6 +306,33 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       expect(loader2.isRestorePending(second.id)).toBe(false);
     });
 
+    // The restore ending clears every id, so only a plugin that finished while a later one is still being
+    // enabled shows whether it is handed back at once or held until the whole restore is over.
+    it('hands a plugin back as soon as its own enable settles, while a later one is still being restored', async () => {
+      let releaseSecond: () => void = () => undefined;
+      enable.mockImplementation(
+        (id: string) =>
+          new Promise<void>(resolve => {
+            if (id === manifest.id) releaseFirst = resolve;
+            else releaseSecond = resolve;
+          }),
+      );
+      const booted = loader2.onApplicationBootstrap();
+      await jest.advanceTimersByTimeAsync(PLUGIN_RESTORE_BOOT_BUDGET_MS);
+      await booted;
+
+      releaseFirst();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(enable).toHaveBeenCalledWith(second.id);
+      expect(loader2.isRestorePending(manifest.id)).toBe(false);
+      expect(loader2.isRestorePending(second.id)).toBe(true);
+
+      releaseSecond();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(loader2.isRestorePending(second.id)).toBe(false);
+    });
+
     it('stops holding a plugin whose restore failed', async () => {
       enable.mockImplementation((id: string) =>
         id === manifest.id ? Promise.reject(new Error('backend down')) : Promise.resolve(),
