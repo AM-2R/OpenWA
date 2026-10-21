@@ -59,20 +59,23 @@ export class MessageMutationProjector {
 
   /**
    * What the stored row says of a change: whether there is one to ask, and why the change must not touch
-   * it (null when it may). A row that cannot be read is reported absent with no reason, as before.
+   * it (null when it may), with the text it holds. A row that cannot be read is reported absent with no
+   * reason, as before.
    */
   async storedRowVerdict(
     sessionId: string,
     waMessageId: string,
     source: MutationSource,
-  ): Promise<{ exists: boolean; reason: string | null }> {
+  ): Promise<{ exists: boolean; reason: string | null; body?: string }> {
     if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
-        select: { chatId: true, direction: true, author: true },
+        select: { chatId: true, direction: true, author: true, body: true },
       });
-      return row ? { exists: true, reason: mutationTargetsForeignRow(row, source) } : { exists: false, reason: null };
+      return row
+        ? { exists: true, reason: mutationTargetsForeignRow(row, source), body: row.body }
+        : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null };
     }
@@ -151,7 +154,8 @@ export class MessageMutationProjector {
         { sessionId: id, waMessageId: message.messageId, type: Not('revoked') },
         { body: message.body },
       );
-      await this.markMessageEdited(id, message.messageId);
+      // An event that repeats the stored text is no edit, and the marker would label an unedited message.
+      if (verdict.body !== message.body) await this.markMessageEdited(id, message.messageId);
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }

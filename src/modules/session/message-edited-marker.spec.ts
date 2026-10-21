@@ -94,6 +94,27 @@ describe('persisted edited message marker', () => {
     expect(stored.metadata).toEqual({ ...metadata, edited: true });
   });
 
+  // A body event that repeats the stored text is no edit; it is still announced, as it always was.
+  it('does not mark an edit that leaves the stored text as it is', async () => {
+    await seed();
+    projector.applyMessageEditQueued('s1', { ...edit, body: 'old' });
+    await drain();
+    const stored = await repository.findOneByOrFail({ waMessageId: edit.messageId });
+    expect(stored.body).toBe('old');
+    expect(stored.metadata).toEqual(metadata);
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks an edit of a row stored without a text', async () => {
+    await seed();
+    await repository.update({ waMessageId: edit.messageId }, { body: () => 'NULL' });
+    projector.applyMessageEditQueued('s1', edit);
+    await drain();
+    const stored = await repository.findOneByOrFail({ waMessageId: edit.messageId });
+    expect(stored.body).toBe('new');
+    expect(stored.metadata).toEqual({ ...metadata, edited: true });
+  });
+
   it('does not restore or mark a revoked message', async () => {
     await seed('revoked');
     await repository.update({ waMessageId: edit.messageId }, { body: '', metadata: {} });
