@@ -209,7 +209,11 @@ describe('RedisIoAdapter', () => {
           enableOfflineQueue: false,
           autoResendUnfulfilledCommands: false,
         });
-        expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBeLessThan(WS_REDIS_COMMAND_TIMEOUT_MS);
+        // Both are real deadlines, and the socket may not be cut off before a command has had its full time: the
+        // socket timer runs on this process's own event loop, so a short one drops healthy connections.
+        expect(Number.isFinite(WS_REDIS_COMMAND_TIMEOUT_MS)).toBe(true);
+        expect(Number.isFinite(WS_REDIS_SOCKET_TIMEOUT_MS)).toBe(true);
+        expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBeGreaterThanOrEqual(WS_REDIS_COMMAND_TIMEOUT_MS);
         for (const option of [
           'commandTimeout',
           'socketTimeout',

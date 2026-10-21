@@ -11,14 +11,20 @@ const logger = createLogger('RedisIoAdapter');
 /** Max time to await a graceful `quit()` per client on shutdown before force-disconnecting. */
 export const WS_REDIS_QUIT_TIMEOUT_MS = 2000;
 
-/** Upper bound for one fan-out publish, the same bound as the other Redis clients that serve a request or an event. */
+/**
+ * How long the promise of one fan-out publish waits for its reply. Only the promise: the command stays on the
+ * wire, and a Redis that was merely slow still delivers it, so this bounds nothing the client holds.
+ */
 export const WS_REDIS_COMMAND_TIMEOUT_MS = 2000;
 
 /**
- * How long the publish client's socket may stay silent after a write before it is destroyed. Kept below the
- * command timeout, as the throttler's is, so the socket is already being replaced when the first command gives up.
+ * How long the publish client's socket may stay silent after a write before it is destroyed, which is what
+ * releases what a stalled Redis left in the client. The timer runs on this process's own event loop, so a healthy
+ * Redis looks silent whenever the loop stays blocked for that long right after a write, and the connection would
+ * be dropped for nothing. That is why it sits far above any block this process runs, and above the command
+ * timeout. What the client holds during a stall is bounded by this many seconds of traffic.
  */
-export const WS_REDIS_SOCKET_TIMEOUT_MS = 1500;
+export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
 
 /**
  * Whether cross-replica WebSocket fan-out is switched on. Same `REDIS_ENABLED === 'true'` gate the
@@ -87,10 +93,11 @@ export class RedisIoAdapter extends IoAdapter {
     try {
       // The publisher is the only client that waits for replies, and a Redis that keeps the connection open but
       // stops answering (a frozen process, a stalled disk) never errors it: every broadcast would wait in the
-      // client, payload and all, for as long as the stall lasts. So it gets the throttler's posture: a command
-      // the peer does not answer in time is rejected, a socket that stays silent is destroyed and the client
-      // reconnects, nothing is queued while it is disconnected, and nothing the old socket may already have
-      // delivered is sent again. A stall costs fan-out frames, never memory or a second delivery.
+      // client, payload and all, for as long as the stall lasts. So the promise of a command the peer does not
+      // answer in time is rejected (the command stays on the wire), a socket that stays silent for the socket
+      // deadline is destroyed and the client reconnects, nothing is queued while it is disconnected, and nothing
+      // the old socket may already have delivered is sent again. A stall holds at most that many seconds of
+      // traffic and never delivers an event twice.
       const pubClient = new Redis({
         ...wsRedisOptions(),
         commandTimeout: WS_REDIS_COMMAND_TIMEOUT_MS,

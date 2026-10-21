@@ -1,8 +1,9 @@
+import * as fs from 'node:fs';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { Server } from 'socket.io';
-import { RedisIoAdapter, WS_REDIS_COMMAND_TIMEOUT_MS } from './redis-io.adapter';
+import { RedisIoAdapter, WS_REDIS_COMMAND_TIMEOUT_MS, WS_REDIS_SOCKET_TIMEOUT_MS } from './redis-io.adapter';
 
 /**
  * A Redis that keeps the connection open and stops answering never errors the socket, so the publish
@@ -10,14 +11,28 @@ import { RedisIoAdapter, WS_REDIS_COMMAND_TIMEOUT_MS } from './redis-io.adapter'
  * client against a peer that speaks just enough RESP to bring a client up, and can then go silent.
  */
 class FakeRedis {
-  silent = false;
   /** Every PUBLISH payload that reached the peer, answered or not. */
   readonly published: string[] = [];
+  /** Connections accepted so far: a client that destroys its socket and reconnects raises it. */
+  connections = 0;
   readonly sockets = new Set<net.Socket>();
+  private stalled = false;
+  /** What a stalled peer owes its clients. Sent when it comes back, as a Redis that was paused does. */
+  private readonly owed: Array<() => void> = [];
   private readonly server: net.Server;
+
+  get silent(): boolean {
+    return this.stalled;
+  }
+
+  set silent(value: boolean) {
+    this.stalled = value;
+    if (!value) for (const send of this.owed.splice(0)) send();
+  }
 
   constructor() {
     this.server = net.createServer(socket => {
+      this.connections++;
       this.sockets.add(socket);
       socket.on('error', () => undefined);
       socket.on('close', () => this.sockets.delete(socket));
@@ -26,10 +41,13 @@ class FakeRedis {
         pending = Buffer.concat([pending, chunk]);
         for (const command of FakeRedis.takeCommands(pending, rest => (pending = rest))) {
           if (command[0].toUpperCase() === 'PUBLISH') this.published.push(command[2]);
-          // A stalled peer answers nothing the publisher or its reconnect asks. Subscriptions are exempt: the adapter
-          // issues them without a handler, when a namespace is first used, and a SUBSCRIBE that no reply ever
-          // settles is rejected as an unhandled rejection when the client is closed, which ends a Jest worker.
-          if (!this.silent || /^p?subscribe$/i.test(command[0])) socket.write(FakeRedis.reply(command));
+          // A stalled peer answers nothing the publisher or its reconnect asks until it comes back. Subscriptions
+          // are exempt: the adapter issues them without a handler, when a namespace is first used, and a SUBSCRIBE
+          // that no reply ever settles is rejected as an unhandled rejection when the client is closed, which ends
+          // a Jest worker.
+          const reply = FakeRedis.reply(command);
+          if (!this.silent || /^p?subscribe$/i.test(command[0])) socket.write(reply);
+          else this.owed.push(() => !socket.destroyed && socket.write(reply));
         }
       });
     });
@@ -107,10 +125,18 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
   let adapter: RedisIoAdapter;
   let io: Server;
   let pub: PublishClient;
+  let warn: jest.SpyInstance;
 
   const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
-  /** Everything the client holds for a reply or for a connection: the three places ioredis keeps a command. */
-  const held = (): number => pub.commandQueue.length + pub.offlineQueue.length + (pub.prevCommandQueue?.length ?? 0);
+  /**
+   * Everything the client holds for a reply or for a connection: the three places ioredis keeps a command. Between
+   * a destroyed socket and the next connect the command queue and the previous one are the same object.
+   */
+  const held = (): number => {
+    const queues = new Set<Queue>([pub.commandQueue, pub.offlineQueue]);
+    if (pub.prevCommandQueue) queues.add(pub.prevCommandQueue);
+    return [...queues].reduce((total, queue) => total + queue.length, 0);
+  };
   const broadcast = (count: number): void => {
     for (let i = 0; i < count; i++)
       io.of('/events')
@@ -134,7 +160,7 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     io = new Server();
     jest.spyOn(IoAdapter.prototype, 'createIOServer').mockReturnValue(io);
     jest.spyOn(IoAdapter.prototype, 'close').mockResolvedValue(undefined);
-    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
     adapter = new RedisIoAdapter({} as never);
     adapter.createIOServer(0);
@@ -157,7 +183,54 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     expect(held()).toBe(0);
   });
 
-  it('settles a publish within its deadline, holds no more events while the peer is silent, and recovers', async () => {
+  // ioredis arms the socket timer on the write, on this process's own event loop. A loop that stays busy for longer
+  // than the deadline right after a write expires that timer before the reply already waiting in the socket is
+  // read, so a healthy peer would look stalled and the client would drop its connection. The block runs in an I/O
+  // callback, as the engine and database callbacks do; inside a timer callback the loop clock is stale and the same
+  // block would not show it.
+  it('does not treat a healthy peer as stalled when this process blocks its loop right after a publish', async () => {
+    const connections = redis.connections;
+
+    await new Promise<void>(resolve =>
+      fs.readFile(__filename, () => {
+        broadcast(1);
+        for (const until = Date.now() + 2000; Date.now() < until;) {
+          // hold the loop
+        }
+        resolve();
+      }),
+    );
+    // Long enough for a destroyed socket to have been replaced.
+    await sleep(1500);
+
+    expect(redis.published.length).toBe(1);
+    expect(redis.connections).toBe(connections);
+    expect(pub.status).toBe('ready');
+    expect(held()).toBe(0);
+    expect(warn.mock.calls.flat().some(line => String(line).includes('Socket timeout'))).toBe(false);
+  }, 15_000);
+
+  // The pause of a busy Redis (a snapshot fork, an fsync) ends. Everything raised meanwhile is on the wire, so it
+  // arrives once the peer is back, provided the client has not given up on the connection first.
+  it('loses no event when the peer stays silent for longer than the command deadline but less than the socket deadline', async () => {
+    const connections = redis.connections;
+    let sent = 0;
+
+    redis.silent = true;
+    for (let batch = 0; batch < 25; batch++) {
+      broadcast(4);
+      sent += 4;
+      await sleep(100);
+    }
+    redis.silent = false;
+
+    expect(await waitUntil(() => held() === 0, 3000)).toBe(true);
+    expect(redis.published.length).toBe(sent);
+    expect(redis.connections).toBe(connections);
+    expect(pub.status).toBe('ready');
+  }, 15_000);
+
+  it('settles a publish within its deadline, then drops the connection after the socket deadline, holds nothing more, and recovers', async () => {
     redis.silent = true;
 
     // The peer is silent but the connection stays open: nothing errors, so the deadline is the only thing
@@ -170,20 +243,33 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     expect(outcome).toBe(0);
     expect(Date.now() - started).toBeLessThan(WS_REDIS_COMMAND_TIMEOUT_MS + 1000);
 
-    // Past the first deadline, events keep arriving at a steady rate. None of them may pile up on the
-    // client, whichever queue ioredis would park them in.
-    const before = held();
-    for (let batch = 0; batch < 5; batch++) {
-      broadcast(100);
-      await sleep(100);
+    // Events keep arriving at a steady rate. The client holds them until its socket deadline destroys the
+    // connection, and that is all it holds.
+    const connections = redis.connections;
+    let heldAtDestroy = 0;
+    const destroyed = await waitUntil(() => {
+      broadcast(10);
+      heldAtDestroy = held();
+      return pub.status !== 'ready';
+    }, WS_REDIS_SOCKET_TIMEOUT_MS + 3000);
+    expect(destroyed).toBe(true);
+    expect(heldAtDestroy).toBeLessThan((WS_REDIS_SOCKET_TIMEOUT_MS / 1000 + 2) * 200);
+
+    // From here the client is reconnecting: nothing is queued for a connection it does not have, however many
+    // events are raised. (Each batch of the wait above was 10 events per 50 ms.) The window outlasts the command
+    // deadline, so the timers of what the abandoned socket still owes are gone before the test ends.
+    for (let waited = 0; waited < WS_REDIS_COMMAND_TIMEOUT_MS + 500; waited += 50) {
+      broadcast(10);
+      await sleep(50);
     }
-    expect(held() - before).toBeLessThan(20);
+    expect(held() - heldAtDestroy).toBeLessThan(20);
 
     // The peer answers again: the client comes back without a restart, and does not send again what the
     // abandoned socket had already put on the wire, which the peer may have delivered.
     redis.silent = false;
     expect(await waitUntil(async () => (await pub.publish('socket.io#/events#', 'probe')) === 1, 10_000)).toBe(true);
     expect(held()).toBe(0);
+    expect(redis.connections).toBeGreaterThan(connections);
     expect(redis.published.filter(payload => payload === 'stalled-frame')).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 });
