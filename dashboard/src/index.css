@@ -91,6 +91,12 @@ button:focus:not(:focus-visible) {
   outline: none;
 }
 
+/* Icons keep their size: an svg that is a flex item would otherwise shrink when its row runs short of room
+   (a larger browser text size left some sidebar entries and Dashboard tiles with a sliver or no icon). */
+svg {
+  flex-shrink: 0;
+}
+
 html {
   /* Root/overscroll background follows the app theme token, so an explicit dark theme on a
      light-OS device doesn't reveal a white <html> background above/below the body (overscroll). */
