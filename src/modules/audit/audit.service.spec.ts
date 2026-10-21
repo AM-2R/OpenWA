@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 
@@ -100,6 +100,15 @@ describe('AuditService', () => {
     expect(arg.skip).toBe(5);
   });
 
+  it('findAll bounds an offset past the largest safe integer, however it was written', async () => {
+    for (const offset of [2 ** 63, 1e21, Infinity]) {
+      repo.findAndCount.mockClear();
+      await service.findAll({ offset });
+      const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { skip: number };
+      expect(arg.skip).toBe(Number.MAX_SAFE_INTEGER);
+    }
+  });
+
   it('cleanup deletes rows older than the cutoff and returns the affected count', async () => {
     repo.delete.mockResolvedValue({ affected: 7 });
     const removed = await service.cleanup(30);
@@ -117,5 +126,38 @@ describe('AuditService', () => {
   it('cleanup returns 0 when the driver reports a null affected count', async () => {
     repo.delete.mockResolvedValue({ affected: null });
     expect(await service.cleanup(10)).toBe(0);
+  });
+});
+
+// The unit tests above stop at the value handed to the repository. A driver refuses an OFFSET of 2^63 or
+// more (SQLite: "datatype mismatch"), so paging is also run against a real in-memory database.
+describe('AuditService.findAll paging on a real database', () => {
+  let ds: DataSource;
+  let service: AuditService;
+
+  beforeEach(async () => {
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [AuditLog], synchronize: true });
+    await ds.initialize();
+    const repo = ds.getRepository(AuditLog);
+    service = new AuditService(repo);
+    for (const sessionId of ['s1', 's2', 's3']) {
+      await repo.save(repo.create({ action: AuditAction.SESSION_CREATED, severity: AuditSeverity.INFO, sessionId }));
+    }
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('answers an empty page with the true total for an offset past the table, however large', async () => {
+    for (const offset of [2 ** 62, 2 ** 63, 1e21, Infinity]) {
+      await expect(service.findAll({ offset })).resolves.toEqual({ data: [], total: 3 });
+    }
+  });
+
+  it('still pages: an offset inside the table skips that many rows', async () => {
+    const { data, total } = await service.findAll({ limit: 10, offset: 2 });
+    expect(data).toHaveLength(1);
+    expect(total).toBe(3);
   });
 });
