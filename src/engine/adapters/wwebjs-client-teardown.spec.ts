@@ -1,6 +1,7 @@
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
 
@@ -14,6 +15,7 @@ import * as loadRemoteMediaModule from '../../common/media/load-remote-media';
  */
 
 const CHAT = '628111@c.us';
+const LID = '159442138038327@lid';
 const MEDIA_URL = 'https://files.example.com/a.png';
 
 interface Gate {
@@ -171,6 +173,48 @@ const CASES: Case[] = [
     },
     run: adapter => adapter.getGroupInfo('120363@g.us'),
   },
+  {
+    // The reply and forward legs send through the quoted Message's own client, never through the host accessor.
+    name: 'a reply',
+    build: parked => {
+      const reply = jest.fn();
+      const chat = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'Q1' }, reply }]) };
+      return {
+        client: { getNumberId: () => parked.park().then(() => found(CHAT)), getChatById: () => Promise.resolve(chat) },
+        unreached: reply,
+      };
+    },
+    run: adapter => adapter.replyToMessage(CHAT, 'Q1', 'hi'),
+  },
+  {
+    name: 'a forward parked in the destination lookup',
+    build: parked => {
+      const forward = jest.fn();
+      const chat = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+      return {
+        client: { getNumberId: () => parked.park().then(() => found(CHAT)), getChatById: () => Promise.resolve(chat) },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+  {
+    name: 'a forward parked in the read of the destination chat',
+    build: parked => {
+      const forward = jest.fn();
+      const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+      const destination = { fetchMessages: () => Promise.resolve([]) };
+      return {
+        client: {
+          getNumberId: () => Promise.resolve(found(CHAT)),
+          getChatById: (id: string) =>
+            id === 'src@c.us' ? Promise.resolve(source) : parked.park().then(() => destination),
+        },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
 ];
 
 describe('whatsapp-web.js operations that race a session teardown', () => {
@@ -196,5 +240,79 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
       expect(countsTowardSendBreaker(error)).toBe(false);
       expect(sentNothing(error)).toBe(true);
     });
+  });
+
+  describe('the send retry after "No LID for user"', () => {
+    it.each(PHASES)('answers the not-ready 409, not an unreachable recipient, %s', async phase => {
+      // The first send fails on a stale id; the re-resolve parks, and the lookup then fails on the closing page.
+      const parked = gate();
+      const sendMessage = jest.fn().mockRejectedValue(new Error('No LID for user'));
+      const getNumberId = jest
+        .fn()
+        .mockResolvedValueOnce(found(CHAT))
+        .mockImplementationOnce(() =>
+          parked.park().then(() => Promise.reject(new Error('Protocol error: Target closed'))),
+        );
+      const { adapter, tearDown, finish } = readyAdapter({ getNumberId, sendMessage });
+
+      const outcome = outcomeOf(adapter.sendTextMessage(CHAT, 'hi'));
+      await settle();
+      expect(parked.parkedCalls).toBe(1);
+      await tearDown(phase);
+      parked.open();
+      const result = await outcome;
+      await finish();
+
+      expect(result).toEqual({ error: expect.any(EngineNotReadyError) as unknown });
+      expect((result as { error: unknown }).error).not.toBeInstanceOf(RecipientUnreachableError);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(PHASES)('does not retry a reply once the session is going away, %s', async phase => {
+      // The re-resolve names a different id, which would normally be retried, here on the Message's own client.
+      const parked = gate();
+      const reply = jest.fn().mockRejectedValue(new Error('No LID for user'));
+      const chat = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'Q1' }, reply }]) };
+      const getNumberId = jest
+        .fn()
+        .mockResolvedValueOnce(found(LID))
+        .mockImplementationOnce(() => parked.park().then(() => found(CHAT)));
+      const { adapter, tearDown, finish } = readyAdapter({ getNumberId, getChatById: () => Promise.resolve(chat) });
+
+      const outcome = outcomeOf(adapter.replyToMessage(CHAT, 'Q1', 'hi'));
+      await settle();
+      expect(parked.parkedCalls).toBe(1);
+      await tearDown(phase);
+      parked.open();
+      const result = await outcome;
+      await finish();
+
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ error: expect.any(EngineNotReadyError) as unknown });
+    });
+  });
+
+  it('keeps a send that was already on the wire an outcome-unknown failure', async () => {
+    const onWire = gate();
+    const sendMessage = jest.fn(() =>
+      onWire.park().then(() => Promise.reject(new Error('Protocol error (Runtime.callFunctionOn): Target closed.'))),
+    );
+    const { adapter, tearDown, finish } = readyAdapter({
+      getNumberId: () => Promise.resolve(found(CHAT)),
+      sendMessage,
+    });
+
+    const outcome = outcomeOf(adapter.sendTextMessage(CHAT, 'hi'));
+    await settle();
+    expect(onWire.parkedCalls).toBe(1);
+    await tearDown('while destroy() runs');
+    onWire.open();
+    const { error } = (await outcome) as { error: unknown };
+    await finish();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(EngineNotReadyError);
+    expect(countsTowardSendBreaker(error)).toBe(true);
+    expect(sentNothing(error)).toBe(false);
   });
 });

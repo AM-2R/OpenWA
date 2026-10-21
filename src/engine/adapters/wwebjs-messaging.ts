@@ -465,6 +465,10 @@ export class WwebjsMessaging {
   ): Promise<T> {
     if (quotedMessageId) ensureSendable(chatId, 'reply');
     const to = await this.resolveSendId(chatId);
+    // The lookup is an await a teardown can land in, and resolveSendId answers a failed lookup with the
+    // unresolved id. The reply and forward legs send through the Message's own client, which the host's
+    // readiness check on getClient never sees, so a send must not leave for a closing page from here.
+    this.host.ensureReady();
     try {
       return await send(to);
     } catch (err) {
@@ -481,6 +485,9 @@ export class WwebjsMessaging {
       }
       this.resolvedSendIds.delete(chatId);
       const fresh = await this.resolveSendId(chatId);
+      // Same gap as above, and before the comparison: a lookup that failed because the session went away
+      // answers the unresolved id, which would read as an unreachable recipient.
+      this.host.ensureReady();
       if (fresh === to) {
         throw new RecipientUnreachableError(chatId);
       }
@@ -777,6 +784,8 @@ export class WwebjsMessaging {
         } catch (error) {
           this.host.logger.warn(`Could not read the destination chat before forwarding: ${String(error)}`);
         }
+        // The read above is a page round trip a teardown can land in, and its failure is only logged.
+        this.host.ensureReady();
         return msgToForward.forward(to);
       });
 
