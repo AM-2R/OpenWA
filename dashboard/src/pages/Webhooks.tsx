@@ -198,7 +198,9 @@ export function Webhooks() {
   const { t } = useTranslation();
   useDocumentTitle(t('webhooks.title'));
   const { canWrite } = useRole();
-  const { data: webhooks = [], isLoading: loadingWebhooks, error: webhooksError } = useWebhooksQuery();
+  // GET /webhooks is OPERATOR-only and the gateway records every refusal as a failed authentication, so a key
+  // that cannot write is not sent it.
+  const { data: webhooks = [], isLoading: loadingWebhooks, error: webhooksError } = useWebhooksQuery(canWrite);
   const { data: sessions = [] } = useSessionsQuery();
   const loading = loadingWebhooks;
   const createMutation = useCreateWebhookMutation();
@@ -690,12 +692,13 @@ export function Webhooks() {
 
       <div className="webhooks-content">
         <div className="webhooks-list-container">
-          {webhooksError && webhooks.length === 0 ? (
-            // A failed read is not an empty list: a viewer key always gets 403 here (the route is
-            // OPERATOR-only), and a gateway error would otherwise read as "no webhooks configured".
+          {(webhooksError || !canWrite) && webhooks.length === 0 ? (
+            // A failed read is not an empty list: a key below operator is refused here (the route is
+            // OPERATOR-only, so it is never sent), and a gateway error would otherwise read as "no webhooks
+            // configured". The 403 branch stays for a key whose role the page took for a writer's.
             <div className="empty-table-state" role="alert">
               <AlertCircle size={48} strokeWidth={1} />
-              {(webhooksError as { status?: number }).status === 403 ? (
+              {!canWrite || (webhooksError as { status?: number } | null)?.status === 403 ? (
                 <>
                   <h3>{t('webhooks.empty.forbiddenTitle')}</h3>
                   <p>{t('webhooks.empty.forbiddenDesc')}</p>
@@ -703,7 +706,7 @@ export function Webhooks() {
               ) : (
                 <>
                   <h3>{t('webhooks.empty.loadErrorTitle')}</h3>
-                  <p>{webhooksError.message}</p>
+                  <p>{webhooksError?.message}</p>
                 </>
               )}
             </div>

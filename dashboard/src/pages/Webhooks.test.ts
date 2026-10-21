@@ -1,6 +1,8 @@
 // Render test for the Webhooks page under the bare `node --test` runner, on the Templates.test.ts
-// harness. GET /webhooks is OPERATOR-only, so a viewer key always gets 403 there; a failed read must
-// say so instead of rendering the "no webhooks configured" empty state.
+// harness. GET /webhooks is OPERATOR-only: a viewer key is not sent it (the gateway records every refusal as a
+// failed authentication) and is shown the permission state, and a 403 or any other failed read must say so
+// instead of rendering the "no webhooks configured" empty state. The role defaults to operator, the lowest
+// one that can read the list.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,6 +10,7 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 let webhooksStatus = 200;
+let webhookReads = 0;
 let webhookList: unknown[] = [];
 let sessionList: unknown[] = [];
 let createCalls = 0;
@@ -56,6 +59,7 @@ function installFetchStub(): void {
       );
     }
     if (path === '/api/webhooks') {
+      webhookReads++;
       if (webhooksStatus === 403) {
         return Promise.resolve(jsonResponse({ message: 'Insufficient permissions. Required: operator' }, 403));
       }
@@ -76,7 +80,7 @@ before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
   installFetchStub();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
@@ -99,7 +103,8 @@ afterEach(() => {
   deleteCalls = [];
   releaseRequests();
   heldRequests = Promise.resolve();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  webhookReads = 0;
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
 });
 
 function renderWebhooks(): void {
@@ -113,11 +118,25 @@ function renderWebhooks(): void {
   );
 }
 
+// The key's role is what the page learned at sign-in; a 403 for a key it took for a writer is still a refusal.
 test('a 403 on the webhook list shows a permission state, not an empty list', async () => {
   webhooksStatus = 403;
   renderWebhooks();
   await rtl.screen.findByText('No access to webhooks');
   assert.ok(!rtl.screen.queryByText('No webhooks configured'), 'a refused read claimed there are no webhooks');
+});
+
+test('a viewer key is shown the permission state without a list request the gateway would refuse', async () => {
+  webhooksStatus = 200;
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  renderWebhooks();
+  await rtl.screen.findByText('No access to webhooks');
+  assert.ok(!rtl.screen.queryByText('No webhooks configured'), 'a read nobody sent claimed there are no webhooks');
+
+  // A retry or a window focus would send it again; give either the time to.
+  window.dispatchEvent(new window.Event('focus'));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(webhookReads, 0, 'the viewer page asked the gateway for the webhook list');
 });
 
 test('any other failed read shows the error, not an empty list', async () => {

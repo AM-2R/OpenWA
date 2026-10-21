@@ -1,6 +1,8 @@
 // Render test for the Templates page under the bare `node --test` runner, on the Sessions.test.ts
-// harness. The template list route is OPERATOR-only, so a viewer key always gets 403 there; a failed
-// read must say so instead of rendering the "no templates saved" empty state.
+// harness. The template list route is OPERATOR-only: a viewer key is not sent it (the gateway records every
+// refusal as a failed authentication) and is shown the permission state, and a 403 or any other failed read
+// must say so instead of rendering the "no templates saved" empty state. The role defaults to operator, the
+// lowest one that can read the list.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +11,7 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 let templatesStatus = 200;
+let templateReads = 0;
 let sessionsStatus = 200;
 // When set, GET /api/sessions answers only once this settles, holding the page on its first load.
 let sessionsGate: Promise<void> | null = null;
@@ -63,6 +66,7 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse([{ id: 'tpl-2', name: 'support-greeting', body: 'Hello' }]));
     }
     if (path === '/api/sessions/sess-1/templates') {
+      templateReads++;
       if (templatesStatus === 403) {
         return Promise.resolve(jsonResponse({ message: 'Insufficient permissions. Required: operator' }, 403));
       }
@@ -95,7 +99,7 @@ before(async () => {
     configurable: true,
     value: { writeText: (text: string) => (copied.push(text), Promise.resolve()) },
   });
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
@@ -117,7 +121,8 @@ afterEach(() => {
   updated.length = 0;
   copied.length = 0;
   saveGate = null;
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  templateReads = 0;
+  window.sessionStorage.setItem('openwa_user_role', 'operator');
 });
 
 function renderTemplates(): void {
@@ -131,15 +136,13 @@ function renderTemplates(): void {
   );
 }
 
-// The row button exists so a template can be deleted without opening it in the editor first, and it
-// is gated on the same write permission as the editor's own delete. Both halves are pinned here.
-test('a write key can delete a template from its row, and a read-only key cannot', async () => {
+// The row button exists so a template can be deleted without opening it in the editor first.
+test('a write key can delete a template from its row', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   templatesStatus = 200;
   templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
   deleted.length = 0;
 
-  window.sessionStorage.setItem('openwa_user_role', 'operator');
   renderTemplates();
 
   const row = (await screen.findByText('invoice-reminder')).closest('.template-list-row') as HTMLElement;
@@ -150,20 +153,25 @@ test('a write key can delete a template from its row, and a read-only key cannot
   assert.ok(within(dialog).getByText(/invoice-reminder/), 'the confirm did not name the template');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
   await waitFor(() => assert.deepEqual(deleted, ['tpl-1'], 'the delete never reached the API'));
-
-  rtl.cleanup();
-  window.sessionStorage.setItem('openwa_user_role', 'viewer');
-  templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
-  renderTemplates();
-
-  const readOnlyRow = (await screen.findByText('invoice-reminder')).closest('.template-list-row') as HTMLElement;
-  assert.equal(
-    within(readOnlyRow).queryByRole('button', { name: 'Delete' }) === null,
-    true,
-    'a read-only key was offered the row delete',
-  );
 });
 
+// A read-only key is never sent the list, so it has no row to delete from.
+test('a read-only key is shown the permission state without a list request the gateway would refuse', async () => {
+  templates = [{ id: 'tpl-1', name: 'invoice-reminder', body: 'Hi {{name}}' }];
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  renderTemplates();
+
+  await rtl.screen.findByText('No access to templates');
+  assert.equal(rtl.screen.queryByText('No templates saved') === null, true);
+  assert.equal(rtl.screen.queryByText('invoice-reminder') === null, true);
+
+  // A retry or a window focus would send it again; give either the time to.
+  window.dispatchEvent(new window.Event('focus'));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(templateReads, 0, 'the viewer page asked the gateway for the template list');
+});
+
+// The key's role is what the page learned at sign-in; a 403 for a key it took for a writer is still a refusal.
 test('a 403 on the template list shows a permission state, not an empty library', async () => {
   templatesStatus = 403;
   renderTemplates();
