@@ -38,8 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Show a localized edited indicator in Chats for observed message edits, including after a reload (#1905).
-
 - Keep deleted sessions free of late message, status and bulk writes.
 - Retain sending limits while hooks or preparation are pending, including across UTC midnight.
 - Preserve whatsapp-web.js readiness when an earlier QR render completes.
@@ -83,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serialize a plugin upload with an uninstall or update of the same plugin id.
 - Show hours for a session active within the last day on the Sessions page, as the Dashboard does.
 - List a whatsapp-web.js contact held under both its LID and its phone once in the contacts and blocked lists, with the phone as `number`, instead of twice with the LID's digits.
+- Show a localized edited indicator in Chats for observed message edits, including after a reload (#1905). Thanks @yederlv.
 
 ## [0.25.0] - 2026-10-15
 
