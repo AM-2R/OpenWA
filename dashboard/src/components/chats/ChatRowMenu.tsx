@@ -147,7 +147,12 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
             chat={chat}
             items={items}
             groupClassName="chat-row-menu-group"
-            onPicked={() => setOpen(false)}
+            onPicked={() => {
+              // Focus moves to the chevron, which stays: the picked entry is about to unmount, and a dialog it
+              // opens restores focus to whatever holds it then.
+              setOpen(false);
+              triggerRef.current?.focus();
+            }}
           />
         </div>
       )}

@@ -649,6 +649,54 @@ test("a row's menu sits fixed above the list, and scrolling the list closes it",
   assert.equal(container.querySelector('.chat-row-menu-popover'), null, 'the menu stayed open, adrift from its row');
 });
 
+/** The accessible name of the element that has focus: DOM nodes are compared by name, as a failed deepEqual on them hangs. */
+const focusedName = () => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName;
+
+test("dismissing a dialog a row's menu opened returns focus to the row's menu button", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  const trigger = screen.getByRole('button', { name: 'Actions for Alice' });
+  trigger.focus();
+  fireEvent.click(trigger);
+  const item = screen.getByRole('button', { name: 'Block contact' });
+  item.focus();
+  fireEvent.click(item);
+  await screen.findByRole('dialog');
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+  assert.equal(focusedName(), 'Actions for Alice', 'focus fell to the page');
+});
+
+test("dismissing a dialog the room's menu opened, or the menu itself, returns focus to its button", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const trigger = container.querySelector('.room-menu-trigger') as HTMLButtonElement;
+
+  trigger.focus();
+  fireEvent.click(trigger);
+  const item = within(container.querySelector('.room-menu-popover') as HTMLElement).getByRole('button', {
+    name: 'Block contact',
+  });
+  item.focus();
+  fireEvent.click(item);
+  await screen.findByRole('dialog');
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+  assert.equal(focusedName(), 'More actions', 'focus fell to the page after the dialog');
+
+  fireEvent.click(trigger);
+  within(container.querySelector('.room-menu-popover') as HTMLElement)
+    .getByRole('button', { name: 'Copy chat ID' })
+    .focus();
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!container.querySelector('.room-menu-popover')));
+  assert.equal(focusedName(), 'More actions', 'focus fell to the page after Escape');
+});
+
 test('archiving a chat moves it into the archive view, and unarchiving brings it back', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   renderPage();

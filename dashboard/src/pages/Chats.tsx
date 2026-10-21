@@ -195,6 +195,7 @@ export function Chats() {
   const [showNewChat, setShowNewChat] = useState<boolean>(false);
   const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
   const roomMenuRef = useRef<HTMLDivElement | null>(null);
+  const roomMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   // The group whose info dialog is open, from its row's menu or from the open room's.
   const [groupDialogChat, setGroupDialogChat] = useState<Chat | null>(null);
   // A destructive row action awaiting confirmation, and the one whose request is out. A dialog is busy only
@@ -1384,9 +1385,15 @@ export function Chats() {
     }
   };
 
+  // Closes the room menu from inside it, leaving focus on its button instead of the entry that unmounts.
+  const closeRoomMenu = () => {
+    setRoomMenuOpen(false);
+    roomMenuTriggerRef.current?.focus();
+  };
+
   const handleCopyChatId = async () => {
     if (!activeChat) return;
-    setRoomMenuOpen(false);
+    closeRoomMenu();
     try {
       await navigator.clipboard.writeText(activeChat.id);
       showSuccessToast(t('chats.chatIdCopied'));
@@ -1409,7 +1416,7 @@ export function Chats() {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
       event.preventDefault();
-      setRoomMenuOpen(false);
+      closeRoomMenu();
     };
     document.addEventListener('mousedown', closeOnOutsidePress);
     document.addEventListener('keydown', closeOnEscape, true);
@@ -1609,6 +1616,7 @@ export function Chats() {
                   <div className="room-header-actions">
                     <div className="room-menu" ref={roomMenuRef}>
                       <button
+                        ref={roomMenuTriggerRef}
                         type="button"
                         className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
                         onClick={() => setRoomMenuOpen(open => !open)}
@@ -1623,7 +1631,7 @@ export function Chats() {
                       {roomMenuOpen && (
                         <div className="room-menu-popover">
                           {/* The row's actions, then what only an open room needs. */}
-                          <ChatActions chat={activeChat} actions={rowActions} onPicked={() => setRoomMenuOpen(false)} />
+                          <ChatActions chat={activeChat} actions={rowActions} onPicked={closeRoomMenu} />
                           <hr />
                           <button type="button" onClick={() => void handleCopyChatId()}>
                             <Copy size={16} />
