@@ -65,7 +65,9 @@ export function decideRestoreTarget(
  *
  * Mount the returned `containerRef` on the scroll container (the `.room-messages`
  * div in Chats.tsx). The Map of saved positions lives in a ref so it doesn't
- * trigger renders and is garbage-collected when the host component unmounts.
+ * trigger renders and is garbage-collected when the host component unmounts. A chat the
+ * reader left at the bottom has no entry (it reopens at its newest message), however
+ * much arrived after their last scroll.
  */
 
 /** Distance from the bottom (px) within which the user still counts as "at the bottom". */
@@ -195,6 +197,16 @@ export function useChatScrollPosition(
     [writeScrollTop],
   );
 
+  // A pin that follows the thread (a live message, a decoded image) forgets the chat's remembered offset too: the
+  // reader is at the bottom again, and the offset from before the thread grew would bring them back above it.
+  const followBottom = useCallback(
+    (el: HTMLDivElement) => {
+      pinToBottom(el);
+      if (prevChatIdRef.current !== null) scrollMap.current.delete(prevChatIdRef.current);
+    },
+    [pinToBottom],
+  );
+
   // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
   // pins; any scroll away (only ever the user's) unpins. The SAME listener saves the visible
   // chat's scrollTop on every genuine user scroll, so the per-chat position map always holds the
@@ -212,9 +224,15 @@ export function useChatScrollPosition(
       }
       // A genuine user scroll: cancels any pending restore, then updates pin + position map.
       pendingRestoreRef.current = null;
-      pinnedRef.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
+      const atBottom = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
+      pinnedRef.current = atBottom;
       const visibleChatId = prevChatIdRef.current;
-      if (visibleChatId && loadedRef.current) scrollMap.current.set(visibleChatId, el.scrollTop);
+      if (visibleChatId && loadedRef.current) {
+        // At the bottom is a state, not an offset: the thread keeps growing under a reader who follows it, so a
+        // chat left there is opened at its newest message, not at the offset it had when the reader scrolled.
+        if (atBottom) scrollMap.current.delete(visibleChatId);
+        else scrollMap.current.set(visibleChatId, el.scrollTop);
+      }
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -311,10 +329,10 @@ export function useChatScrollPosition(
       if (action === 'preserve') return;
       requestAnimationFrame(() => {
         const cur = containerRef.current;
-        if (cur) pinToBottom(cur);
+        if (cur) followBottom(cur);
       });
     },
-    [pinToBottom],
+    [followBottom],
   );
 
   // Media has no layout box before it decodes. While pinned, each decode re-pins to the bottom;
@@ -346,7 +364,7 @@ export function useChatScrollPosition(
       if (pinnedRef.current) {
         requestAnimationFrame(() => {
           const cur = containerRef.current;
-          if (cur && pinnedRef.current) pinToBottom(cur);
+          if (cur && pinnedRef.current) followBottom(cur);
         });
         return;
       }
@@ -382,7 +400,7 @@ export function useChatScrollPosition(
         if (activeChatId !== null) scrollMap.current.set(activeChatId, next);
       });
     },
-    [activeChatId, pinToBottom, writeScrollTop],
+    [activeChatId, followBottom, writeScrollTop],
   );
 
   return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested };

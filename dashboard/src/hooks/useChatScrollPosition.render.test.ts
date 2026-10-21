@@ -219,3 +219,167 @@ for (const scenario of [
     }
   });
 }
+
+// ── Live messages and the per-chat position memory ───────────────────────────
+// One container whose geometry the test drives: `height` is what its content measures and `top` what a
+// browser would report, clamped to the content.
+
+type Geometry = { height: number; top: number };
+
+function installGeometry(state: Geometry): () => void {
+  const maxTop = () => Math.max(0, state.height - CLIENT_HEIGHT);
+  const proto = window.HTMLDivElement.prototype;
+  const saved = Object.getOwnPropertyDescriptors(proto);
+  Object.defineProperties(proto, {
+    scrollHeight: { configurable: true, get: () => state.height },
+    clientHeight: { configurable: true, get: () => CLIENT_HEIGHT },
+    scrollTop: {
+      configurable: true,
+      get: () => Math.min(state.top, maxTop()),
+      set: (v: number) => {
+        state.top = Math.max(0, Math.min(v, maxTop()));
+      },
+    },
+  });
+  return () => {
+    for (const key of ['scrollHeight', 'clientHeight', 'scrollTop'] as const) {
+      if (saved[key]) Object.defineProperty(proto, key, saved[key]);
+      else delete (proto as unknown as Record<string, unknown>)[key];
+    }
+  };
+}
+
+// What the last commit's hook call returned: the callbacks a page would hand to its components.
+const hookRef: MutableRefObject<ReturnType<typeof useChatScrollPosition> | null> = { current: null };
+const hook = (): ReturnType<typeof useChatScrollPosition> =>
+  hookRef.current as ReturnType<typeof useChatScrollPosition>;
+
+function Probe({ chatId }: { chatId: string | null }) {
+  const result = useChatScrollPosition(chatId, chatId !== null, false);
+  useEffect(() => {
+    hookRef.current = result;
+  });
+  return createElement('div', { ref: result.containerRef, 'data-testid': 'thread' });
+}
+
+const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+/** The reader moves the thread: the position changes, then the browser reports it. */
+function readerScrollsTo(el: HTMLElement, top: number): void {
+  el.scrollTop = top;
+  rtl.fireEvent.scroll(el);
+}
+
+/**
+ * A live message of `rowPx` the way the Chats page delivers one: announced to the hook while the thread
+ * still has the height it had, then committed, then a frame.
+ */
+async function liveMessage(
+  state: Geometry,
+  rerender: (ui: ReturnType<typeof createElement>) => void,
+  direction: 'incoming' | 'outgoing',
+  rowPx: number,
+  chatId = 'A',
+): Promise<void> {
+  hook().onMessageAppended(direction);
+  state.height += rowPx;
+  rerender(createElement(Probe, { chatId }));
+  await nextFrame();
+}
+
+test('a chat left at the bottom comes back at its newest message when more arrived while the reader was elsewhere', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000);
+    readerScrollsTo(el, g.height - CLIENT_HEIGHT); // the reader leaves A at its bottom
+
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    g.height = 5200; // while they read B, two messages reached A's cached thread
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'chat A came back above the messages that arrived');
+  } finally {
+    restore();
+  }
+});
+
+test('a chat left at the bottom comes back at the bottom after live messages followed it', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el); // the event for the write that opened the chat at its bottom
+    // The reader goes up a little and back down, so the position is remembered by genuine scrolls.
+    readerScrollsTo(el, 3000);
+    readerScrollsTo(el, g.height - CLIENT_HEIGHT);
+
+    await liveMessage(g, rerender, 'incoming', 300);
+    await liveMessage(g, rerender, 'incoming', 300);
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the thread did not follow the live messages');
+
+    g.height = 4600; // chat B has a thread of its own
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    g.height = 5200; // chat A again, its cached thread holding both messages
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'chat A came back above its newest messages');
+  } finally {
+    restore();
+  }
+});
+
+// Between the pin threshold (24px) and the follow threshold (100px) the reader is not pinned but a live message
+// still scrolls the thread, and the position remembered for the chat is then the one before the message.
+test('a chat left just above the bottom comes back at the bottom after a live message followed it', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, g.height - CLIENT_HEIGHT - 60);
+
+    await liveMessage(g, rerender, 'incoming', 300);
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the thread did not follow the live message');
+
+    g.height = 4600;
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    g.height = 4900;
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'chat A came back above its newest message');
+  } finally {
+    restore();
+  }
+});
+
+test('a chat left mid-thread comes back where the reader left it', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000);
+
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, 3000);
+  } finally {
+    restore();
+  }
+});
