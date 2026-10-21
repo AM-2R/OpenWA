@@ -7098,6 +7098,79 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
     expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
+  // A contact migrated to privacy-id addressing is two WhatsApp Web records, its LID and its phone.
+  // whatsapp-web.js answers the LID record under the phone id (a plain string, the model's `phoneNumber`)
+  // but leaves `number` at the LID's digits, so the phone id came back twice, once with the wrong number.
+  const lidRecord = {
+    id: '628111@c.us',
+    pushname: 'Ally',
+    number: '262813461250071',
+    isMyContact: false,
+    isBlocked: false,
+  };
+  const phoneRecord = {
+    id: { _serialized: '628111@c.us' },
+    name: 'Alice',
+    number: '628111',
+    isMyContact: true,
+    isBlocked: false,
+  };
+
+  it.each([
+    ['the LID record first', [lidRecord, phoneRecord]],
+    ['the phone record first', [phoneRecord, lidRecord]],
+  ])('lists a contact held as a LID and a phone record once, with its phone as number (%s)', async (_order, rows) => {
+    const evaluate = jest.fn().mockResolvedValue({ rows, failed: 0 });
+    const { adapter } = readyAdapter({ pupPage: { evaluate } });
+
+    await expect(adapter.getContacts()).resolves.toEqual([
+      { id: '628111@c.us', name: 'Alice', pushName: 'Ally', number: '628111', isMyContact: true, isBlocked: false },
+    ]);
+  });
+
+  it('keeps a folded contact where its first copy was, and a block on either copy survives', async () => {
+    const other = { id: { _serialized: '999@c.us' }, name: 'Zed', number: '999', isMyContact: true, isBlocked: false };
+    const evaluate = jest.fn().mockResolvedValue({
+      rows: [lidRecord, other, { ...phoneRecord, isBlocked: true }],
+      failed: 0,
+    });
+    const { adapter } = readyAdapter({ pupPage: { evaluate } });
+
+    const contacts = await adapter.getContacts();
+
+    expect(contacts.map(c => c.id)).toEqual(['628111@c.us', '999@c.us']);
+    expect(contacts[0].isBlocked).toBe(true);
+  });
+
+  it('leaves a LID with no known phone under its @lid id and the number WhatsApp Web gave', async () => {
+    const unresolved = {
+      id: { _serialized: '262813461250071@lid' },
+      number: '262813461250071',
+      isMyContact: false,
+      isBlocked: false,
+    };
+    const evaluate = jest.fn().mockResolvedValue({ rows: [unresolved], failed: 0 });
+    const { adapter } = readyAdapter({ pupPage: { evaluate } });
+
+    await expect(adapter.getContacts()).resolves.toEqual([
+      { id: '262813461250071@lid', number: '262813461250071', isMyContact: false, isBlocked: false },
+    ]);
+  });
+
+  it('getContactById gives a contact answered under its phone id that phone as number', async () => {
+    const getContactById = jest.fn().mockResolvedValue({ ...lidRecord, name: 'Alice', isMyContact: true });
+    const { adapter } = readyAdapter({ getContactById });
+
+    await expect(adapter.getContactById('262813461250071@lid')).resolves.toEqual({
+      id: '628111@c.us',
+      name: 'Alice',
+      pushName: 'Ally',
+      number: '628111',
+      isMyContact: true,
+      isBlocked: false,
+    });
+  });
+
   // #1476: an entry with no readable wid under either name (a shape wwebjs itself sometimes returns)
   // must not reject the whole address book — it is dropped and counted instead.
   it('skips a contact with no readable id and counts it in the warn log, keeping the rest', async () => {
