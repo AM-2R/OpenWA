@@ -151,11 +151,10 @@ describe('LoggerService', () => {
       expect(items[1499]).toEqual({ id: 1499, tags: [1499] });
     });
 
-    it('truncates a wide structure that sits deep in the metadata after the bound', () => {
-      logger.log('cfg', { a: { b: { c: { d: { items: Array.from({ length: 1500 }, (_, id) => ({ id })) } } } } });
+    it('truncates the rows of a wide array below the last whole level once the budget is spent', () => {
+      logger.log('cfg', { a: { b: { c: { items: Array.from({ length: 1500 }, (_, id) => ({ id })) } } } });
 
-      const { items } = (getLogOutput(consoleSpy) as unknown as { a: { b: { c: { d: { items: unknown[] } } } } }).a.b.c
-        .d;
+      const { items } = (getLogOutput(consoleSpy) as unknown as { a: { b: { c: { items: unknown[] } } } }).a.b.c;
       expect(items).toHaveLength(1500);
       expect(items[0]).toEqual({ id: 0 });
       expect(items[1499]).toBe('[Truncated]');
@@ -268,6 +267,37 @@ describe('LoggerService', () => {
         expect(() => logger.log('saved', metadata())).not.toThrow();
 
         expect(getRawOutput(consoleSpy)).toContain('saved');
+      });
+    });
+  });
+
+  // Array.prototype.map visits every index of an array, holes included, so a sparse array costs its length
+  // however little it holds: the largest one takes tens of seconds to walk.
+  describe('a sparse array of the largest length', () => {
+    const sparse = (): unknown[] => {
+      const list: unknown[] = [];
+      list.length = 2 ** 32 - 1;
+      return list;
+    };
+    const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+
+    it('is written as [Truncated] at once in the first levels, with the rest of the line kept', () => {
+      const started = Date.now();
+      logger.log('saved', { sessionId: 's1', list: sparse() });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', list: '[Truncated]' });
+    });
+
+    it('is written as [Truncated] at once below the fifth level, with the rest of the line kept', () => {
+      const started = Date.now();
+      logger.log('saved', { sessionId: 's1', a: { b: { c: { d: { e: { list: sparse() } } } } } });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(parsed()).toMatchObject({
+        message: 'saved',
+        sessionId: 's1',
+        a: { b: { c: { d: { e: { list: '[Truncated]' } } } } },
       });
     });
   });
@@ -548,5 +578,24 @@ describe('redactSecrets', () => {
 
     expect(copy.error).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
     expect(copy.error.stack).toContain('Error: boom');
+  });
+
+  describe('an array longer than one call may walk', () => {
+    const zeros = (length: number): number[] => new Array<number>(length).fill(0);
+
+    it('copies a million entries in the first levels and writes a longer array as [Truncated]', () => {
+      const whole = redactSecrets({ list: zeros(1_000_000) }) as { list: unknown[] };
+
+      expect(whole.list).toHaveLength(1_000_000);
+      expect(redactSecrets({ list: zeros(1_000_001) })).toEqual({ list: '[Truncated]' });
+    });
+
+    it('copies a deep array that fits in what is left of the node budget and writes a longer one as [Truncated]', () => {
+      // The array sits at the fifth level: it costs 1 of the 1000 nodes, which leaves 999 entries.
+      const deep = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });
+
+      expect(redactSecrets(deep(zeros(999)))).toEqual(deep(zeros(999)));
+      expect(redactSecrets(deep(zeros(1000)))).toEqual(deep('[Truncated]'));
+    });
   });
 });

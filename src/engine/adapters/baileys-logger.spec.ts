@@ -130,6 +130,17 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line).toContain('"password":"[redacted]","visible":"v"');
   });
 
+  it('writes a sparse array of the largest length as [Truncated] at once', () => {
+    const list: unknown[] = [];
+    list.length = 2 ** 32 - 1;
+
+    const started = Date.now();
+    const line = write({ list, jid: 'j' }, 'x');
+
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(line).toMatchObject({ list: '[Truncated]', jid: 'j', msg: 'x' });
+  });
+
   it('writes what lies beyond the bounded amount of deep data as [Truncated], never raw', () => {
     const line = write({ record: nest(1500, { password: 'value-far' }), jid: 'j' }, 'x');
 

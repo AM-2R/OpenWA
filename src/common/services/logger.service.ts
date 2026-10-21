@@ -28,11 +28,15 @@ export interface LogContext {
 // (case-insensitive), never the value's content, to avoid false positives on innocuous fields.
 const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key/i;
 
-// Metadata is copied whole down to this depth, which is where it normally lives. Below it one log call copies at
-// most REDACT_DEEP_NODES more objects and arrays and writes the rest as [Truncated], never raw, so a densely
-// linked object graph cannot make a single log call walk it for long.
+// Metadata is copied whole down to this depth, however wide or dense, which is where it normally lives; that part is
+// not bounded. Below it one log call copies at most REDACT_DEEP_NODES more objects and arrays and writes the rest as
+// [Truncated], never raw, so a densely linked object graph cannot make it walk that part for long.
 const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
+// Array.prototype.map visits every index, holes included, so a sparse array costs its length however little it
+// holds (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is
+// left of the node budget, is written as [Truncated] before any index is visited.
+const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 
 export interface RedactOptions {
   /** Whether the value under this key is a credential. Defaults to the secret-name pattern above. */
@@ -56,10 +60,12 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
   const walk = (node: unknown, path: object[]): unknown => {
     if (node === null || typeof node !== 'object') return node;
     if (path.includes(node)) return '[Circular]';
-    if (path.length >= REDACT_FULL_DEPTH && --budget.nodes < 0) return '[Truncated]';
+    const deep = path.length >= REDACT_FULL_DEPTH;
+    if (deep && --budget.nodes < 0) return '[Truncated]';
     const parents = [...path, node];
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
-    if (Array.isArray(node)) return node.map(copy);
+    if (Array.isArray(node))
+      return node.length > (deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH) ? '[Truncated]' : node.map(copy);
     const props = node as Record<string, unknown>;
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
