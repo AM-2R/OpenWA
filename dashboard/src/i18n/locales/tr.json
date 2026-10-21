@@ -866,6 +866,119 @@
       "cancelling": "İptal ediliyor..."
     }
   },
+  "numberChecker": {
+    "subtitle": "Telefon numaralarının aktif bir WhatsApp hesabı olup olmadığını mesaj göndermeden sessizce kontrol edin",
+    "zeroMessages": "Mesaj Gönderilmez",
+    "noSession": {
+      "title": "Bağlı WhatsApp oturumu yok.",
+      "desc": "Telefon numaralarını kontrol etmek için OpenWA, kimliği doğrulanmış en az bir oturum gerektirir.",
+      "goToSessions": "Oturumlara Git"
+    },
+    "tabs": {
+      "single": "Tekli Kontrol",
+      "bulk": "Toplu Numara Denetleyicisi"
+    },
+    "session": {
+      "label": "WhatsApp Oturumu",
+      "none": "Hazır oturum yok",
+      "hint": "Kontroller, bağlı olan bu WhatsApp hesabı üzerinden yapılır."
+    },
+    "single": {
+      "title": "Tek Hesabı Kontrol Et",
+      "phoneLabel": "Telefon Numarası",
+      "phonePlaceholder": "ör. 919876543210 veya 6281234567890 (ülke koduyla birlikte)",
+      "check": "Kontrol Et",
+      "checking": "Kontrol ediliyor...",
+      "autoPrefix": "10 basamaklı numaraların başına otomatik olarak <strong>+91</strong> ekle (12 basamaklı numaralar olduğu gibi bırakılır)",
+      "silent": "<strong>Tamamen Sessiz:</strong> Bu kontrol, WhatsApp'ın kayıtlı numara dizinini doğrudan sorgular. Kişiye herhangi bir bildirim, ses veya mesaj ulaşmaz.",
+      "resultTitle": "Kontrol Sonucu",
+      "querying": "WhatsApp sunucuları sorgulanıyor...",
+      "empty": "Bir telefon numarası girin ve WhatsApp durumunu görmek için \"Kontrol Et\" düğmesine tıklayın."
+    },
+    "preview": {
+      "prefixed": "Şu şekilde kontrol edilecek: <strong>+{{number}}</strong> (10 basamak → başına otomatik olarak 91 eklendi)",
+      "kept": "Şu şekilde kontrol edilecek: <strong>+{{number}}</strong> (12 basamak → olduğu gibi bırakıldı)",
+      "digits": "Şu şekilde kontrol edilecek: <strong>+{{number}}</strong> ({{digits}} basamak)"
+    },
+    "prefixHint": {
+      "single": "10 basamaklı numaralara ve 0 ile başlayan 11 basamaklı numaralara +91 ekler. + veya 00 ile başlayan numaralar yazıldığı gibi kalır.",
+      "bulk": "10 basamaklı numaralara (ör. 96...) ve 0 ile başlayan 11 basamaklı numaralara +91 ekler. + veya 00 ile başlayan numaralar yazıldığı gibi kalır.",
+      "off": "Numaralar yazıldığı gibi, yalnızca rakamlarla kontrol edilir; bu yüzden ülke kodunu ekleyin."
+    },
+    "result": {
+      "registered": "WhatsApp'ta Kayıtlı",
+      "notRegistered": "Kayıtlı Değil",
+      "avatarAlt": "Profil fotoğrafı",
+      "status": "Durum",
+      "active": "Aktif Hesap",
+      "none": "Hesap Bulunamadı",
+      "jid": "WhatsApp JID",
+      "copyJid": "JID'yi Kopyala",
+      "copy": "Kopyala",
+      "copied": "Kopyalandı",
+      "checkedAt": "Kontrol Saati",
+      "openTester": "Mesaj Test Aracı'nda Aç"
+    },
+    "recent": {
+      "title": "Son Kontroller",
+      "clear": "Geçmişi Temizle"
+    },
+    "table": {
+      "phone": "Telefon Numarası",
+      "status": "WhatsApp Durumu",
+      "id": "WhatsApp ID",
+      "time": "Saat"
+    },
+    "status": {
+      "registered": "Kayıtlı",
+      "unregistered": "Kayıtlı Değil",
+      "notRegistered": "Kayıtlı Değil",
+      "failed": "Başarısız"
+    },
+    "bulk": {
+      "title": "Toplu Numara Denetleyicisi",
+      "delayLabel": "Sorgular Arası Güvenli Gecikme (ms)",
+      "delay1": "1000 ms / 1 sn (Önerilen)",
+      "delay2": "2000 ms / 2 sn (Ekstra Güvenli)",
+      "delay3": "3000 ms / 3 sn (Yüksek Hacimde Güvenli)",
+      "delayHint": "Ağ geçidinin istek sınırının altında kalmak için sorgular arasında bekler (varsayılan olarak dakikada 100). Ağ geçidi başka sorguları reddederse toplu kontrol durur.",
+      "countryRule": "Ülke Kodu Kuralı",
+      "autoPrefix": "10 basamaklı numaraların başına otomatik olarak <strong>+91</strong> (Hindistan) ekle",
+      "numbersLabel": "Kontrol Edilecek Numaralar (her satıra bir numara veya virgülle ayrılmış)",
+      "numbersHint": "Telefon numaralarını ülke koduyla birlikte yapıştırın; her satıra bir numara yazın veya virgülle ayırın. Her seferde en fazla {{max}} numara.",
+      "parsed": "<strong>{{count}}</strong> benzersiz numara algılandı",
+      "parsed_other": "<strong>{{count}}</strong> benzersiz numara algılandı",
+      "tenDigitAdded": "({{ten}} on basamaklı → +91 eklendi)",
+      "tenDigitAddedPreserved": "({{ten}} on basamaklı → +91 eklendi, {{twelve}} on iki basamaklı korundu)",
+      "tooMany": "Çok fazla numara: {{parsed}} algılandı, her seferde en fazla {{max}} olabilir. Başlamak için {{excess}} numara kaldırın.",
+      "start": "Toplu Kontrolü Başlat",
+      "stop": "Kontrolü Durdur",
+      "export": "Sonuçları Dışa Aktar (CSV)",
+      "stoppedTitle": "Toplu Kontrol Durduruldu",
+      "checked": "Kontrol Edilen",
+      "remaining": "Kalan",
+      "all": "Tümü"
+    },
+    "stopped": {
+      "reason409": "Oturum bağlı değil",
+      "reason429": "Ağ geçidinin hız sınırına ulaşıldı",
+      "reason503": "WhatsApp bir sorguya yanıt vermedi",
+      "reasonOther": "Ağ geçidi bir sorguyu reddetti",
+      "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
+      "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
+      "last": "{{reason}} (HTTP {{status}}). Son sorgu başarısız oldu. Daha sonra tekrar deneyin."
+    },
+    "toast": {
+      "enterNumber": "Lütfen kontrol edilecek bir telefon numarası girin.",
+      "noSession": "Hazır WhatsApp oturumu yok.",
+      "checkFailed": "Kontrol başarısız",
+      "unknownError": "Bilinmeyen sorgu hatası",
+      "lookupFailed": "Sorgu başarısız",
+      "enterNumbers": "Lütfen geçerli telefon numaraları girin (her satıra bir numara veya virgülle ayrılmış).",
+      "completed": "{{count}} numaranın kontrolü tamamlandı.",
+      "completed_other": "{{count}} numaranın kontrolü tamamlandı."
+    }
+  },
   "infrastructure": {
     "title": "Altyapı",
     "subtitle": "Sunucu, veritabanı, önbellek, depolama ve motor ayarlarını yapılandırın",

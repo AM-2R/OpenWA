@@ -13,17 +13,11 @@ import {
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
+import { positiveIntFromEnv } from '../utils/env-int';
 import { isSafeStorageKey } from '../utils/path-safety';
 import { DEFAULT_S3_KEY_PREFIX, normalizeS3KeyPrefix } from './s3-key-prefix';
 import { createExportStream, ExportFileSource, importFromStream, isMissingObjectError } from './storage-transfer';
-import {
-  listLocalFiles,
-  iterateLocalFiles,
-  getLocalFile,
-  openLocalFile,
-  putLocalFile,
-  deleteLocalFile,
-} from './storage-local-files';
+import { iterateLocalFiles, getLocalFile, openLocalFile, putLocalFile, deleteLocalFile } from './storage-local-files';
 
 // Re-exported so feature modules keep importing it next to StorageService.
 export { isMissingObjectError } from './storage-transfer';
@@ -62,11 +56,6 @@ export const S3_PROBE_TIMEOUT_MS = 10_000;
  */
 export const S3_CONNECT_TIMEOUT_MS = 5_000;
 export const S3_SOCKET_TIMEOUT_MS = 30_000;
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
 
 @Injectable()
 export class StorageService implements OnModuleDestroy {
@@ -233,10 +222,6 @@ export class StorageService implements OnModuleDestroy {
     return this.storageType;
   }
 
-  isS3Available(): boolean {
-    return this.s3Available;
-  }
-
   private lastS3Check = 0;
   /** Why the last probe failed. The fallback warning names it: a store refusing the create is not an outage. */
   private lastS3Error = '';
@@ -279,29 +264,16 @@ export class StorageService implements OnModuleDestroy {
     return this.s3Available;
   }
 
-  async listFiles(): Promise<string[]> {
-    if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      // Union with the local fallback dir: media written locally while S3 was down is otherwise
-      // invisible to enumeration — getFile reads through to it, so a listing that omits it
-      // contradicts what reads serve, and a sweep reconciling against this listing could never
-      // reclaim it.
-      const files = new Set(await this.listS3Files());
-      for (const file of await this.listLocalFiles()) files.add(file);
-      return [...files];
-    }
-    return this.listLocalFiles();
-  }
-
   /**
    * Enumerate every file in the store (all S3 pages unioned with the local fallback dir, each key
-   * once) as a stream — unlike listFiles(), whose STORAGE_LIST_MAX_FILES truncation is a per-call
-   * DoS guard, not a completeness contract. Callers that must reconcile against the full store
-   * (e.g. the status-media orphan sweep) should iterate this instead of a single capped listing.
+   * once) as a stream. The union matters: media written locally while S3 was down is otherwise
+   * invisible to enumeration, although getFile reads through to it, and a sweep reconciling against
+   * the listing could never reclaim it. Callers that must reconcile against the full store (e.g.
+   * the status-media orphan sweep) iterate this.
    *
-   * `prefix` narrows the walk at the source — the S3 ListObjectsV2 prefix and the local traversal
-   * root — so a caller reconciling one subtree neither pages the whole store nor holds every key
-   * of it in the dedupe Set. Removing the per-call cap must not trade one unbounded read for
-   * another.
+   * `prefix` narrows the walk at the source (the S3 ListObjectsV2 prefix and the local traversal
+   * root), so a caller reconciling one subtree neither pages the whole store nor holds every key
+   * of it in the dedupe Set.
    */
   async *iterateFiles(prefix = ''): AsyncGenerator<string> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
@@ -380,15 +352,16 @@ export class StorageService implements OnModuleDestroy {
       // ListObjectsV2 already returns each object's Size, so report the real total instead of a
       // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
       const s3 = await this.getS3CountAndSize();
-      // Union with the local fallback dir (same split-brain gap as listFiles): a local-only file
-      // counts with its real on-disk size; for a key present in both, the S3 copy is authoritative.
+      // Union with the local fallback dir (media written locally while S3 was down is not in the
+      // bucket listing): a local-only file counts with its real on-disk size; for a key present in
+      // both, the S3 copy is authoritative.
       const s3Keys = new Set(s3.keys);
       let { count, sizeBytes } = s3;
       for await (const file of this.iterateLocalFiles()) {
         if (s3Keys.has(file)) continue;
         count += 1;
         try {
-          // Same reason as the local branch below: this walk is uncapped too, so the stat must yield.
+          // Same reason as the local branch below: the walk covers the whole store, so the stat must yield.
           sizeBytes += (await fs.promises.stat(path.join(this.localPath, file))).size;
         } catch (error) {
           this.logger.debug(`Failed to stat file: ${file}`, { error: String(error) });
@@ -397,17 +370,16 @@ export class StorageService implements OnModuleDestroy {
       return { count, sizeBytes };
     }
 
-    // The uncapped walk, for the same reason createExportStream uses it: this is the pre-check an
-    // operator runs BEFORE the export/import migration, so a count truncated at STORAGE_LIST_MAX_FILES
-    // would hide exactly the gap they are checking for.
+    // The whole store is walked, for the same reason createExportStream does: this is the pre-check an
+    // operator runs BEFORE the export/import migration, so it has to see every file the export will carry.
     const files = await this.listAllFiles();
     let sizeBytes = 0;
     for (const file of files) {
       try {
         const fullPath = path.join(this.localPath, file);
-        // Awaited, not statSync: uncapping the walk above also uncapped this loop, and a synchronous
-        // stat per file holds the event loop for the whole store — health checks, webhooks and every
-        // in-flight request wait behind a count. Measured at one event-loop tick for 2000 files.
+        // Awaited, not statSync: a synchronous stat per file holds the event loop for the whole store,
+        // so health checks, webhooks and every in-flight request wait behind a count. Measured at one
+        // event-loop tick for 2000 files.
         const stats = await fs.promises.stat(fullPath);
         sizeBytes += stats.size;
       } catch (error) {
@@ -454,12 +426,9 @@ export class StorageService implements OnModuleDestroy {
   // ============================================================================
 
   createExportStream(): Promise<PassThrough> {
-    // Enumerated with iterateFiles(), NOT listFiles(). listFiles() stops at STORAGE_LIST_MAX_FILES
-    // and returns without logging or throwing — a per-call DoS guard, as its own doc says, and not a
-    // completeness contract. Spending it here made the documented local→S3 migration (export,
-    // repoint STORAGE_TYPE, import) leave media behind on the old backend silently, and the
-    // operator's own files/count pre-check was truncated by the same path, so the consistency check
-    // could not reveal the gap. An export exists to be complete; that is what the uncapped walk is for.
+    // The whole store is enumerated (iterateFiles): an export exists to be complete, and a short one
+    // would leave media behind on the old backend silently after the documented local→S3 migration
+    // (export, repoint STORAGE_TYPE, import).
     // A listed key openFile would refuse (an S3 object named `..`, or one sitting exactly at the key
     // root) is left out here: the export fails on any open error other than a missing object, and a
     // key that can never be opened must not fail every export.
@@ -471,12 +440,15 @@ export class StorageService implements OnModuleDestroy {
   }
 
   private isExportableKey(file: string): boolean {
+    // A key ending in "/" is a folder placeholder an S3 console leaves behind: it holds no file, and written to
+    // the archive as one it would fail the import that restores it onto a local store.
+    if (file.endsWith('/')) return false;
     if (isSafeStorageKey(file)) return true;
     this.logger.warn(`Skipping an unsafe storage key in the export: ${JSON.stringify(file)}`);
     return false;
   }
 
-  /** Every key in the store, uncapped — the completeness counterpart to the capped listFiles(). */
+  /** Every key in the store. */
   private async listAllFiles(): Promise<string[]> {
     const files: string[] = [];
     for await (const file of this.iterateFiles()) files.push(file);
@@ -493,18 +465,9 @@ export class StorageService implements OnModuleDestroy {
   // ============================================================================
 
   /**
-   * Enumerate local files under the storage root, capped at STORAGE_LIST_MAX_FILES — a per-call
-   * DoS guard (a healthy media store stays well under it), NOT a completeness contract. Callers
-   * that must see the whole tree use iterateFiles().
-   */
-  private listLocalFiles(): Promise<string[]> {
-    return listLocalFiles(this.localPath);
-  }
-
-  /**
-   * Full local enumeration as a stream — no count cap. Async + iterative (a work queue, not
-   * recursion) so a deep/wide media tree can't block the event loop or stack-overflow; still
-   * bounded by the max directory depth so a pathological tree can't descend unbounded.
+   * Local enumeration as a stream. Async + iterative (a work queue, not recursion) so a deep/wide
+   * media tree can't block the event loop or stack-overflow; still bounded by the max directory
+   * depth so a pathological tree can't descend unbounded.
    */
   private iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
     return iterateLocalFiles(this.localPath, prefix);
@@ -525,12 +488,6 @@ export class StorageService implements OnModuleDestroy {
   // ============================================================================
   // S3 Storage Operations
   // ============================================================================
-
-  private async listS3Files(): Promise<string[]> {
-    const files: string[] = [];
-    for await (const file of this.iterateS3Files()) files.push(file);
-    return files;
-  }
 
   /** Stream every S3 object key (prefix-stripped), following the ListObjectsV2 pagination token. */
   private async *iterateS3Files(prefix = ''): AsyncGenerator<string> {

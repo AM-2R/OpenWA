@@ -17,6 +17,7 @@ import { type createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig } from '../types/baileys.types';
 import { useAtomicMultiFileAuthState } from './baileys-auth-store';
 import { createBaileysLogger } from './baileys-logger';
+import { GroupMetadataCache, groupMetadataCacheTtlMs } from './baileys-group-metadata-cache';
 import { BaileysVersionResolver } from './baileys-version-resolver';
 import { unappliedPatches, unappliedPatchesMessage } from './engine-patch-status';
 import {
@@ -215,6 +216,12 @@ export class BaileysLifecycle {
   private lib?: typeof BaileysLib;
   /** The session proxy's fetch dispatcher, built on first use and closed at teardown. */
   private dispatcher?: Dispatcher;
+  /**
+   * The participant lists Baileys reuses for group sends instead of querying one per message. Kept up to
+   * date by the group events registered below, dropped with every socket (see dropConnectionState).
+   * Public so the groups delegate can forget a group right after it changes its membership.
+   */
+  readonly groupMetadata = new GroupMetadataCache(groupMetadataCacheTtlMs());
 
   constructor(private readonly host: BaileysLifecycleHost) {
     this.versionResolver = new BaileysVersionResolver({
@@ -387,8 +394,12 @@ export class BaileysLifecycle {
       }
     }
 
+    // Group changes made while the previous socket was down never reached it, so nothing it cached is
+    // trusted by the next one.
+    this.groupMetadata.clear();
+
     const fetchDispatcher = this.fetchDispatcher();
-    const sock = b.default({
+    const sock: WASocket = b.default({
       auth: state,
       version,
       browser: BAILEYS_BROWSER,
@@ -463,6 +474,11 @@ export class BaileysLifecycle {
         }
         return stored.message ?? undefined;
       },
+      // Every group send needs the group's participant list, and without this Baileys queries it for each
+      // message. Read through the cache, on a miss with the same query Baileys would have made; a failure
+      // surfaces as the send's own, exactly as before. 0 in BAILEYS_GROUP_METADATA_CACHE_TTL_MS switches it
+      // off, and Baileys then queries on its own.
+      cachedGroupMetadata: jid => this.groupMetadata.read(jid, () => sock.groupMetadata(jid)),
       logger: baileysLogger,
     });
     this.sock = sock;
@@ -534,9 +550,20 @@ export class BaileysLifecycle {
       });
       this.host.removeChats(ids);
     });
-    sock.ev.on('group-participants.update', event => this.host.handleGroupParticipantsUpdate(event));
-    sock.ev.on('groups.update', updates => this.host.handleGroupsUpdate(updates));
-    sock.ev.on('groups.upsert', groups => this.host.handleGroupsUpsert(groups));
+    // The same events keep the group metadata cache honest: a membership change or a (re)join drops that
+    // group, a whole-metadata snapshot refreshes it, and any other change makes it read again.
+    sock.ev.on('group-participants.update', event => {
+      this.groupMetadata.invalidate(event.id);
+      this.host.handleGroupParticipantsUpdate(event);
+    });
+    sock.ev.on('groups.update', updates => {
+      this.groupMetadata.applyUpdates(updates);
+      this.host.handleGroupsUpdate(updates);
+    });
+    sock.ev.on('groups.upsert', groups => {
+      for (const group of groups) this.groupMetadata.invalidate(group.id);
+      this.host.handleGroupsUpsert(groups);
+    });
     sock.ev.on('group.join-request', event => this.host.handleGroupJoinRequest(event));
     sock.ev.on('messaging-history.set', history => {
       // A chunk still arriving means the pull could be absorbed into the next one: wait again.
@@ -698,7 +725,7 @@ export class BaileysLifecycle {
         // the operator stops the other instance, then starts this session again (onError = terminal
         // + evict in the session service). Auth state is NOT cleared: the link itself is still valid.
         this.setStatus(EngineStatus.FAILED);
-        this.host.liveCalls.clear(); // terminal close: dead call handles, like the loggedOut branch above
+        this.dropConnectionState(); // terminal close: dead call handles, like the loggedOut branch above
         this.host.getOnError()?.(
           `${CONNECTION_REPLACED_REASON} — stop the other instance, then start this session again`,
         );
@@ -712,7 +739,7 @@ export class BaileysLifecycle {
         // 401): this is an account-level refusal, not dead credentials — the operator keeps the auth
         // files for inspection and can retry manually once the account issue is resolved.
         this.setStatus(EngineStatus.FAILED);
-        this.host.liveCalls.clear(); // terminal close: dead call handles, like the loggedOut branch above
+        this.dropConnectionState(); // terminal close: dead call handles, like the loggedOut branch above
         this.host.getOnError()?.(
           `${ACCOUNT_REJECTED_REASON} — the number is likely banned or blocked; reconnecting will not help`,
         );
@@ -891,6 +918,16 @@ export class BaileysLifecycle {
     }
   }
 
+  /**
+   * What lives and dies with a connection: the cached call handles, which a later rejectCall() must
+   * report as not-found rather than act on a dead socket, and the group metadata, whose changes the
+   * socket stops reporting once it is gone.
+   */
+  private dropConnectionState(): void {
+    this.host.liveCalls.clear();
+    this.groupMetadata.clear();
+  }
+
   disconnect(): Promise<void> {
     this.teardown.abort();
     if (this.reconnectTimer) {
@@ -904,7 +941,7 @@ export class BaileysLifecycle {
     this.closeFetchDispatcher();
     // Cached call handles die with the socket — drop them so a later rejectCall() reports
     // not-found instead of acting on a closed connection.
-    this.host.liveCalls.clear();
+    this.dropConnectionState();
     this.setStatus(EngineStatus.DISCONNECTED);
     return Promise.resolve();
   }
@@ -953,8 +990,7 @@ export class BaileysLifecycle {
       // DISCONNECTED before the awaited cleanup so no send/path observes a half-torn-down socket.
       this.localSocketShutdown(sourceSock);
       this.host.fenceStoredWrites();
-      await this.host.config.messageStore?.clearSession(this.host.config.dbSessionId).catch(() => undefined);
-      await this.host.config.chatStateStore?.clearSession(this.host.config.sessionId).catch(() => undefined);
+      await this.clearStoredAccountState();
       // Wipe the multi-file auth dir so a fresh link starts clean — stale creds would otherwise be
       // reloaded on the next connect() and block re-linking (Baileys retries them, no QR emitted).
       // A removal failure propagates: completion requires cleanup, so the operation is incomplete.
@@ -992,7 +1028,7 @@ export class BaileysLifecycle {
     this.closeFetchDispatcher();
     // Cached call handles die with the connection — drop them so a later rejectCall() reports
     // not-found (404) instead of acting on a dead socket (mirrors disconnect/destroy).
-    this.host.liveCalls.clear();
+    this.dropConnectionState();
     if (this.sock === sourceSock) {
       this.sock = null;
     }
@@ -1018,7 +1054,7 @@ export class BaileysLifecycle {
     this.sock = null;
     // Cached call handles die with the connection — drop them so a later rejectCall() reports
     // not-found (404) instead of acting on a dead socket (mirrors disconnect/logout/destroy).
-    this.host.liveCalls.clear();
+    this.dropConnectionState();
     // A message still being processed must not recreate a row of the unlinked account after the wipe below.
     this.host.fenceStoredWrites();
     void dead?.end(undefined);
@@ -1029,8 +1065,7 @@ export class BaileysLifecycle {
         // The unlinked account's messages and chat states go with it, as they do on an API logout: the
         // next account to link this session must not reply to, forward or retry them, nor inherit its
         // muted, archived and pinned chats.
-        await this.host.config.messageStore?.clearSession(this.host.config.dbSessionId).catch(() => undefined);
-        await this.host.config.chatStateStore?.clearSession(this.host.config.sessionId).catch(() => undefined);
+        await this.clearStoredAccountState();
         await this.clearAuthState();
       } catch (err) {
         // A failed credential removal is terminal: report FAILED + onError instead of looking like a
@@ -1048,6 +1083,25 @@ export class BaileysLifecycle {
     // that same name. tracked under the captured name, settled regardless of the outcome.
     this.host.getOnCredentialTeardownStarted()?.(cleanup);
     await cleanup;
+  }
+
+  /**
+   * Drop the stored messages and chat states of the account being unlinked. A failure does not fail the
+   * unlink, whose completion is the credential removal that follows, but it is logged: the rows that
+   * survive resurface under the next account to link this session (its chat list picks up the old
+   * account's pin, mute and archive flags), and nothing else says why.
+   */
+  private async clearStoredAccountState(): Promise<void> {
+    const { messageStore, chatStateStore, dbSessionId, sessionId } = this.host.config;
+    const warn =
+      (what: string) =>
+      (err: unknown): void =>
+        this.host.logger.warn(`Failed to clear the stored ${what} of an unlinked account`, {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+    await messageStore?.clearSession(dbSessionId).catch(warn('messages'));
+    await chatStateStore?.clearSession(sessionId).catch(warn('chat states'));
   }
 
   /**
@@ -1081,7 +1135,7 @@ export class BaileysLifecycle {
     void this.sock?.end(undefined);
     this.sock = null;
     this.closeFetchDispatcher();
-    this.host.liveCalls.clear();
+    this.dropConnectionState();
     this.setStatus(EngineStatus.DISCONNECTED);
     return Promise.resolve();
   }

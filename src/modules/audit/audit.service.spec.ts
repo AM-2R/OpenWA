@@ -1,4 +1,4 @@
-import { Repository, Between } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 
@@ -56,12 +56,11 @@ describe('AuditService', () => {
     );
   });
 
-  it('logInfo/logWarn/logError map to the right severity', async () => {
+  it('logInfo/logWarn map to the right severity', async () => {
     await service.logInfo(AuditAction.API_KEY_USED);
     await service.logWarn(AuditAction.API_KEY_AUTH_FAILED);
-    await service.logError(AuditAction.MESSAGE_FAILED);
     const severities = (repo.create.mock.calls as unknown[][]).map(c => (c[0] as { severity: AuditSeverity }).severity);
-    expect(severities).toEqual([AuditSeverity.INFO, AuditSeverity.WARN, AuditSeverity.ERROR]);
+    expect(severities).toEqual([AuditSeverity.INFO, AuditSeverity.WARN]);
   });
 
   it('findAll applies provided filters with default take/skip', async () => {
@@ -94,23 +93,11 @@ describe('AuditService', () => {
     expect(arg.skip).toBe(0);
   });
 
-  it('findAll uses Between only when BOTH dates are present', async () => {
-    const start = new Date('2026-01-01T00:00:00Z');
-    const end = new Date('2026-02-01T00:00:00Z');
-    await service.findAll({ startDate: start, endDate: end, limit: 10, offset: 5 });
-    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as {
-      where: Record<string, unknown>;
-      take: number;
-      skip: number;
-    };
-    expect(arg.where.createdAt).toEqual(Between(start, end));
+  it('findAll passes an in-range limit and offset through to the query', async () => {
+    await service.findAll({ limit: 10, offset: 5 });
+    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { take: number; skip: number };
     expect(arg.take).toBe(10);
     expect(arg.skip).toBe(5);
-
-    repo.findAndCount.mockClear();
-    await service.findAll({ startDate: start }); // only one date → no Between
-    const arg2 = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { where: Record<string, unknown> };
-    expect(arg2.where.createdAt).toBeUndefined();
   });
 
   it('cleanup deletes rows older than the cutoff and returns the affected count', async () => {

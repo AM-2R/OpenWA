@@ -1,6 +1,6 @@
 import { type Client } from 'whatsapp-web.js';
 import { Channel, ChannelMessage } from '../interfaces/whatsapp-engine.interface';
-import { BusinessClient, WwjsChannelData } from '../types/whatsapp-web-js.types';
+import { BusinessClient, WwjsChannelData, readWid } from '../types/whatsapp-web-js.types';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
@@ -35,7 +35,7 @@ export class WwebjsChannels {
     return channels.map((ch: WwjsChannelData) => ({
       // Read `$1` before giving up (#747: WA Web's minifier renamed the serialized property), and
       // never String() the object branch — that manufactures the literal "undefined" as an id.
-      id: (typeof ch.id === 'object' ? (ch.id._serialized ?? ch.id.$1) : String(ch.id)) || '',
+      id: readWid(ch.id) || '',
       name: String(ch.name || ''),
       description: ch.description ? String(ch.description) : undefined,
       inviteCode: ch.inviteCode ? String(ch.inviteCode) : undefined,
@@ -68,7 +68,7 @@ export class WwebjsChannels {
     // The nid crosses the puppeteer boundary as a raw page-context Wid, exactly the object class
     // WA Web's minifier rename hits (#747): read `$1` before giving up, and never String() an
     // absent id — a channel with the literal id "undefined" is unusable for every follow-up call.
-    const channelId = result.nid._serialized ?? result.nid.$1;
+    const channelId = readWid(result.nid);
     if (!channelId) {
       throw new EngineRefusedError(`Channel '${name}' was created but its id was unreadable — refusing to return it`);
     }
@@ -233,7 +233,7 @@ export class WwebjsChannels {
       // unreadable id into the literal "undefined" rather than the empty sentinel every other path
       // uses. Read-only endpoint — never persisted, never ack-matched — so `''` carries no collision
       // risk here; it just means "id unreadable".
-      id: (typeof msg.id === 'object' ? (msg.id?._serialized ?? msg.id?.$1) : msg.id) || '',
+      id: readWid(msg.id) || '',
       body: String(msg.body || ''),
       timestamp: Number(msg.timestamp),
       hasMedia: Boolean(msg.hasMedia),

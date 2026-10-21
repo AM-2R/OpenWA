@@ -5,6 +5,7 @@ import {
   type IncomingMessage,
 } from '../interfaces/whatsapp-engine.interface';
 import { type createLogger } from '../../common/services/logger.service';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
 import { toCapturedPageError } from './wwebjs-lifecycle';
@@ -32,6 +33,18 @@ export interface WwebjsEngineHost {
   readonly config: WhatsAppWebJsConfig;
   /** Live callbacks bag — read per event, since initialize() installs it after delegates are built. */
   getCallbacks(): EngineEventCallbacks;
+}
+
+/**
+ * The client of a send path, read after ensureReady() and any awaits since (a recipient lookup, a media fetch).
+ * A teardown can null the adapter's client in that gap, and the host closure then hands back a null typed as a
+ * Client: the send would die as a TypeError 500 and count toward the send breaker. It answers the retryable 409
+ * a not-ready session gets instead.
+ */
+export function requireClient(host: WwebjsEngineHost): Client {
+  const client = host.getClient() as Client | null | undefined;
+  if (!client) throw new EngineNotReadyError();
+  return client;
 }
 
 /**

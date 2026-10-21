@@ -64,6 +64,15 @@ export enum AuditAction {
   INTEGRATION_INSTANCE_DELETED = 'integration_instance_deleted',
   INTEGRATION_INSTANCE_REDRIVEN = 'integration_instance_redriven',
 
+  // Plugin management (ADMIN-only: a plugin is third-party code that runs in the gateway process).
+  PLUGIN_INSTALLED = 'plugin_installed',
+  PLUGIN_UPDATED = 'plugin_updated',
+  PLUGIN_UNINSTALLED = 'plugin_uninstalled',
+  PLUGIN_ENABLED = 'plugin_enabled',
+  PLUGIN_DISABLED = 'plugin_disabled',
+  PLUGIN_CONFIG_UPDATED = 'plugin_config_updated',
+  PLUGIN_SESSIONS_UPDATED = 'plugin_sessions_updated',
+
   // Infrastructure events (ADMIN-only operations on the infra module: credential-bearing config
   // mutation, server restart / Docker orchestration, and full-DB / storage export+import).
   INFRA_CONFIG_SAVED = 'infra_config_saved',

@@ -49,6 +49,13 @@ export class PluginsService {
   private readonly opChains = new Map<string, Promise<unknown>>();
 
   private serialize<T>(id: string, op: () => Promise<T>): Promise<T> {
+    // A boot restore that outlasted the boot wait enables plugins in the background, outside this chain, so a
+    // change to a plugin it has not finished with would interleave with its enable (see isRestorePending).
+    if (this.pluginLoader.isRestorePending(id)) {
+      return Promise.reject(
+        new ConflictException(`Plugin ${id} is still being restored after startup. Retry in a moment.`),
+      );
+    }
     const prior = this.opChains.get(id) ?? Promise.resolve();
     const next = prior.catch(() => undefined).then(op);
     this.opChains.set(id, next);
@@ -232,7 +239,9 @@ export class PluginsService {
     try {
       // The dashboard PUTs the whole (redacted) config back, so a sentinel secret means "unchanged":
       // restore the stored value instead of overwriting the real secret with the mask.
-      const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema);
+      const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema, {
+        mergedOverStored: true,
+      });
       this.pluginLoader.updatePluginConfig(id, merged);
       return { success: true, message: `Plugin ${id} configuration updated` };
     } catch (error) {
@@ -405,11 +414,21 @@ export class PluginsService {
    * means the package was substituted in transit and the install fails closed.
    */
   async installFromUrl(url: string): Promise<PluginDto> {
-    const buffer = await this.downloadPackage(url);
-    // Peek the id (the SSRF download stays outside the lock) so the install — which writes the plugin
-    // directory — is serialized against any concurrent uninstall/update of the same id.
-    const { manifest } = parsePluginPackage(buffer);
-    return this.serialize(manifest.id, () => Promise.resolve(this.install({ buffer })));
+    // The SSRF download stays outside the lock; the install itself takes it.
+    return this.installPackage({ buffer: await this.downloadPackage(url) });
+  }
+
+  /**
+   * {@link install} under the same per-id lock as uninstall and update. The id is peeked from the package
+   * first, so an install (which writes the plugin directory) cannot interleave with a teardown of that
+   * plugin that is still awaiting its takeovers, and then remove the files the install just wrote.
+   */
+  async installPackage(file?: { buffer?: Buffer }): Promise<PluginDto> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No plugin file uploaded');
+    }
+    const { manifest } = parsePluginPackage(file.buffer);
+    return this.serialize(manifest.id, () => Promise.resolve(this.install(file)));
   }
 
   /**

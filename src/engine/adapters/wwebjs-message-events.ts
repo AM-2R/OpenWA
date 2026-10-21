@@ -6,7 +6,7 @@ import {
   type ReactionEvent,
   type EditedMessage,
 } from '../interfaces/whatsapp-engine.interface';
-import { type SerializedWid } from '../types/whatsapp-web-js.types';
+import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
 import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } from './wwebjs-messaging';
 import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
@@ -118,7 +118,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     // has a perfectly good id here, and dropping it strands the message at SENT — including the
     // `ack < 0` that is the only signal a send failed.
     const rawId = msg.id as unknown as SerializedWid | undefined;
-    const ackId = rawId?._serialized ?? rawId?.$1;
+    const ackId = readWid(rawId);
     if (!ackId) {
       host.logger.warn('Dropping an ack whose message id could not be read', { ack });
       return;
@@ -149,8 +149,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       const afterId = after.id as unknown as SerializedWid | undefined;
       const beforeId = before?.id as unknown as SerializedWid | undefined;
       const payload: RevokedMessage = {
-        id: afterId?._serialized ?? afterId?.$1 ?? '',
-        revokedId: beforeId?._serialized ?? beforeId?.$1,
+        id: readWid(afterId) ?? '',
+        revokedId: readWid(beforeId),
         // Direction flag, as Message._getChatId: an own message in a LID chat carries the own LID as
         // `from`, which never equals the phone-dialect account wid.
         chatId: after.fromMe ? after.to : after.from,
@@ -179,7 +179,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       // emit another message's reactions. Empty string finds nothing and returns cleanly.
       const msgId = reaction.msgId as unknown as SerializedWid;
       const event: ReactionEvent = {
-        messageId: msgId?._serialized ?? msgId?.$1 ?? '',
+        messageId: readWid(msgId) ?? '',
         chatId: reaction.id.remote,
         reaction: reaction.reaction,
         senderId: reaction.senderId,

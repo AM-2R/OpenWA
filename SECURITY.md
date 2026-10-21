@@ -90,7 +90,7 @@ The application container never mounts `/var/run/docker.sock`; it reaches the da
 only through the bundled `docker-proxy` sidecar (pinned `tecnativa/docker-socket-proxy`),
 which listens solely on an internal Compose network that no other container joins.
 The proxy enables only the endpoint families the built-in datastore orchestration
-needs (`CONTAINERS`, `IMAGES`, `VOLUMES`, `INFO`, `PING`) plus its single `POST`
+needs (`CONTAINERS`, `IMAGES`, `VOLUMES`, `PING`) plus its single `POST`
 method switch.
 
 This is **not** a fine-grained privilege boundary, and we deliberately do not claim

@@ -31,12 +31,18 @@ export class SearchQueryDto {
   @IsString()
   sessionId?: string;
 
-  @ApiPropertyOptional({ description: 'Restrict to a single chat id' })
+  @ApiPropertyOptional({
+    description:
+      "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+  })
   @IsOptional()
   @IsString()
   chatId?: string;
 
-  @ApiPropertyOptional({ description: 'Sender filter' })
+  @ApiPropertyOptional({
+    description:
+      "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+  })
   @IsOptional()
   @IsString()
   from?: string;

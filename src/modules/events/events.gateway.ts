@@ -18,7 +18,12 @@ import { isWsRedisEnabled } from './redis-io.adapter';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveCorsPolicy } from '../../config/bootstrap-security';
-import { limiterKeyForIp, resolveClientIp as resolveRequestClientIp, type RequestLike } from '../../common/utils/ip';
+import {
+  limiterKeyForIp,
+  parseTrustedProxies,
+  resolveClientIp as resolveRequestClientIp,
+  type RequestLike,
+} from '../../common/utils/ip';
 import { DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES, shedInlineMedia } from '../../common/utils/inline-media';
 import { isSafeSessionName } from '../../common/utils/path-safety';
 import { ApiKeyRole, type ApiKey } from '../auth/entities/api-key.entity';
@@ -45,10 +50,7 @@ function resolveWsCorsOrigin(): boolean | string[] {
  * client IP with the same trusted-proxy-aware logic as the REST guard and the MCP mount.
  */
 function readTrustedProxies(): string[] {
-  return (process.env.TRUSTED_PROXIES ?? '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+  return parseTrustedProxies(process.env.TRUSTED_PROXIES);
 }
 import type {
   WSClientMessage,

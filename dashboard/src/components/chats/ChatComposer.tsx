@@ -9,6 +9,7 @@ import { messagesQueryKey, useChatMessagesActions, upsertCachedMessage } from '.
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import type { ScrollDirection } from '../../utils/scrollDecision';
+import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 
 // Map an attachment MIME type to the neutral MessageType for the optimistic outgoing bubble, so the
 // placeholder matches what the backend will persist (e.g. a PDF is `document`, not `application`).
@@ -18,11 +19,6 @@ const messageTypeFromMime = (mimetype: string): MessageType => {
   if (mimetype.startsWith('audio/')) return 'audio';
   return 'document';
 };
-
-// Client pre-check before base64-encoding an upload, same cap as the message tester: base64
-// inflates ~1.33x, so ~18 MiB raw stays under the backend's default 25 MiB body limit and the
-// pick fails here with a toast instead of OOMing the tab on the FileReader.
-export const MEDIA_UPLOAD_MAX_BYTES = 18 * 1024 * 1024;
 
 /** A picked-but-unsent file, staged until send, removal, or a move to another chat. */
 export interface StagedAttachment {

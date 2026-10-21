@@ -55,6 +55,22 @@ describe('ChatScopeService', () => {
     expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, `${PHONE}@c.us`)).toBe(true);
   });
 
+  it('candidatesFor expands a phone and a lid through the directory, and always keeps the id as given', async () => {
+    const svc = new ChatScopeService(fakeStore());
+
+    const phone = await svc.candidatesFor(`${PHONE}@c.us`);
+    expect(phone).toEqual(expect.arrayContaining([`${PHONE}@c.us`, `${PHONE}@s.whatsapp.net`, `${LID}@lid`]));
+
+    const lid = await svc.candidatesFor(`${LID}@lid`);
+    expect(lid).toEqual(expect.arrayContaining([`${LID}@lid`, `${PHONE}@c.us`]));
+
+    // A spelling the expansion does not fold still names the rows stored under it.
+    for (const spelling of ['120363@G.US', '120363@g.us ', '999@LID', '999:7@lid']) {
+      expect(await svc.candidatesFor(spelling)).toContain(spelling);
+    }
+    expect(new Set(phone).size).toBe(phone.length);
+  });
+
   it('filters a list through the batched expansion, passing an unrestricted key through', async () => {
     const svc = new ChatScopeService(fakeStore());
     const rows = [{ id: '123@g.us' }, { id: `${LID}@lid` }, { id: '999@g.us' }];

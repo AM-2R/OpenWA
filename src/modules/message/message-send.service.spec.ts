@@ -583,6 +583,47 @@ describe('MessageSendService', () => {
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
 
+    it('answers a 400 from the measured length, without building a render of hundreds of megabytes', async () => {
+      // 341 + 1365 + 341 placeholders fit in a header, body and footer at their size limits. One 393 KB value
+      // would build ~800 MB (a RangeError at the join, or an out-of-memory abort in a small container).
+      (templateService.resolve as jest.Mock).mockResolvedValue(
+        mockTemplate({ header: '{a}'.repeat(341), body: '{a}'.repeat(1365), footer: '{a}'.repeat(341) }),
+      );
+
+      const error = await service
+        .sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { a: 'x'.repeat(393_000) } })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as Error).message).toContain(`Rendered template is ${2047 * 393_000 + 4} characters`);
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers a 400, not a 500, for a variable that has no text form', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
+
+      await expect(
+        service.sendTemplate('sess-1', {
+          chatId: 'test@c.us',
+          templateId: 'tpl-1',
+          vars: { customer: { toString: 1 } as unknown as string },
+        }),
+      ).rejects.toThrow(new BadRequestException("Variable 'customer' cannot be rendered as text"));
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('still renders a number sent for a variable', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Order {{orderId}}' }));
+
+      await service.sendTemplate('sess-1', {
+        chatId: 'test@c.us',
+        templateId: 'tpl-1',
+        vars: { orderId: 1234 as unknown as string },
+      });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('test@c.us', 'Order 1234');
+    });
+
     it('renders at-or-under the cap unchanged', async () => {
       (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
       // 'Hi ' + name lands exactly on the 64 KiB default cap — at the cap is NOT over it.
@@ -1316,7 +1357,10 @@ describe('MessageSendService', () => {
           },
         }),
       );
-      expect(repository.save).toHaveBeenLastCalledWith(
+      // The only write after the send is this UPDATE; the in-memory entity handed to save() earlier is
+      // mutated afterwards, so asserting on save() would pass without the label ever being written.
+      expect(repository.update).toHaveBeenLastCalledWith(
+        { id: 'msg-uuid-1', sessionId: 'sess-1' },
         expect.objectContaining({
           body: 'Sim',
           status: MessageStatus.SENT,
@@ -1325,7 +1369,40 @@ describe('MessageSendService', () => {
             button: { id: 'yes', text: 'Sim' },
           },
         }),
-        { transaction: false },
+      );
+    });
+
+    it('leaves the stored body alone when the engine resolved no label', async () => {
+      mockEngine.clickButton.mockResolvedValueOnce({ ...mockEngineResult });
+
+      await service.clickButton('sess-1', { chatId: 'test@c.us', messageId: 'PROMPT-1', buttonId: 'yes', text: 'Yes' });
+
+      const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
+      const [, patch] = update.mock.calls.at(-1) ?? [];
+      expect(patch).toMatchObject({ status: MessageStatus.SENT });
+      expect(patch).not.toHaveProperty('body');
+    });
+
+    // The echo won the race and merging onto it failed, so this row is the one kept: it still has to carry the label.
+    it('keeps the resolved label on the retained row when merging onto the echo row failed', async () => {
+      (repository.findOne as jest.Mock)
+        .mockResolvedValueOnce(null) // the prompt lookup
+        .mockRejectedValueOnce(new Error('db busy')) // the metadata merge onto the echo row
+        .mockResolvedValueOnce({ id: 'msg-uuid-1' }); // the retained row, read back
+      (repository.update as jest.Mock).mockRejectedValueOnce(
+        Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
+      );
+
+      await service.clickButton('sess-1', {
+        chatId: 'test@c.us',
+        messageId: 'PROMPT-1',
+        buttonId: 'yes',
+        text: 'Yes',
+      });
+
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'msg-uuid-1', status: MessageStatus.PENDING },
+        expect.objectContaining({ status: MessageStatus.SENT, body: 'Sim' }),
       );
     });
 

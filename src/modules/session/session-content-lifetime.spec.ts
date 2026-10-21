@@ -1,9 +1,10 @@
+import { ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { MessageBatch } from '../message/entities/message-batch.entity';
+import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -16,7 +17,7 @@ import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
-import { SessionEngineControls, StopMarks } from './session-engine-controls';
+import { SESSION_DELETE_BATCH_SIZE, SessionEngineControls, StopMarks } from './session-engine-controls';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionEngineLeafEvents } from './session-engine-leaf-events';
 import { MessageSendService } from '../message/message-send.service';
@@ -302,5 +303,156 @@ describe('Session content lifetime', () => {
     expect(await settled).toBe('refused');
     expect(replacementSend).not.toHaveBeenCalled();
     expect(await db.getRepository(Message).count()).toBe(0);
+  });
+
+  it('removes the messages, outbox events and delivery failures of a session in batches and leaves other sessions alone', async () => {
+    const doomed = await createSession();
+    const kept = await db.getRepository(Session).save({ name: 'kept-session', config: {} });
+    const messages = db.getRepository(Message);
+    const outbox = db.getRepository(WebhookOutboxEvent);
+    const failures = db.getRepository(WebhookDeliveryFailure);
+    const count = SESSION_DELETE_BATCH_SIZE * 2 + 50;
+    const seed = async (sessionId: string, rows: number): Promise<void> => {
+      for (let from = 0; from < rows; from += 200) {
+        const size = Math.min(200, rows - from);
+        const range = Array.from({ length: size }, (_, i) => from + i);
+        await messages.insert(
+          range.map(i => ({
+            sessionId,
+            chatId: '10000000001@c.us',
+            from: 'me',
+            to: '10000000001@c.us',
+            body: `m${i}`,
+          })),
+        );
+        await outbox.insert(
+          range.map(i => ({
+            webhookId: 'hook-1',
+            sessionId,
+            event: 'message.received',
+            idempotencyKey: `${sessionId}-${i}`,
+            deliveryId: `dlv-${sessionId}-${i}`,
+            payload: null,
+            state: 'dispatched' as const,
+          })),
+        );
+        await failures.insert(
+          range.map(i => ({
+            sessionId,
+            webhookId: 'hook-1',
+            event: 'message.received',
+            url: 'https://receiver.example',
+            idempotencyKey: `${sessionId}-${i}`,
+            attempts: 3,
+            lastError: 'HTTP 503',
+            payload: {},
+          })),
+        );
+      }
+    };
+    await seed(doomed.id, count);
+    await seed(kept.id, 3);
+    const deleteMessages = jest.spyOn(messages, 'delete');
+    const deleteOutbox = jest.spyOn(outbox, 'delete');
+    const deleteFailures = jest.spyOn(failures, 'delete');
+
+    await controls.delete(doomed.id);
+
+    expect(await messages.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await outbox.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await failures.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await messages.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await outbox.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await failures.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await db.getRepository(Session).findOneBy({ id: doomed.id })).toBeNull();
+    // Three statements per table instead of one that holds the table for every row at once.
+    expect(deleteMessages.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(deleteOutbox.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(deleteFailures.mock.calls.length).toBeGreaterThanOrEqual(3);
+  }, 60000);
+
+  // The write scopes a delete closes stay retired when it fails: a batch running for the session stops at
+  // its next item without recording anything. The session is still there, so its row would stay PROCESSING.
+  describe('a delete that fails after closing the session writes', () => {
+    const seedBatch = (sessionId: string, status: BatchStatus, batchId: string) =>
+      db.getRepository(MessageBatch).save({
+        batchId,
+        sessionId,
+        status,
+        messages: [
+          {
+            chatId: '10000000001@c.us',
+            type: 'image',
+            content: { image: { base64: 'MEDIA-PAYLOAD', mimetype: 'image/png', caption: 'hi' } },
+          },
+        ],
+        options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+        progress: { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 },
+        results: [],
+      });
+
+    const statuses = async (): Promise<Array<[string, string]>> =>
+      (await db.getRepository(MessageBatch).find({ order: { batchId: 'ASC' } })).map(row => [row.batchId, row.status]);
+
+    it('fails the unfinished batches of the surviving session and strips their media', async () => {
+      const session = await createSession();
+      const other = await db.getRepository(Session).save({ name: 'other-session', config: {} });
+      await seedBatch(session.id, BatchStatus.PENDING, 'b-pending');
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      await seedBatch(session.id, BatchStatus.COMPLETED, 'b-done');
+      await seedBatch(other.id, BatchStatus.PROCESSING, 'b-other');
+      jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
+
+      expect(await statuses()).toEqual([
+        ['b-done', BatchStatus.COMPLETED],
+        ['b-other', BatchStatus.PROCESSING],
+        ['b-pending', BatchStatus.FAILED],
+        ['b-processing', BatchStatus.FAILED],
+      ]);
+      const failed = await db.getRepository(MessageBatch).find({ where: { status: BatchStatus.FAILED } });
+      for (const row of failed) {
+        expect(row.completedAt).toBeInstanceOf(Date);
+        expect(JSON.stringify(row.messages)).not.toContain('MEDIA-PAYLOAD');
+        expect(JSON.stringify(row.messages)).toContain('hi');
+      }
+      expect(await db.getRepository(Session).countBy({ id: session.id })).toBe(1);
+    });
+
+    it('leaves the batches alone when the delete is refused before it closes anything', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      jest
+        .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+        .mockRejectedValueOnce(new ConflictException('a logout teardown is still running'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow(ConflictException);
+
+      expect(await statuses()).toEqual([['b-processing', BatchStatus.PROCESSING]]);
+    });
+
+    it('still reports the delete error when the batches cannot be failed either', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+      jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+      jest.spyOn(db.getRepository(MessageBatch), 'find').mockRejectedValue(new Error('connection lost'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('after a failed delete'),
+        expect.objectContaining({ action: 'session_delete_batch_fail_failed' }),
+      );
+    });
+
+    it('does not touch the batches of a delete that committed', async () => {
+      const session = await createSession();
+      await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
+
+      await controls.delete(session.id);
+
+      expect(await statuses()).toEqual([]);
+    });
   });
 });

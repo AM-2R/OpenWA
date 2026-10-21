@@ -1,7 +1,7 @@
 import type { AnyMessageContent, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { MediaInput, StatusPostOptions, StatusResult } from '../interfaces/whatsapp-engine.interface';
 import { BadRequestException } from '@nestjs/common';
-import { resolveMediaBuffer } from './baileys-messaging';
+import { mapSendRefusal, resolveMediaBuffer } from './baileys-messaging';
 import { describeAudio } from './baileys-audio-probe';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -54,7 +54,7 @@ export class BaileysStatus {
       return await sock.sendMessage('status@broadcast', content, options);
     } catch (error) {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
-      throw error;
+      throw mapSendRefusal(error);
     }
   }
 

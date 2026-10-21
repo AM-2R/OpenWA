@@ -1115,7 +1115,7 @@ test('logging out sends no pending mark-as-read without a key', async () => {
   assert.equal(await leaveWithPendingRead(true), 0, 'a keyless mark-as-read went out after logout');
 });
 
-test('a reconnect refetch overtaken by a newer list still marks the open chat read', async () => {
+test('a reconnect that arrives while another reload is out is answered by the trailing one, which marks the open chat read', async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
   await screen.findByText('Main (15551234567)');
@@ -1124,48 +1124,41 @@ test('a reconnect refetch overtaken by a newer list still marks the open chat re
   await new Promise(resolve => setTimeout(resolve, 1_000));
   resetFetchCalls();
 
-  // The reconnect refetch stays out while a live frame for an unlisted chat fires a second one, which
-  // lands first. Both snapshots count Alice's gap messages, although her chat is open.
-  const DAVE: Chat = { ...CHAT_2, id: '15550005555@c.us', name: 'Dave', timestamp: 1_700_000_900 };
-  const snapshot = [{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2, DAVE];
-  let releaseFirst!: () => void;
-  const firstGate = new Promise<void>(resolve => {
-    releaseFirst = resolve;
-  });
-  let served = 0;
+  // An edit in a chat that was never opened reloads the list, and that reload stays out while the socket
+  // drops and reconnects, so the reconnect's own reload waits behind it. Both snapshots count Alice's gap
+  // messages, although her chat is open.
+  const snapshot = [{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2];
+  const answers: Array<() => void> = [];
   chatsResponder = () =>
-    ++served === 1 ? firstGate.then(() => jsonResponse(snapshot)) : Promise.resolve(jsonResponse(snapshot));
+    new Promise<Response>(resolve => {
+      answers.push(() => resolve(jsonResponse(snapshot)));
+    });
+  receiveEvent('message.edited', {
+    messageId: 'wamid.carol.1',
+    chatId: CHAT_2.id,
+    body: 'edited',
+    timestamp: 1_700_003_000,
+  });
+  await waitFor(() => assert.equal(answers.length, 1));
   const socket = lastSocket();
   assert.ok(socket, 'expected the page to have opened a socket');
   act(() => socket.receive('disconnect', 'transport close'));
   act(() => socket.receive('connect'));
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
+  await flush();
+  assert.equal(answers.length, 1, 'the reconnect started a reload of its own while one was out');
 
-  act(() =>
-    socket.receive('message', {
-      type: 'event',
-      timestamp: new Date(1_700_002_000_000).toISOString(),
-      payload: {
-        event: 'message.received',
-        sessionId: SESSION.id,
-        data: {
-          id: 'wamid.live.dave',
-          chatId: DAVE.id,
-          from: DAVE.id,
-          to: 'me',
-          body: 'dave says hi',
-          type: 'text',
-          fromMe: false,
-          timestamp: 1_700_001_900,
-        },
-      },
-    }),
-  );
+  // The reload that was already out lands first. It began before the reconnect, so it is not the
+  // reconnect's answer and the open chat keeps the gap count for now.
+  answers[0]();
   await screen.findByText('sent during the gap');
+  assert.ok(screen.queryByLabelText('4 unread messages'), 'a reload that began before the reconnect answered it');
+  await waitFor(() => assert.equal(answers.length, 2));
 
-  releaseFirst();
+  answers[1]();
+  await waitFor(() =>
+    assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count'),
+  );
   await new Promise(resolve => setTimeout(resolve, 1_000));
-  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged with the gap count');
   assert.ok(
     fetchCalls.some(
       c =>
@@ -1809,48 +1802,181 @@ test("a failed background refetch during a session switch keeps the spinner over
   }
 });
 
-test('a chat list refetch lands while a newer one is out, and an older answer never overwrites a newer', async () => {
-  const { screen, waitFor } = rtl;
-  const { container } = renderChats();
-  await screen.findByText('Alice');
-
-  // Edits to a chat that was never opened refetch the list each, and they arrive faster than it answers.
+// Answers every chat list request by hand, in the order asked. Each answer is a list led by Carol, whose
+// preview names the request it answers, so a test sees which one the sidebar shows.
+function holdChatLists(): Array<() => void> {
   const answers: Array<() => void> = [];
   chatsResponder = () =>
     new Promise<Response>(resolve => {
       const version = answers.length + 1;
       answers.push(() => resolve(jsonResponse([{ ...CHAT_2, lastMessage: `carol v${version}` }, CHAT])));
     });
-  const socket = lastSocket();
-  assert.ok(socket, 'expected the page to have opened a socket');
-  const edit = (messageId: string): void =>
-    socket.receive('message', {
-      type: 'event',
-      timestamp: new Date(1_700_003_000_000).toISOString(),
-      payload: {
-        event: 'message.edited',
-        sessionId: SESSION.id,
-        data: { messageId, chatId: CHAT_2.id, body: 'edited', timestamp: 1_700_003_000 },
-      },
-    });
-  edit('wamid.carol.1');
-  edit('wamid.carol.2');
-  edit('wamid.carol.3');
-  await waitFor(() => assert.equal(answers.length, 3));
-  assert.ok(screen.queryByText('Alice'), 'a background refetch hid the chat list behind the loading spinner');
+  return answers;
+}
 
-  // The first answer is the newest one applied so far, so it lands although newer calls are still out.
+// Two edits and a deletion in a chat that was never opened, and a message from a chat the sidebar does not
+// list: four events that each ask for a list reload.
+function askForReloads(): void {
+  const DAVE = '15550009999@c.us';
+  for (const messageId of ['wamid.carol.1', 'wamid.carol.2']) {
+    receiveEvent('message.edited', { messageId, chatId: CHAT_2.id, body: 'edited', timestamp: 1_700_003_000 });
+  }
+  receiveEvent('message.revoked', {
+    id: 'wamid.carol.3',
+    revokedId: 'wamid.carol.3',
+    chatId: CHAT_2.id,
+    from: CHAT_2.id,
+    to: 'me',
+    body: '',
+    type: 'revoked',
+    timestamp: 1_700_003_000,
+  });
+  receiveEvent('message.received', {
+    id: 'wamid.dave.1',
+    chatId: DAVE,
+    from: DAVE,
+    to: 'me',
+    body: 'hi',
+    type: 'text',
+    fromMe: false,
+    timestamp: 1_700_003_000,
+  });
+}
+
+test('background reloads asked for while one is out share a single trailing reload', async () => {
+  const { screen, waitFor } = rtl;
+  renderChats();
+  await screen.findByText('Alice');
+  resetFetchCalls();
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
+  const answers = holdChatLists();
+
+  askForReloads();
+  await waitFor(() => assert.equal(answers.length, 1));
+  await flush();
+  await flush();
+  assert.equal(countFetchCalls('GET', chatsPath), 1, 'a trigger made while a reload was out started its own');
+  assert.ok(screen.queryByText('Alice'), 'a background reload hid the chat list behind the loading spinner');
+
+  // The reload that was out lands, and the three triggers it left waiting are answered by ONE more.
   answers[0]();
   await screen.findByText('carol v1');
-  assert.equal(container.querySelector('.chats-list-loading') === null, true, 'the list stayed on the loading spinner');
+  await waitFor(() => assert.equal(answers.length, 2));
+  answers[1]();
+  await screen.findByText('carol v2');
+  await flush();
+  await flush();
+  assert.equal(countFetchCalls('GET', chatsPath), 2, 'the waiting triggers did not share one reload');
+});
 
+test('triggers made while the trailing reload is out queue one more behind it', async () => {
+  const { screen, waitFor } = rtl;
+  renderChats();
+  await screen.findByText('Alice');
+  resetFetchCalls();
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
+  const answers = holdChatLists();
+
+  askForReloads();
+  await waitFor(() => assert.equal(answers.length, 1));
+  answers[0]();
+  await waitFor(() => assert.equal(answers.length, 2));
+
+  // The trailing reload is the one out now, so these four wait for one more reload, not four.
+  askForReloads();
+  await flush();
+  await flush();
+  assert.equal(countFetchCalls('GET', chatsPath), 2);
+  answers[1]();
+  await waitFor(() => assert.equal(answers.length, 3));
   answers[2]();
   await screen.findByText('carol v3');
+  await flush();
+  await flush();
+  assert.equal(countFetchCalls('GET', chatsPath), 3);
+});
+
+test('a background reload that lands before the initial list is not overwritten by it', async () => {
+  const { screen, waitFor } = rtl;
+  const answers = holdChatLists();
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  await waitFor(() => assert.equal(answers.length, 1));
+  assert.ok(container.querySelector('.chats-list-loading'), 'the initial list showed no spinner');
+
+  // The reload is a different kind of load from the one under the spinner, so it starts at once instead of
+  // waiting behind it, and whichever began later wins however the two land.
+  receiveEvent('message.edited', {
+    messageId: 'wamid.carol.1',
+    chatId: CHAT_2.id,
+    body: 'edited',
+    timestamp: 1_700_003_000,
+  });
+  await waitFor(() => assert.equal(answers.length, 2));
+
   answers[1]();
   await flush();
   await flush();
-  assert.ok(screen.queryByText('carol v3'), 'an older answer replaced the newer list');
-  assert.ok(!screen.queryByText('carol v2'), 'an older answer replaced the newer list');
+  assert.ok(container.querySelector('.chats-list-loading'), 'a background reload cleared the initial list spinner');
+
+  answers[0]();
+  await screen.findByText('carol v2');
+  assert.ok(!screen.queryByText('carol v1'), 'the older initial answer replaced the newer list');
+  assert.equal(container.querySelector('.chats-list-loading') === null, true, 'the list stayed on the loading spinner');
+});
+
+test("a session switch drops the previous session's trailing reload and lets the new session reload at once", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  const asked = { one: 0, two: 0 };
+  const held: Array<() => void> = [];
+  let holdOne = false;
+  chatsResponder = sessionId => {
+    if (sessionId === SESSION_2.id) {
+      asked.two += 1;
+      return Promise.resolve(jsonResponse([{ ...CHAT_2, lastMessage: 'carol on two' }]));
+    }
+    asked.one += 1;
+    if (!holdOne) return Promise.resolve(jsonResponse([CHAT, CHAT_2]));
+    return new Promise<Response>(resolve => {
+      held.push(() => resolve(jsonResponse([{ ...CHAT, lastMessage: 'alice on one' }, CHAT_2])));
+    });
+  };
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Alice');
+    holdOne = true;
+
+    // One reload is out for session 1 and a second trigger waits behind it.
+    for (const messageId of ['wamid.carol.1', 'wamid.carol.2']) {
+      receiveEvent('message.edited', { messageId, chatId: CHAT_2.id, body: 'edited', timestamp: 1_700_003_000 });
+    }
+    await waitFor(() => assert.equal(held.length, 1));
+    assert.equal(asked.one, 2);
+
+    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
+      target: { value: SESSION_2.id },
+    });
+    await screen.findByText('carol on two');
+
+    // Session 2 is not queued behind the reload session 1 left out.
+    receiveEvent(
+      'message.edited',
+      { messageId: 'wamid.carol.9', chatId: CHAT_2.id, body: 'edited', timestamp: 1 },
+      SESSION_2.id,
+    );
+    await waitFor(() => assert.equal(asked.two, 2));
+
+    held[0]();
+    await flush();
+    await flush();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(asked.one, 2, 'the trailing reload of the session left behind started after the switch');
+    assert.ok(screen.queryByText('carol on two'), "the previous session's reload replaced the new session's list");
+    assert.ok(!screen.queryByText('alice on one'), "the previous session's list showed under the new session");
+  } finally {
+    twoSessions = false;
+  }
 });
 
 test('a failed background refetch keeps the chat list and raises no error', async () => {
@@ -2813,13 +2939,13 @@ test('a message sent while the first page is still loading survives the page lan
   await waitFor(() => assert.equal(within(thread).queryAllByText('sent while loading').length, 1));
 });
 
-function receiveEvent(event: string, data: Record<string, unknown>): void {
+function receiveEvent(event: string, data: Record<string, unknown>, sessionId: string = SESSION.id): void {
   const socket = lastSocket();
   assert.ok(socket, 'expected the page to have opened a socket');
   socket.receive('message', {
     type: 'event',
     timestamp: new Date(1_700_003_000_000).toISOString(),
-    payload: { event, sessionId: SESSION.id, data },
+    payload: { event, sessionId, data },
   });
 }
 

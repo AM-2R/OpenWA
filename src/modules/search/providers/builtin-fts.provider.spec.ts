@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { DataSource } from 'typeorm';
+import { DataSource, type QueryDeepPartialEntity } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
@@ -123,6 +123,83 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     const page = await provider.search({ q: 'hello', ...combined, dateTo: 3000, limit: 1, offset: 1 });
     expect(page.hits).toEqual([]);
     expect(page.total).toBe(1);
+  });
+
+  describe('chat and sender filters expanded by the host', () => {
+    // One person, three stored forms: the same chat was first stored under a lid, later under each phone
+    // dialect, and a group message keeps the group in `from` and the person in `author`.
+    beforeEach(async () => {
+      const insert = (row: QueryDeepPartialEntity<Message>): Promise<unknown> =>
+        ds.getRepository(Message).insert({
+          sessionId: 's1',
+          to: 'me@c.us',
+          type: 'text',
+          direction: MessageDirection.INCOMING,
+          timestamp: 10,
+          ...row,
+        });
+      await insert({ chatId: '628123@c.us', from: '628123@c.us', body: 'invoice via phone' });
+      await insert({
+        chatId: '628123@s.whatsapp.net',
+        from: '628123@s.whatsapp.net',
+        body: 'invoice via other dialect',
+      });
+      await insert({ chatId: '999@lid', from: '999@lid', body: 'invoice via lid' });
+      await insert({ chatId: '120363@g.us', from: '120363@g.us', author: '628123@c.us', body: 'invoice in a group' });
+      await insert({ chatId: '628555@c.us', from: '628555@c.us', body: 'invoice from someone else' });
+    });
+
+    const bodies = async (filter: Omit<SearchQuery, 'q'>): Promise<string[]> =>
+      (await provider.search({ q: 'invoice', ...filter })).hits.map(h => h.body).sort();
+
+    it('finds a chat under every stored form of its id', async () => {
+      const chatIdAliases = ['628123@c.us', '628123@s.whatsapp.net', '999@lid'];
+
+      expect(await bodies({ chatId: '628123@c.us' })).toEqual(['invoice via phone']);
+      expect(await bodies({ chatId: '628123@c.us', chatIdAliases })).toEqual([
+        'invoice via lid',
+        'invoice via other dialect',
+        'invoice via phone',
+      ]);
+    });
+
+    it('matches a sender by its from column or, in a group, by its author', async () => {
+      const fromAliases = ['628123@c.us', '628123@s.whatsapp.net', '999@lid'];
+
+      expect(await bodies({ from: '628123@c.us', fromAliases })).toEqual([
+        'invoice in a group',
+        'invoice via lid',
+        'invoice via other dialect',
+        'invoice via phone',
+      ]);
+    });
+
+    it('still honours the key allowlist beside an expanded chat filter, in the page and in the total', async () => {
+      const res = await provider.search({
+        q: 'invoice',
+        chatId: '628123@c.us',
+        chatIdAliases: ['628123@c.us', '628123@s.whatsapp.net', '999@lid'],
+        chatIds: ['628123@s.whatsapp.net'],
+        limit: 1,
+        offset: 0,
+      });
+
+      expect(res.hits.map(h => h.body)).toEqual(['invoice via other dialect']);
+      expect(res.total).toBe(1);
+    });
+
+    it('counts the expanded filters too', async () => {
+      const page = await provider.search({
+        q: 'invoice',
+        from: '628123@c.us',
+        fromAliases: ['628123@c.us', '628123@s.whatsapp.net', '999@lid'],
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.hits).toHaveLength(1);
+      expect(page.total).toBe(4);
+    });
   });
 
   it('scopes by sessionIds (auth) and by sessionId filter', async () => {

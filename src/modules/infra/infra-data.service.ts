@@ -15,6 +15,7 @@ import { ScopeBindingService } from '../integration/scope-binding.service';
 import { ReKeyChatStatesBySessionId1786500000000 } from '../../database/migrations/1786500000000-ReKeyChatStatesBySessionId';
 import { ScrubRevokedMessageContent1786900000000 } from '../../database/migrations/1786900000000-ScrubRevokedMessageContent';
 import { ScrubNonPhoneLidMappings1786950000000 } from '../../database/migrations/1786950000000-ScrubNonPhoneLidMappings';
+import { BackfillLegacyMessageTypes1791300000000 } from '../../database/migrations/1791300000000-BackfillLegacyMessageTypes';
 import { Session as SessionEntity, SessionStatus } from '../session/entities/session.entity';
 import { In } from 'typeorm';
 import { DateUtils } from 'typeorm/util/DateUtils';
@@ -753,6 +754,21 @@ export class InfraDataService {
       await queryRunner.startTransaction();
 
       try {
+        const isPostgres = this.dataDataSource.options.type === 'postgres';
+        if (isPostgres) {
+          // The runtime pool carries a statement_timeout sized for request traffic (30 s by default), but
+          // the clears and scrubs below scale with the live tables, not with the archive: restoring an
+          // earlier export onto an instance whose messages table has since grown to millions of rows
+          // would be cancelled mid-DELETE, after the engines of the sessions it drops were already
+          // stopped. Lifted for this transaction only, as the migrations do. A lock wait keeps the bound
+          // the statement timeout gave it, so a stuck lock still fails the import instead of hanging it.
+          const lockWaitMs = Math.max(
+            0,
+            Math.trunc(this.configService.get<number>('dataDatabase.statementTimeoutMs', 30000)) || 0,
+          );
+          await queryRunner.query('SET LOCAL statement_timeout = 0');
+          await queryRunner.query(`SET LOCAL lock_timeout = ${lockWaitMs}`);
+        }
         // Clear existing data (in correct order due to foreign keys). templates and
         // baileys_stored_messages FK sessions ON DELETE CASCADE, so the sessions DELETE would clear
         // them too; clearing them explicitly first keeps the order correct on engines where the
@@ -774,7 +790,6 @@ export class InfraDataService {
         // and strict binding rejects booleans/undefined — which a Postgres-made backup carries (real
         // booleans survive the JSON round-trip). Postgres needs `$N` and binds booleans natively, so both
         // rewrites apply only on the SQLite path. Safe: every `$N` below occurs once, in ascending order.
-        const isPostgres = this.dataDataSource.options.type === 'postgres';
         const insert = (text: string, params: unknown[]): Promise<unknown> =>
           queryRunner.query(
             isPostgres ? text : text.replace(/\$\d+/g, '?'),
@@ -930,6 +945,9 @@ export class InfraDataService {
           try {
             await ScrubRevokedMessageContent1786900000000.scrub(queryRunner);
             await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
+            // An archive taken before the neutral message vocabulary restores the raw wwebjs tokens, which
+            // the boot-time backfill no longer converts on a migration-managed database.
+            await BackfillLegacyMessageTypes1791300000000.backfill(queryRunner);
           } catch (error) {
             warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
           }

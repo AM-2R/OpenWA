@@ -59,6 +59,13 @@ const SANDBOX_CAP_TIMEOUT_MS = 30000;
 export const PLUGIN_SHUTDOWN_WAIT_MS = 10_000;
 
 /**
+ * Longest the boot waits for the operator-enabled plugins to be restored before the gateway starts
+ * listening. Under the Docker health check's retries and the Helm startup probe, and above what a healthy
+ * plugin needs. See onApplicationBootstrap for what a plugin that is still restoring misses meanwhile.
+ */
+export const PLUGIN_RESTORE_BOOT_BUDGET_MS = 60_000;
+
+/**
  * How long a worker has to answer the liveness ping the host sends after a dispatch times out. A worker
  * stuck in a synchronous loop is terminated about 5 s after its first dispatch timeout (about 10 s after
  * a stalled hook or ingress dispatch, 15 s after a stalled search); a slow async handler answers at once
@@ -270,31 +277,77 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * code executes. Built-ins are skipped: an engine is enabled by EngineFactory against the configured
    * engine.type, and enabling a non-active engine here would be rejected anyway.
    *
-   * Best-effort and sequential: a plugin that cannot come back is logged
-   * and left in ERROR, and never holds up the gateway.
+   * Best-effort and sequential: a plugin that cannot come back is logged and left in ERROR. The HTTP
+   * port opens only after this hook returns, and one plugin can take up to 90 s here (load, onLoad and
+   * onEnable are each bounded at 30 s), so the wait is capped at PLUGIN_RESTORE_BOOT_BUDGET_MS. Plugins not
+   * yet restored when it ends keep coming up, in order, in the background. The trade-off is deliberate:
+   * until they are up, the hooks they own (a send moderation veto, for one) are not active, so a request
+   * that arrives in that window is not seen by them. Without the cap, plugins whose backends are down after
+   * an outage kept the whole gateway from listening and could fail its health checks into a restart loop.
+   * A plugin the restore has not finished with also takes no lifecycle change from the operator meanwhile
+   * (isRestorePending).
    */
   async onApplicationBootstrap(): Promise<void> {
+    const restoring = this.restorePlugins();
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      restoring.then(() => true),
+      new Promise<false>(resolve => {
+        timer = setTimeout(resolve, PLUGIN_RESTORE_BOOT_BUDGET_MS, false);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn(
+        'Plugin restore is still running; the gateway starts listening and the remaining plugins come up in the background',
+        { waitMs: PLUGIN_RESTORE_BOOT_BUDGET_MS, action: 'plugin_restore_deferred' },
+      );
+    }
+  }
+
+  /** Plugins the boot restore has queued or is enabling, so a lifecycle change cannot interleave with it. */
+  private readonly restorePending = new Set<string>();
+
+  /**
+   * Whether the boot restore still has this plugin ahead of it or in flight. When the restore outlasts the
+   * boot wait it runs while requests are served, and it enables outside the per-plugin operation chain of
+   * PluginsService: a disable would be answered "not enabled" and then overtaken by the enable, and an
+   * uninstall would leave a live worker without a map entry. PluginsService refuses such a change until the
+   * restore is done with the plugin, which is what the closed port did before the boot wait was capped.
+   */
+  isRestorePending(id: string): boolean {
+    return this.restorePending.has(id);
+  }
+
+  private async restorePlugins(): Promise<void> {
     const restorable = this.getAllPlugins().filter(
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
     );
-    for (let i = 0; i < restorable.length; i++) {
-      if (this.shuttingDown || this.shutdownService?.isShuttingDown()) {
-        this.logger.log(`Plugin restore stopped at ${i} of ${restorable.length} plugin(s): shutting down`, {
-          action: 'plugin_restore_aborted',
-        });
-        return;
+    for (const plugin of restorable) this.restorePending.add(plugin.manifest.id);
+    try {
+      for (let i = 0; i < restorable.length; i++) {
+        if (this.shuttingDown || this.shutdownService?.isShuttingDown()) {
+          this.logger.log(`Plugin restore stopped at ${i} of ${restorable.length} plugin(s): shutting down`, {
+            action: 'plugin_restore_aborted',
+          });
+          return;
+        }
+        const plugin = restorable[i];
+        const pluginId = plugin.manifest.id;
+        try {
+          await this.enablePlugin(pluginId);
+        } catch (error) {
+          this.logger.error(
+            `Failed to restore plugin ${pluginId} on startup; it stays disabled until re-enabled`,
+            error instanceof Error ? error.message : String(error),
+            { pluginId, action: 'plugin_restore_failed' },
+          );
+        } finally {
+          this.restorePending.delete(pluginId);
+        }
       }
-      const plugin = restorable[i];
-      const pluginId = plugin.manifest.id;
-      try {
-        await this.enablePlugin(pluginId);
-      } catch (error) {
-        this.logger.error(
-          `Failed to restore plugin ${pluginId} on startup; it stays disabled until re-enabled`,
-          error instanceof Error ? error.message : String(error),
-          { pluginId, action: 'plugin_restore_failed' },
-        );
-      }
+    } finally {
+      this.restorePending.clear();
     }
   }
 
@@ -502,10 +555,6 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
 
   getPluginsByType(type: PluginType): PluginInstance[] {
     return this.getAllPlugins().filter(p => p.manifest.type === type);
-  }
-
-  getEnabledPlugins(): PluginInstance[] {
-    return this.getAllPlugins().filter(p => p.status === PluginStatus.ENABLED);
   }
 
   isPluginEnabled(pluginId: string): boolean {

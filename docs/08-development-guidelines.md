@@ -426,9 +426,6 @@ describe('resolveReconnectConfig', () => {
 
 ```typescript
 // test/app.e2e-spec.ts
-// archiver is ESM-only and AppModule pulls it in; stub it so ts-jest (CommonJS) can load the graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -922,10 +919,9 @@ const sessions = await sessionRepo
 ### Caching Strategy
 
 Memoize a hot, expensive read in-process with a TTL, as `StatsService` does for its aggregate
-responses (`STATS_CACHE_TTL_MS`, default 30000; `0` disables the memo). `CacheService` is an optional,
-fail-open Redis layer: when Redis is disabled or down every read returns `null` and every write is a
-no-op, so never make a request path depend on it. No request path reads from it today (see
-[3.13.3 Cache Service](./03-system-architecture.md#3133-cache-service)).
+responses (`STATS_CACHE_TTL_MS`, default 30000; `0` disables the memo). `CacheService` is an optional
+Redis client that stores no values and only answers `isAvailable()` for the infra status probe, so no
+request path reads from it (see [3.13.3 Cache Service](./03-system-architecture.md#3133-cache-service)).
 
 ### Async Operations
 

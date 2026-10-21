@@ -866,6 +866,119 @@
       "cancelling": "Membatalkan..."
     }
   },
+  "numberChecker": {
+    "subtitle": "Periksa apakah nomor telepon memiliki akun WhatsApp aktif secara senyap, tanpa mengirim pesan",
+    "zeroMessages": "Nol Pesan Terkirim",
+    "noSession": {
+      "title": "Tidak ada sesi WhatsApp aktif yang terhubung.",
+      "desc": "Untuk memeriksa nomor telepon, OpenWA memerlukan setidaknya satu sesi yang sudah terautentikasi.",
+      "goToSessions": "Buka Sesi"
+    },
+    "tabs": {
+      "single": "Pemeriksaan Tunggal",
+      "bulk": "Pemeriksa Nomor Massal"
+    },
+    "session": {
+      "label": "Sesi WhatsApp",
+      "none": "Tidak ada sesi siap",
+      "hint": "Pemeriksaan dijalankan melalui akun WhatsApp yang terhubung ini."
+    },
+    "single": {
+      "title": "Periksa Satu Akun",
+      "phoneLabel": "Nomor Telepon",
+      "phonePlaceholder": "mis. 919876543210 atau 6281234567890 (dengan kode negara)",
+      "check": "Periksa",
+      "checking": "Memeriksa...",
+      "autoPrefix": "Tambahkan awalan <strong>+91</strong> otomatis untuk nomor 10 digit (nomor 12 digit tidak diubah)",
+      "silent": "<strong>Sepenuhnya Senyap:</strong> Pemeriksaan ini langsung mengakses data pendaftaran WhatsApp. Kontak tidak menerima notifikasi, suara, atau pesan apa pun.",
+      "resultTitle": "Hasil Verifikasi",
+      "querying": "Menghubungi server WhatsApp...",
+      "empty": "Masukkan nomor telepon lalu klik \"Periksa\" untuk melihat status WhatsApp-nya."
+    },
+    "preview": {
+      "prefixed": "Akan diperiksa sebagai: <strong>+{{number}}</strong> (10 digit → otomatis diberi awalan 91)",
+      "kept": "Akan diperiksa sebagai: <strong>+{{number}}</strong> (12 digit → tidak diubah)",
+      "digits": "Akan diperiksa sebagai: <strong>+{{number}}</strong> ({{digits}} digit)"
+    },
+    "prefixHint": {
+      "single": "Menambahkan +91 pada nomor 10 digit dan nomor 11 digit yang diawali 0. Nomor yang diawali + atau 00 tetap seperti yang diketik.",
+      "bulk": "Menambahkan +91 pada nomor 10 digit (mis. 96...) dan nomor 11 digit yang diawali 0. Nomor yang diawali + atau 00 tetap seperti yang diketik.",
+      "off": "Nomor diperiksa seperti yang diketik, hanya angka, jadi sertakan kode negara."
+    },
+    "result": {
+      "registered": "Terdaftar di WhatsApp",
+      "notRegistered": "Tidak Terdaftar",
+      "avatarAlt": "Foto profil",
+      "status": "Status",
+      "active": "Akun Aktif",
+      "none": "Akun Tidak Ditemukan",
+      "jid": "JID WhatsApp",
+      "copyJid": "Salin JID",
+      "copy": "Salin",
+      "copied": "Tersalin",
+      "checkedAt": "Diperiksa Pada",
+      "openTester": "Buka di Penguji Pesan"
+    },
+    "recent": {
+      "title": "Pemeriksaan Terbaru",
+      "clear": "Hapus Riwayat"
+    },
+    "table": {
+      "phone": "Nomor Telepon",
+      "status": "Status WhatsApp",
+      "id": "ID WhatsApp",
+      "time": "Waktu"
+    },
+    "status": {
+      "registered": "Terdaftar",
+      "unregistered": "Tidak Terdaftar",
+      "notRegistered": "Tidak Terdaftar",
+      "failed": "Gagal"
+    },
+    "bulk": {
+      "title": "Pemeriksa Nomor Massal",
+      "delayLabel": "Jeda Aman Antar Pemeriksaan (ms)",
+      "delay1": "1000 ms / 1 detik (Disarankan)",
+      "delay2": "2000 ms / 2 detik (Ekstra Aman)",
+      "delay3": "3000 ms / 3 detik (Aman untuk Volume Tinggi)",
+      "delayHint": "Memberi jeda antar pemeriksaan agar tidak melewati batas permintaan gateway (bawaan 100 per menit). Proses berhenti jika gateway menolak pemeriksaan berikutnya.",
+      "countryRule": "Aturan Kode Negara",
+      "autoPrefix": "Tambahkan awalan <strong>+91</strong> (India) otomatis untuk nomor 10 digit",
+      "numbersLabel": "Nomor yang Diperiksa (Satu per baris atau dipisahkan koma)",
+      "numbersHint": "Tempel nomor telepon beserta kode negara, satu per baris atau dipisahkan koma. Maksimal {{max}} nomor per proses.",
+      "parsed": "<strong>{{count}}</strong> nomor unik terdeteksi",
+      "parsed_other": "<strong>{{count}}</strong> nomor unik terdeteksi",
+      "tenDigitAdded": "({{ten}} nomor 10 digit → +91 ditambahkan)",
+      "tenDigitAddedPreserved": "({{ten}} nomor 10 digit → +91 ditambahkan, {{twelve}} nomor 12 digit dipertahankan)",
+      "tooMany": "Terlalu banyak nomor: {{parsed}} terdeteksi, maksimal {{max}} per proses. Hapus {{excess}} nomor untuk memulai.",
+      "start": "Mulai Pemeriksaan Batch",
+      "stop": "Hentikan Pemeriksaan",
+      "export": "Ekspor Hasil (CSV)",
+      "stoppedTitle": "Batch dihentikan",
+      "checked": "Diperiksa",
+      "remaining": "Tersisa",
+      "all": "Semua"
+    },
+    "stopped": {
+      "reason409": "Sesi tidak terhubung",
+      "reason429": "Batas permintaan gateway tercapai",
+      "reason503": "WhatsApp tidak merespons pemeriksaan",
+      "reasonOther": "Gateway menolak pemeriksaan",
+      "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
+      "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
+      "last": "{{reason}} (HTTP {{status}}). Pemeriksaan terakhir gagal. Coba lagi nanti."
+    },
+    "toast": {
+      "enterNumber": "Masukkan nomor telepon yang akan diperiksa.",
+      "noSession": "Tidak ada sesi WhatsApp yang siap.",
+      "checkFailed": "Pemeriksaan gagal",
+      "unknownError": "Kesalahan pemeriksaan tidak diketahui",
+      "lookupFailed": "Pemeriksaan nomor gagal",
+      "enterNumbers": "Masukkan nomor telepon yang valid (satu per baris atau dipisahkan koma).",
+      "completed": "Selesai memeriksa {{count}} nomor.",
+      "completed_other": "Selesai memeriksa {{count}} nomor."
+    }
+  },
   "infrastructure": {
     "title": "Infrastruktur",
     "subtitle": "Konfigurasi server, database, cache, penyimpanan, dan pengaturan engine",

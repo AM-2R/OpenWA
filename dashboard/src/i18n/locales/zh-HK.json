@@ -866,6 +866,119 @@
       "cancelling": "取消中..."
     }
   },
+  "numberChecker": {
+    "subtitle": "靜默驗證電話號碼是否擁有有效的 WhatsApp 帳戶，無需傳送任何訊息",
+    "zeroMessages": "零訊息傳送",
+    "noSession": {
+      "title": "沒有已連線的 WhatsApp 工作階段。",
+      "desc": "要檢查電話號碼，OpenWA 至少需要一個已通過驗證的工作階段。",
+      "goToSessions": "前往工作階段"
+    },
+    "tabs": {
+      "single": "單一檢查",
+      "bulk": "批量號碼檢查"
+    },
+    "session": {
+      "label": "WhatsApp 工作階段",
+      "none": "沒有就緒的工作階段",
+      "hint": "查詢會透過此已連線的 WhatsApp 帳戶發出。"
+    },
+    "single": {
+      "title": "檢查單一帳戶",
+      "phoneLabel": "電話號碼",
+      "phonePlaceholder": "例如：919876543210 或 6281234567890（含國家代碼）",
+      "check": "檢查",
+      "checking": "正在檢查...",
+      "autoPrefix": "為 10 位號碼自動加上前綴 <strong>+91</strong>（12 位號碼保持原樣）",
+      "silent": "<strong>完全靜默：</strong>此檢查會直接查詢 WhatsApp 的號碼註冊資料，對方不會收到任何通知、提示音或訊息。",
+      "resultTitle": "驗證結果",
+      "querying": "正在查詢 WhatsApp 伺服器...",
+      "empty": "輸入電話號碼並點擊「檢查」，即可查看其 WhatsApp 狀態。"
+    },
+    "preview": {
+      "prefixed": "將以 <strong>+{{number}}</strong> 檢查（10 位數字 → 已自動加上前綴 91）",
+      "kept": "將以 <strong>+{{number}}</strong> 檢查（12 位數字 → 保持原樣）",
+      "digits": "將以 <strong>+{{number}}</strong> 檢查（{{digits}} 位數字）"
+    },
+    "prefixHint": {
+      "single": "為 10 位號碼，以及以 0 開頭的 11 位號碼加上 +91。以 + 或 00 開頭的號碼保持原樣。",
+      "bulk": "為 10 位號碼（例如 96...），以及以 0 開頭的 11 位號碼加上 +91。以 + 或 00 開頭的號碼保持原樣。",
+      "off": "號碼按輸入內容原樣檢查，只保留數字，因此請包含國家代碼。"
+    },
+    "result": {
+      "registered": "已在 WhatsApp 註冊",
+      "notRegistered": "未註冊",
+      "avatarAlt": "頭像",
+      "status": "狀態",
+      "active": "有效帳戶",
+      "none": "找不到帳戶",
+      "jid": "WhatsApp JID",
+      "copyJid": "複製 JID",
+      "copy": "複製",
+      "copied": "已複製",
+      "checkedAt": "檢查時間",
+      "openTester": "在訊息測試器中開啟"
+    },
+    "recent": {
+      "title": "最近檢查記錄",
+      "clear": "清除歷史記錄"
+    },
+    "table": {
+      "phone": "電話號碼",
+      "status": "WhatsApp 狀態",
+      "id": "WhatsApp ID",
+      "time": "時間"
+    },
+    "status": {
+      "registered": "已註冊",
+      "unregistered": "未註冊",
+      "notRegistered": "未註冊",
+      "failed": "失敗"
+    },
+    "bulk": {
+      "title": "批量號碼檢查",
+      "delayLabel": "安全間隔延遲（毫秒）",
+      "delay1": "1000 毫秒 / 1 秒（建議）",
+      "delay2": "2000 毫秒 / 2 秒（更安全）",
+      "delay3": "3000 毫秒 / 3 秒（大批量更安全）",
+      "delayHint": "每次查詢之間會等待一段時間，以免超出閘道的請求限制（預設每分鐘 100 次）。如果閘道拒絕後續查詢，本次批量檢查將會停止。",
+      "countryRule": "國家代碼規則",
+      "autoPrefix": "為 10 位號碼自動加上前綴 <strong>+91</strong>（印度）",
+      "numbersLabel": "待檢查號碼（每行一個，或以逗號分隔）",
+      "numbersHint": "貼上含國家代碼的電話號碼，每行一個，或以逗號分隔。每次最多 {{max}} 個號碼。",
+      "parsed": "已識別 <strong>{{count}}</strong> 個不重複號碼",
+      "parsed_other": "已識別 <strong>{{count}}</strong> 個不重複號碼",
+      "tenDigitAdded": "（{{ten}} 個 10 位號碼 → 已加上 +91）",
+      "tenDigitAddedPreserved": "（{{ten}} 個 10 位號碼 → 已加上 +91，{{twelve}} 個 12 位號碼原樣保留）",
+      "tooMany": "號碼過多：已識別 {{parsed}} 個，每次最多 {{max}} 個。請刪減 {{excess}} 個後再開始。",
+      "start": "開始批量檢查",
+      "stop": "停止檢查",
+      "export": "匯出結果（CSV）",
+      "stoppedTitle": "批量檢查已停止",
+      "checked": "已檢查",
+      "remaining": "剩餘",
+      "all": "全部"
+    },
+    "stopped": {
+      "reason409": "工作階段未連線",
+      "reason429": "已達到閘道的速率限制",
+      "reason503": "WhatsApp 沒有回應查詢",
+      "reasonOther": "閘道拒絕了一次查詢",
+      "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
+      "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
+      "last": "{{reason}}（HTTP {{status}}）。最後一次查詢失敗。請稍後再試。"
+    },
+    "toast": {
+      "enterNumber": "請輸入要檢查的電話號碼。",
+      "noSession": "沒有就緒的 WhatsApp 工作階段。",
+      "checkFailed": "檢查失敗",
+      "unknownError": "未知的查詢錯誤",
+      "lookupFailed": "查詢失敗",
+      "enterNumbers": "請輸入有效的電話號碼（每行一個，或以逗號分隔）。",
+      "completed": "已完成 {{count}} 個號碼的檢查。",
+      "completed_other": "已完成 {{count}} 個號碼的檢查。"
+    }
+  },
   "infrastructure": {
     "title": "基礎架構",
     "subtitle": "設定伺服器、資料庫、快取、儲存空間和引擎設定",

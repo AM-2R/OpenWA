@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { throttlerMessage } from '@nestjs/throttler';
-import { safeEqualStr, verifyIngressSignature } from './ingress-signature';
+import { verifyIngressSignature } from './ingress-signature';
+import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import type { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -119,7 +120,7 @@ export class IngressService {
       const token = req.query[route.challenge.tokenParam];
       const echo = req.query[route.challenge.echoParam];
       // Constant-time compare (mirrors the signature path) so the verify token can't be probed by timing.
-      if (token && instance.verifyToken && safeEqualStr(token, instance.verifyToken)) {
+      if (token && instance.verifyToken && constantTimeEqual(token, instance.verifyToken)) {
         return { status: 200, body: echo ?? '' };
       }
       return { status: 403, body: 'challenge failed' };

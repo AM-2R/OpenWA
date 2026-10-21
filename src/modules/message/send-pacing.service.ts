@@ -39,10 +39,12 @@ export function isPacingLimitedError(error: unknown): boolean {
  * open the breaker on a perfectly healthy session and 429 every send for the cooldown. The rule is
  * therefore: a client-fault or engine-state HTTP status (4xx/501/503) does NOT count; a refusal
  * WhatsApp itself returned — EngineRefusedError (403) — and anything unclassified (a raw engine
- * error, a timeout, a 5xx) does.
+ * error, a timeout, a 5xx) does. A rate limit WhatsApp answered (EngineThrottledError, a 503 on the wire)
+ * counts as well: it is WhatsApp refusing this account's traffic, the signal the breaker exists to act on,
+ * even though the send provably went nowhere (see sentNothing).
  */
 export function countsTowardSendBreaker(error: unknown): boolean {
-  if (error instanceof EngineRefusedError) return true;
+  if (error instanceof EngineRefusedError || error instanceof EngineThrottledError) return true;
   if (error instanceof SsrfBlockedError) return false;
   if (error instanceof HttpException) {
     const status = error.getStatus();

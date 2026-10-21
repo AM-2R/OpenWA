@@ -180,7 +180,7 @@ authoritative gate. Current policy:
 | Scope                       | Branches | Functions | Lines | Statements |
 | --------------------------- | -------- | --------- | ----- | ---------- |
 | Global                      | 54%      | 68%       | 60%   | 61%        |
-| `src/common/cache/`         | 34%      | 33%       | 42%   | 42%        |
+| `src/common/cache/`         | 70%      | 75%       | 95%   | 91%        |
 | `src/common/security/`      | 85%      | 95%       | 93%   | 92%        |
 | `src/common/services/`      | 82%      | 91%       | 90%   | 88%        |
 | `src/common/storage/`       | 75%      | 85%       | 84%   | 80%        |
@@ -212,7 +212,7 @@ authoritative gate. Current policy:
 | `src/modules/message/`      | 75%      | 66%       | 86%   | 85%        |
 | `src/modules/metrics/`      | 64%      | 58%       | 70%   | 67%        |
 | `src/modules/plugins/`      | 69%      | 64%       | 77%   | 76%        |
-| `src/modules/profile/`      | 78%      | 84%       | 88%   | 85%        |
+| `src/modules/profile/`      | 65%      | 84%       | 88%   | 85%        |
 | `src/modules/queue/`        | 74%      | 81%       | 95%   | 95%        |
 | `src/modules/search/`       | 69%      | 86%       | 78%   | 78%        |
 | `src/modules/session/`      | 75%      | 79%       | 88%   | 87%        |

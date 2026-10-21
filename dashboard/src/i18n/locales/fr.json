@@ -872,6 +872,122 @@
       "cancelling": "Annulation..."
     }
   },
+  "numberChecker": {
+    "subtitle": "Vérifiez discrètement si des numéros de téléphone ont un compte WhatsApp actif, sans envoyer de message",
+    "zeroMessages": "Aucun message envoyé",
+    "noSession": {
+      "title": "Aucune session WhatsApp active n'est connectée.",
+      "desc": "Pour vérifier des numéros de téléphone, OpenWA nécessite au moins une session authentifiée.",
+      "goToSessions": "Aller aux sessions"
+    },
+    "tabs": {
+      "single": "Vérification individuelle",
+      "bulk": "Vérification en masse"
+    },
+    "session": {
+      "label": "Session WhatsApp",
+      "none": "Aucune session prête disponible",
+      "hint": "Les requêtes passent par ce compte WhatsApp connecté."
+    },
+    "single": {
+      "title": "Vérifier un compte",
+      "phoneLabel": "Numéro de téléphone",
+      "phonePlaceholder": "ex. : 919876543210 ou 6281234567890 (avec l'indicatif du pays)",
+      "check": "Vérifier",
+      "checking": "Vérification...",
+      "autoPrefix": "Préfixer automatiquement par <strong>+91</strong> les numéros à 10 chiffres (les numéros à 12 chiffres restent inchangés)",
+      "silent": "<strong>Totalement silencieux :</strong> cette requête interroge directement le registre des numéros enregistrés de WhatsApp. Le contact ne reçoit ni notification, ni son, ni message.",
+      "resultTitle": "Résultat de la vérification",
+      "querying": "Interrogation des serveurs WhatsApp...",
+      "empty": "Saisissez un numéro de téléphone et cliquez sur « Vérifier » pour voir son statut WhatsApp."
+    },
+    "preview": {
+      "prefixed": "Numéro à vérifier : <strong>+{{number}}</strong> (10 chiffres → préfixe 91 ajouté automatiquement)",
+      "kept": "Numéro à vérifier : <strong>+{{number}}</strong> (12 chiffres → conservé tel quel)",
+      "digits": "Numéro à vérifier : <strong>+{{number}}</strong> ({{digits}} chiffres)"
+    },
+    "prefixHint": {
+      "single": "Ajoute +91 aux numéros à 10 chiffres et à ceux à 11 chiffres commençant par 0. Les numéros avec + ou 00 restent tels que saisis.",
+      "bulk": "Ajoute +91 aux numéros à 10 chiffres (par exemple 96...) et à ceux à 11 chiffres commençant par 0. Les numéros avec + ou 00 restent tels que saisis.",
+      "off": "Les numéros sont vérifiés tels que saisis, chiffres uniquement : indiquez donc l'indicatif du pays."
+    },
+    "result": {
+      "registered": "Enregistré sur WhatsApp",
+      "notRegistered": "Non enregistré",
+      "avatarAlt": "Avatar",
+      "status": "Statut",
+      "active": "Compte actif",
+      "none": "Aucun compte trouvé",
+      "jid": "JID WhatsApp",
+      "copyJid": "Copier le JID",
+      "copy": "Copier",
+      "copied": "Copié",
+      "checkedAt": "Vérifié à",
+      "openTester": "Ouvrir dans le testeur de messages"
+    },
+    "recent": {
+      "title": "Vérifications récentes",
+      "clear": "Effacer l'historique"
+    },
+    "table": {
+      "phone": "Numéro de téléphone",
+      "status": "Statut WhatsApp",
+      "id": "ID WhatsApp",
+      "time": "Heure"
+    },
+    "status": {
+      "registered": "Enregistré",
+      "unregistered": "Non enregistré",
+      "notRegistered": "Non enregistré",
+      "failed": "Échec"
+    },
+    "bulk": {
+      "title": "Vérification de numéros en masse",
+      "delayLabel": "Délai de sécurité entre les vérifications (ms)",
+      "delay1": "1000 ms / 1 s (recommandé)",
+      "delay2": "2000 ms / 2 s (très sûr)",
+      "delay3": "3000 ms / 3 s (sûr pour les gros volumes)",
+      "delayHint": "Attend entre chaque vérification pour rester sous la limite de requêtes de la passerelle (100 par minute par défaut). La vérification s'arrête si la passerelle refuse d'autres requêtes.",
+      "countryRule": "Règle d'indicatif du pays",
+      "autoPrefix": "Préfixer automatiquement par <strong>+91</strong> (Inde) les numéros à 10 chiffres",
+      "numbersLabel": "Numéros à vérifier (un par ligne ou séparés par des virgules)",
+      "numbersHint": "Collez des numéros de téléphone avec l'indicatif du pays, un par ligne ou séparés par des virgules. {{max}} numéros maximum par exécution.",
+      "parsed": "<strong>{{count}}</strong> numéro unique détecté",
+      "parsed_other": "<strong>{{count}}</strong> numéros uniques détectés",
+      "parsed_many": "<strong>{{count}}</strong> numéros uniques détectés",
+      "tenDigitAdded": "({{ten}} à dix chiffres → +91 ajouté)",
+      "tenDigitAddedPreserved": "({{ten}} à dix chiffres → +91 ajouté, {{twelve}} à douze chiffres sans changement)",
+      "tooMany": "Trop de numéros : {{parsed}} détectés, {{max}} maximum par exécution. Retirez-en {{excess}} pour démarrer.",
+      "start": "Démarrer la vérification par lot",
+      "stop": "Arrêter la vérification",
+      "export": "Exporter les résultats (CSV)",
+      "stoppedTitle": "Lot arrêté",
+      "checked": "Vérifiés",
+      "remaining": "Restants",
+      "all": "Tous"
+    },
+    "stopped": {
+      "reason409": "La session n'est pas connectée",
+      "reason429": "La limite de requêtes de la passerelle a été atteinte",
+      "reason503": "WhatsApp n'a pas répondu à une requête",
+      "reasonOther": "La passerelle a refusé une requête",
+      "partial": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéro n'a pas été vérifié. Réessayez plus tard.",
+      "partial_other": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
+      "partial_many": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
+      "last": "{{reason}} (HTTP {{status}}). La dernière requête a échoué. Réessayez plus tard."
+    },
+    "toast": {
+      "enterNumber": "Veuillez saisir un numéro de téléphone à vérifier.",
+      "noSession": "Aucune session WhatsApp prête disponible.",
+      "checkFailed": "Échec de la vérification",
+      "unknownError": "Erreur inconnue lors de la requête",
+      "lookupFailed": "Échec de la requête",
+      "enterNumbers": "Veuillez saisir des numéros de téléphone valides (un par ligne ou séparés par des virgules).",
+      "completed": "Vérification de {{count}} numéro terminée.",
+      "completed_other": "Vérification de {{count}} numéros terminée.",
+      "completed_many": "Vérification de {{count}} numéros terminée."
+    }
+  },
   "infrastructure": {
     "title": "Infrastructure",
     "subtitle": "Configurez les paramètres du serveur, de la base de données, du cache, du stockage et du moteur",

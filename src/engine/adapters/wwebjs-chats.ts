@@ -46,6 +46,28 @@ type ChatConstructor = new (client: Client, data: unknown) => Chat;
 const { GroupChat, PrivateChat } = wwebjs as unknown as { GroupChat: ChatConstructor; PrivateChat: ChatConstructor };
 
 /**
+ * Turn a failure that says the page is gone into the retryable 503 every chat operation answers: a dead
+ * page (reported as the early death signal) or a read that outran the protocol budget. Anything else
+ * returns, for the caller to handle. A chat action that reported a dead page as "WhatsApp declined" (an
+ * opaque `false`) let the caller retry against a corpse.
+ */
+function rethrowTransportFailure(
+  host: WwebjsEngineHost,
+  error: unknown,
+  context: string,
+  activity: string,
+  timedOutMessage = `WhatsApp Web did not answer in time while ${activity}`,
+): void {
+  if (host.isPageTransportError(error)) {
+    host.reportIfPageTransportError(error, context);
+    throw new EngineTransportError(`Transport died while ${activity}`);
+  }
+  if (isProtocolTimeout(error)) {
+    throw new EngineTransportError(timedOutMessage);
+  }
+}
+
+/**
  * The whole chat list through {@link readChatModels}, rehydrated the way whatsapp-web.js's
  * ChatFactory does for these entries, so every mapped field reads exactly as `client.getChats()`
  * gave it. Shared by the chat and group lists. A dead page answers 503 with the death signal, a read
@@ -60,13 +82,13 @@ export async function listChats(host: WwebjsEngineHost, context: string): Promis
   } catch (error) {
     // Same split every sibling read makes (see getChatsByLabel): a dead page is a 503 and an
     // early death signal, not an opaque 500 under a status that still says READY (#1081).
-    if (host.isPageTransportError(error)) {
-      host.reportIfPageTransportError(error, context);
-      throw new EngineTransportError('Transport died while listing chats');
-    }
-    if (isProtocolTimeout(error)) {
-      throw new EngineTransportError('WhatsApp Web did not answer the chat list read in time');
-    }
+    rethrowTransportFailure(
+      host,
+      error,
+      context,
+      'listing chats',
+      'WhatsApp Web did not answer the chat list read in time',
+    );
     throw error;
   }
   return models.map(data =>
@@ -144,16 +166,8 @@ export class WwebjsChats {
       const chat = await this.client().getChatById(chatId);
       return await chat.sendSeen();
     } catch (error) {
-      // A dead page is a 503 and an early death signal, not an opaque `false` under a status that
-      // still says READY — the same split getChats and every sibling read already makes. Reporting
-      // this as "WhatsApp declined" let the caller retry against a corpse.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'sendSeen');
-        throw new EngineTransportError('Transport died while marking a chat as read');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while marking a chat as read');
-      }
+      // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
+      rethrowTransportFailure(this.host, error, 'sendSeen', 'marking a chat as read');
       this.host.logger.error(`Error marking chat ${chatId} as read`, String(error));
       return false;
     }
@@ -168,16 +182,8 @@ export class WwebjsChats {
       const chat = await this.client().getChatById(chatId);
       return await chat.clearMessages();
     } catch (error) {
-      // A dead page is a 503 and an early death signal, not an opaque `false` under a status that
-      // still says READY — the same split getChats and every sibling read already makes. Reporting
-      // this as "WhatsApp declined" let the caller retry against a corpse.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'clearChatMessages');
-        throw new EngineTransportError('Transport died while clearing a chat');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while clearing a chat');
-      }
+      // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
+      rethrowTransportFailure(this.host, error, 'clearChatMessages', 'clearing a chat');
       this.host.logger.error(`Error clearing messages in chat ${chatId}`, String(error));
       return false;
     }
@@ -203,16 +209,8 @@ export class WwebjsChats {
       }
       return true;
     } catch (error) {
-      // A dead page is a 503 and an early death signal, not an opaque `false` under a status that
-      // still says READY — the same split getChats and every sibling read already makes. Reporting
-      // this as "WhatsApp declined" let the caller retry against a corpse.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'archiveChat');
-        throw new EngineTransportError('Transport died while archiving a chat');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while archiving a chat');
-      }
+      // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
+      rethrowTransportFailure(this.host, error, 'archiveChat', 'archiving a chat');
       this.host.logger.error(`Error ${archive ? 'archiving' : 'unarchiving'} chat ${chatId}`, String(error));
       return false;
     }
@@ -237,15 +235,9 @@ export class WwebjsChats {
       chat = await this.client().getChatById(chatId);
     } catch (error) {
       // A dead page resolves NOTHING, so swallowing every rejection here reported it as "no such
-      // chat" and named the caller's chatId as the problem. Five operations in this adapter already
-      // split that case out; without this, the same file answered a dead page two different ways.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'requireResolvableChat');
-        throw new EngineTransportError('Transport died while resolving a chat');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while resolving a chat');
-      }
+      // chat" and named the caller's chatId as the problem. The other chat operations split that case
+      // out; without this, the same file answered a dead page two different ways.
+      rethrowTransportFailure(this.host, error, 'requireResolvableChat', 'resolving a chat');
       chat = undefined; // an unknown chat rejects too — that is the 400 below
     }
     if (!chat) throw new BadRequestException(`Chat ${chatId} does not exist on this session`);
@@ -317,16 +309,8 @@ export class WwebjsChats {
       await chat.markUnread();
       return true;
     } catch (error) {
-      // A dead page is a 503 and an early death signal, not an opaque `false` under a status that
-      // still says READY — the same split getChats and every sibling read already makes. Reporting
-      // this as "WhatsApp declined" let the caller retry against a corpse.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'markUnread');
-        throw new EngineTransportError('Transport died while marking a chat as unread');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while marking a chat as unread');
-      }
+      // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
+      rethrowTransportFailure(this.host, error, 'markUnread', 'marking a chat as unread');
       this.host.logger.error(`Error marking chat ${chatId} as unread`, String(error));
       return false;
     }
@@ -343,16 +327,8 @@ export class WwebjsChats {
       const chat = await this.client().getChatById(chatId);
       return await chat.delete();
     } catch (error) {
-      // A dead page is a 503 and an early death signal, not an opaque `false` under a status that
-      // still says READY — the same split getChats and every sibling read already makes. Reporting
-      // this as "WhatsApp declined" let the caller retry against a corpse.
-      if (this.host.isPageTransportError(error)) {
-        this.host.reportIfPageTransportError(error, 'deleteChat');
-        throw new EngineTransportError('Transport died while deleting a chat');
-      }
-      if (isProtocolTimeout(error)) {
-        throw new EngineTransportError('WhatsApp Web did not answer in time while deleting a chat');
-      }
+      // A dead page is a 503 and an early death signal, not an opaque `false` (see rethrowTransportFailure).
+      rethrowTransportFailure(this.host, error, 'deleteChat', 'deleting a chat');
       this.host.logger.error(`Error deleting chat ${chatId}`, String(error));
       return false;
     }

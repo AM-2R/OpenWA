@@ -872,6 +872,122 @@
     },
     "sessionSelect": "Sesión"
   },
+  "numberChecker": {
+    "subtitle": "Verifica de forma silenciosa si los números de teléfono tienen cuentas de WhatsApp activas, sin enviar mensajes",
+    "zeroMessages": "Cero mensajes enviados",
+    "noSession": {
+      "title": "No hay ninguna sesión de WhatsApp activa y conectada.",
+      "desc": "Para verificar números de teléfono, OpenWA requiere al menos una sesión autenticada.",
+      "goToSessions": "Ir a Sesiones"
+    },
+    "tabs": {
+      "single": "Verificación individual",
+      "bulk": "Verificador masivo de números"
+    },
+    "session": {
+      "label": "Sesión de WhatsApp",
+      "none": "No hay sesiones listas disponibles",
+      "hint": "Las consultas se realizan a través de esta cuenta de WhatsApp conectada."
+    },
+    "single": {
+      "title": "Verificar una cuenta",
+      "phoneLabel": "Número de teléfono",
+      "phonePlaceholder": "ej., 919876543210 o 6281234567890 (con código de país)",
+      "check": "Verificar",
+      "checking": "Verificando...",
+      "autoPrefix": "Añadir automáticamente el prefijo <strong>+91</strong> a los números de 10 dígitos (los de 12 dígitos se mantienen tal cual)",
+      "silent": "<strong>Totalmente silencioso:</strong> esta consulta se hace directamente en el registro de cuentas de WhatsApp. El contacto no recibe ninguna notificación, sonido ni mensaje.",
+      "resultTitle": "Resultado de la verificación",
+      "querying": "Consultando los servidores de WhatsApp...",
+      "empty": "Introduce un número de teléfono y haz clic en \"Verificar\" para ver el estado del número en WhatsApp."
+    },
+    "preview": {
+      "prefixed": "Se verificará como: <strong>+{{number}}</strong> (10 dígitos → prefijo 91 añadido automáticamente)",
+      "kept": "Se verificará como: <strong>+{{number}}</strong> (12 dígitos → se mantiene tal cual)",
+      "digits": "Se verificará como: <strong>+{{number}}</strong> ({{digits}} dígitos)"
+    },
+    "prefixHint": {
+      "single": "Se añade +91 a los números de 10 dígitos y a los de 11 dígitos con un 0 inicial. Los números con + o 00 se dejan tal como se escribieron.",
+      "bulk": "Se añade +91 a los números de 10 dígitos (ej., 96...) y a los de 11 dígitos con un 0 inicial. Los números con + o 00 se dejan tal como se escribieron.",
+      "off": "Los números se verifican tal como se escriben, solo con sus dígitos, así que incluye el código de país."
+    },
+    "result": {
+      "registered": "Registrado en WhatsApp",
+      "notRegistered": "No registrado",
+      "avatarAlt": "Avatar",
+      "status": "Estado",
+      "active": "Cuenta activa",
+      "none": "No se encontró ninguna cuenta",
+      "jid": "JID de WhatsApp",
+      "copyJid": "Copiar JID",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "checkedAt": "Hora de verificación",
+      "openTester": "Abrir en el probador de mensajes"
+    },
+    "recent": {
+      "title": "Verificaciones recientes",
+      "clear": "Borrar historial"
+    },
+    "table": {
+      "phone": "Número de teléfono",
+      "status": "Estado en WhatsApp",
+      "id": "ID de WhatsApp",
+      "time": "Hora"
+    },
+    "status": {
+      "registered": "Registrado",
+      "unregistered": "No registrado",
+      "notRegistered": "No registrado",
+      "failed": "Fallido"
+    },
+    "bulk": {
+      "title": "Verificador masivo de números",
+      "delayLabel": "Retraso seguro entre consultas (ms)",
+      "delay1": "1000 ms / 1 s (recomendado)",
+      "delay2": "2000 ms / 2 s (más seguro)",
+      "delay3": "3000 ms / 3 s (seguro para volúmenes altos)",
+      "delayHint": "Tiempo de espera entre consultas para no superar el límite de solicitudes de la puerta de enlace (predeterminado: 100 por minuto). El lote se detiene si la puerta de enlace rechaza más consultas.",
+      "countryRule": "Regla de código de país",
+      "autoPrefix": "Añadir automáticamente el prefijo <strong>+91</strong> (India) a los números de 10 dígitos",
+      "numbersLabel": "Números a verificar (uno por línea o separados por comas)",
+      "numbersHint": "Pega números de teléfono con el código de país, uno por línea o separados por comas. Hasta {{max}} números por lote.",
+      "parsed": "<strong>{{count}}</strong> número único detectado",
+      "parsed_other": "<strong>{{count}}</strong> números únicos detectados",
+      "parsed_many": "<strong>{{count}}</strong> números únicos detectados",
+      "tenDigitAdded": "({{ten}} de diez dígitos → +91 añadido)",
+      "tenDigitAddedPreserved": "({{ten}} de diez dígitos → +91 añadido, {{twelve}} de doce dígitos sin cambios)",
+      "tooMany": "Demasiados números: {{parsed}} detectados, como máximo {{max}} por lote. Quita {{excess}} para iniciar.",
+      "start": "Iniciar verificación por lotes",
+      "stop": "Detener verificación",
+      "export": "Exportar resultados (CSV)",
+      "stoppedTitle": "Lote detenido",
+      "checked": "Verificados",
+      "remaining": "Restantes",
+      "all": "Todos"
+    },
+    "stopped": {
+      "reason409": "La sesión no está conectada",
+      "reason429": "Se alcanzó el límite de solicitudes de la puerta de enlace",
+      "reason503": "WhatsApp no respondió a una consulta",
+      "reasonOther": "La puerta de enlace rechazó una consulta",
+      "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
+      "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
+      "partial_many": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
+      "last": "{{reason}} (HTTP {{status}}). Falló la última consulta. Inténtalo de nuevo más tarde."
+    },
+    "toast": {
+      "enterNumber": "Introduce un número de teléfono para verificar.",
+      "noSession": "No hay ninguna sesión de WhatsApp lista.",
+      "checkFailed": "Error en la verificación",
+      "unknownError": "Error de consulta desconocido",
+      "lookupFailed": "Error en la consulta",
+      "enterNumbers": "Introduce números de teléfono válidos (uno por línea o separados por comas).",
+      "completed": "Verificación completada: {{count}} número.",
+      "completed_other": "Verificación completada: {{count}} números.",
+      "completed_many": "Verificación completada: {{count}} números."
+    }
+  },
   "infrastructure": {
     "title": "Infraestructura",
     "subtitle": "Configura el servidor, base de datos, caché, almacenamiento y motor",

@@ -917,6 +917,98 @@ describe('BulkMessageService.processBatch', () => {
     expect(finalPartial.results[0].error?.message).toMatch(/caption/i);
   });
 
+  it('fails an item that would render to hundreds of megabytes without building it', async () => {
+    // 1365 single-brace placeholders fit in a 4096-character text and one 394 KB variable fills each of them:
+    // 537 MB, past the longest string V8 can build, so a render-then-check could only have thrown a RangeError.
+    repo.findOne.mockResolvedValue(batchWithVariables('{a}'.repeat(1365), { a: 'x'.repeat(394_000) }));
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+    expect(finalPartial.results[0].error?.message).toContain(`Rendered text is ${1365 * 394_000} characters`);
+  });
+
+  // A personalised media send puts its placeholder in `base64`; a 100 KB image is about 137,000 characters.
+  const mediaBatch = (content: Record<string, unknown>, variables: Record<string, string>) => ({
+    ...makeBatch(1),
+    messages: [{ chatId: 'c0@c.us', type: 'image', content, variables }],
+  });
+
+  it('sends a media item whose base64 comes from a variable, past the text cap', async () => {
+    engine.sendImageMessage = jest.fn().mockResolvedValue({ id: 'waimg', timestamp: 222 });
+    const picture = Buffer.alloc(100_000, 7).toString('base64');
+    repo.findOne.mockResolvedValue(
+      mediaBatch({ image: { base64: '{{pic}}', mimetype: 'image/png' } }, { pic: picture }),
+    );
+
+    await runProcessBatch();
+
+    expect(picture.length).toBeGreaterThan(65_536);
+    expect(engine.sendImageMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds text and caption one by one, not as a total', async () => {
+    engine.sendImageMessage = jest.fn().mockResolvedValue({ id: 'waimg', timestamp: 222 });
+    const grown = 'x'.repeat(40 * 1024);
+    repo.findOne.mockResolvedValue(
+      mediaBatch({ text: '{{v}}', caption: '{{v}}', image: { base64: 'AAAA', mimetype: 'image/png' } }, { v: grown }),
+    );
+
+    await runProcessBatch();
+
+    // Each is 40 KiB, under the 64 KiB cap; together they are not, and nothing asks for them together.
+    expect(engine.sendImageMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a media item whose base64 would render past the media cap without building it', async () => {
+    // 1000 repeats of a 1 MB variable are a billion characters, past what V8 can build as one string.
+    repo.findOne.mockResolvedValue(
+      mediaBatch({ image: { base64: '{{p}}'.repeat(1000), mimetype: 'image/png' } }, { p: 'A'.repeat(1_000_000) }),
+    );
+
+    await runProcessBatch();
+
+    expect(engine.sendImageMessage).not.toHaveBeenCalled();
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+    expect(finalPartial.results[0].error?.message).toContain('exceeds the maximum allowed size');
+  });
+
+  it('bounds what the other strings of an item may grow by, together', async () => {
+    // Neither the URL nor the filename is text or caption, and each grows by 40 KB, under the cap on its own.
+    const grown = 'x'.repeat(40 * 1024);
+    repo.findOne.mockResolvedValue({
+      ...makeBatch(1),
+      messages: [
+        {
+          chatId: 'c0@c.us',
+          type: 'image',
+          content: { image: { url: 'https://cdn.example/{{v}}.jpg', filename: '{{v}}.jpg', mimetype: 'image/jpeg' } },
+          variables: { v: grown },
+        },
+      ],
+    });
+
+    await runProcessBatch();
+
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+    expect(finalPartial.results[0].error?.message).toMatch(/grows by \d+ characters, over the 65536-character limit/);
+  });
+
+  it('fails an item whose variable has no text form with the reason, not a TypeError', async () => {
+    repo.findOne.mockResolvedValue(batchWithVariables('hi {{v}}', { v: { toString: 1 } as unknown as string }));
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+    const finalPartial = (repo.update.mock.calls as Array<[unknown, { results: BatchMessageResult[] }]>).at(-1)![1];
+    expect(finalPartial.results[0].status).toBe(BatchMessageStatus.FAILED);
+    expect(finalPartial.results[0].error?.message).toBe("Variable 'v' cannot be rendered as text");
+  });
+
   it('still sends an item whose render stays under the cap', async () => {
     repo.findOne.mockResolvedValue(batchWithVariables('hello {{v}}', { v: 'world' }));
 

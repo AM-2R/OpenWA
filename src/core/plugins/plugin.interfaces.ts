@@ -140,7 +140,7 @@ export interface PluginConfigField {
   default?: unknown;
   enum?: unknown[]; // when present (any scalar type), the field renders as a <select>
   required?: boolean;
-  secret?: boolean; // sensitive value (e.g. API key): masked on read, preserved on an unchanged write
+  secret?: boolean; // sensitive (e.g. API key): masked on read, kept on an unchanged write, removed by null
   // Validation hints, surfaced as HTML input attributes (advisory — not hard-enforced server-side):
   min?: number; // number: value bound; string/textarea: minLength; array: min rows
   max?: number; // number: value bound; string/textarea: maxLength; array: max rows

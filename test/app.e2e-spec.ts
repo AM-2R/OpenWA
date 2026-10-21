@@ -1,7 +1,3 @@
-// archiver v8 is ESM-only and is pulled in transitively via the @Global StorageModule when
-// AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
-jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -14,7 +10,7 @@ import { renderHttpRequestMetrics, resetHttpRequestMetrics } from './../src/comm
 
 /**
  * Smoke e2e: the previous test asserted a non-existent Hello-World route and failed to
- * even compile (ESM archiver). This boots the real app (SQLite, no queue) and checks the
+ * even compile. This boots the real app (SQLite, no queue) and checks the
  * public health route, the auth boundary, and unknown-route handling.
  */
 describe('App smoke (e2e)', () => {

@@ -29,7 +29,7 @@ import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
-import { type WwebjsEngineHost, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { toCapturedPageError } from './wwebjs-lifecycle';
 
 /**
@@ -335,7 +335,7 @@ export function toMessageResult(msg: Message | undefined): MessageResult {
     );
   }
   const id = msg.id as unknown as SerializedWid | undefined;
-  return { id: id?._serialized ?? id?.$1 ?? '', timestamp: msg.timestamp };
+  return { id: readWid(id) ?? '', timestamp: msg.timestamp };
 }
 
 /**
@@ -364,9 +364,9 @@ function ensureSendable(chatId: string, shape: 'reply' | 'location' | 'contact c
 export class WwebjsMessaging {
   constructor(private readonly host: WwebjsEngineHost) {}
 
-  /** Post-ensureReady client handle. */
+  /** Post-ensureReady client handle; see {@link requireClient} for a teardown that lands in between. */
   private client(): Client {
-    return this.host.getClient();
+    return requireClient(this.host);
   }
 
   /** See {@link withPage} for what a dead page answers here. */

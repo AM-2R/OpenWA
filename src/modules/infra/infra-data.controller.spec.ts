@@ -1,8 +1,3 @@
-// StorageService (imported transitively by the infra controllers) pulls in `archiver`
-// v8, which is ESM-only and cannot be parsed by ts-jest. The controller logic
-// under test never touches archiver, so a lightweight stub is sufficient.
-jest.mock('archiver', () => ({ default: jest.fn() }));
-
 // saveConfig writes the generated env via fs.writeFileSync and reads the existing file
 // via fs.existsSync/readFileSync; mock those so tests assert produced content without
 // touching the filesystem. existsSync defaults to false (no prior config) — except for
@@ -576,10 +571,16 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     // better-sqlite3 hands out one runner per DataSource, so the patch is undone on that instance.
     const runner = ds.createQueryRunner();
     const realQuery = runner.query.bind(runner);
+    const sessionSettings: string[] = [];
     jest.spyOn(ds, 'createQueryRunner').mockImplementation(() => {
       let aborted = false;
       runner.query = ((...callArgs: Parameters<typeof realQuery>) => {
         const sql = callArgs[0];
+        // PostgreSQL accepts the transaction-local settings the import opens with; SQLite has no SET.
+        if (/^SET LOCAL /.test(sql)) {
+          sessionSettings.push(sql);
+          return Promise.resolve([]);
+        }
         if (aborted && sql !== 'ROLLBACK') {
           return Promise.reject(
             new Error('current transaction is aborted, commands ignored until end of transaction block'),
@@ -608,6 +609,9 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
       'Failed to import session s1: duplicate key value violates unique constraint "PK_sessions"',
     ]);
     expect((await ds.getRepository(Session).find()).map(s => s.id).sort()).toEqual(['s1', 's2']);
+    // The clears scale with the live tables, so the runtime statement timeout is lifted for this
+    // transaction (a lock wait keeps its bound).
+    expect(sessionSettings).toEqual(['SET LOCAL statement_timeout = 0', 'SET LOCAL lock_timeout = 30000']);
   });
 
   it('leaves a session that had no claim unclaimed rather than inventing one', async () => {
@@ -2424,6 +2428,42 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
       ],
     );
     expect(await ds.query('SELECT lid, phone FROM lid_mappings')).toEqual([{ lid: '3', phone: '628123' }]);
+  });
+
+  // Boot no longer converts the raw whatsapp-web.js tokens on a migration-managed database, so an archive taken
+  // before the neutral vocabulary has to be converted by the import that restores it.
+  it('converts the raw message types of a restored archive and leaves the neutral ones alone', async () => {
+    await seedSession('s1');
+    const dump = await build().exportData();
+    const at = dump.tables.sessions[0].updatedAt;
+    const message = (id: string, type: string) => ({
+      id,
+      sessionId: 's1',
+      waMessageId: `W-${id}`,
+      chatId: 'c@c.us',
+      chatName: null,
+      author: null,
+      from: 'c@c.us',
+      to: 'me@c.us',
+      body: 'hello',
+      type,
+      direction: MessageDirection.INCOMING,
+      timestamp: 1,
+      metadata: null,
+      status: MessageStatus.DELIVERED,
+      createdAt: at,
+      mediaPath: null,
+      mediaMimetype: null,
+    });
+    const types = ['chat', 'ptt', 'vcard', 'multi_vcard', 'image', 'call_log', 'text'];
+
+    const res = await build().importData({
+      tables: { ...dump.tables, messages: types.map((type, i) => message(`m${i}`, type)) },
+    });
+
+    expect(res.imported).toBe(true);
+    const stored = await ds.query<Array<{ id: string; type: string }>>('SELECT id, type FROM messages ORDER BY id');
+    expect(stored.map(row => row.type)).toEqual(['text', 'voice', 'contact', 'contact', 'image', 'call_log', 'text']);
   });
 
   it('exports and restores automation_rules, which the session wipe would otherwise cascade away', async () => {

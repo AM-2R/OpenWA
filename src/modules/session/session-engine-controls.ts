@@ -7,10 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Repository, DataSource } from 'typeorm';
+import { In, QueryDeepPartialEntity, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { MessageBatch } from '../message/entities/message-batch.entity';
+import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
+import { stripBatchMediaPayloads } from '../message/batch-media.util';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -41,6 +42,14 @@ import {
   startSlotHolders,
   type ReconnectState,
 } from './session-engine-lifecycle.service';
+
+/**
+ * Rows of the tables that grow with traffic (messages, webhook outbox events, webhook delivery failures)
+ * removed per statement when a session is deleted. Small enough to stay under PostgreSQL's statement timeout
+ * and far below either dialect's bind-parameter limit, and short enough on SQLite (one writer, and each
+ * message row also fires the full-text index trigger) that other sessions are not stalled behind it.
+ */
+export const SESSION_DELETE_BATCH_SIZE = 500;
 
 /** A start refused because an operator stopped the session. Same 409 on the wire as any conflict. */
 export class SessionStoppedException extends ConflictException {}
@@ -399,7 +408,15 @@ export class SessionEngineControls {
       // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
       // delete() clears its teardown mark before this slow init resolves, so re-check the session row
       // exists, not just the mark; the requireSession below then surfaces a deleted session as NotFound.
-      if (await this.host.isSessionRetired(id)) {
+      // Guarded like the same read in executeReconnect: a failed read assumes not-retired, so a
+      // transient database error cannot fail a start whose engine is already registered and running.
+      let retired: boolean;
+      try {
+        retired = await this.host.isSessionRetired(id);
+      } catch {
+        retired = false;
+      }
+      if (retired) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.fences.destroyWithEscalation(id, resurrected);
@@ -414,7 +431,15 @@ export class SessionEngineControls {
         // start retired above answers as the stop or delete that retired it instead.
         throw new ServerShuttingDownException();
       }
-      return this.requireSession(id);
+      try {
+        return await this.requireSession(id);
+      } catch (error) {
+        // The engine is registered and running. A failed read (a missing row stays NotFound) must not
+        // report a start that worked as failed: the retry a transient database error buys would answer
+        // "already started". The row read on entry stands in for the one that failed.
+        if (retired || error instanceof NotFoundException) throw error;
+        return session;
+      }
     } finally {
       this.initializingSessions.delete(id);
     }
@@ -547,6 +572,13 @@ export class SessionEngineControls {
       // the row is later deleted/recreated.
       unlinked = await this.fences.teardownEngineSafely(id, engine, e => e.logout(), 'logout', session.name);
       this.engines.deleteIfLive(id, engine);
+      // Clear `phone` AFTER the attempt, whatever its outcome, to take the session out of the boot
+      // auto-start query (phone IS NOT NULL). A completed engine-backed unlink wipes the stored
+      // credentials, so the session can never reach READY again without a fresh QR/pairing; an
+      // incomplete one tore the local credentials down, so re-entering auto-start would only wedge it.
+      // Before the status write, so a failed status write cannot leave the flag behind and resurrect
+      // the session into a QR it can never pass on every restart. onReady rewrites it on the next link.
+      await this.sessionRepository.update(id, { phone: null });
       await this.host.updateStatus(id, SessionStatus.DISCONNECTED);
     } finally {
       if (this.operatorTeardowns.get(id) === engine) {
@@ -559,13 +591,10 @@ export class SessionEngineControls {
         sessionId: id,
         action: 'logout_incomplete',
       });
-      // The local teardown already ran (map reconciled, status DISCONNECTED), but the unlink operation
-      // did not complete. Clear `phone` AFTER the attempt and BEFORE throwing so the boot auto-start
-      // does not resurrect the session into a credential state that can no longer reach READY — the
-      // local credentials were torn down, so re-entering auto-start would only wedge it. The retryable
-      // 502 carries a stable machine code so the dashboard can branch on origin without guessing from
-      // the status/message; no success audit is written on this path.
-      await this.sessionRepository.update(id, { phone: null });
+      // The local teardown already ran (map reconciled, `phone` cleared, status DISCONNECTED), but the
+      // unlink operation did not complete. The retryable 502 carries a stable machine code so the
+      // dashboard can branch on origin without guessing from the status/message; no success audit is
+      // written on this path.
       throw new BadGatewayException({
         statusCode: HttpStatus.BAD_GATEWAY,
         message:
@@ -575,12 +604,6 @@ export class SessionEngineControls {
         code: 'SESSION_LOGOUT_INCOMPLETE',
       });
     }
-
-    // A completed engine-backed unlink wipes the stored credentials, so this session can never
-    // reach READY again without a fresh QR/pairing. Clear `phone` to take it out of the boot
-    // auto-start query (phone IS NOT NULL) instead of resurrecting it into a QR it can never pass
-    // on every restart. onReady rewrites it on the next successful link.
-    await this.sessionRepository.update(id, { phone: null });
 
     this.logger.log(`Session logged out: ${session.name}`, {
       sessionId: id,
@@ -762,6 +785,7 @@ export class SessionEngineControls {
       // conversations, see ConversationMappingService.rebindSession), ingress_events (the
       // instance-keyed inbound dedup record, payload already dropped after dispatch, always pruned
       // after INGRESS_DEDUP_RETENTION_DAYS), lid_mappings (a global cache by design) and audit_logs (the audit trail).
+      await this.deleteTrafficRowsInBatches(id);
       await this.host.dataSource().transaction(async manager => {
         await manager.delete(Message, { sessionId: id });
         await manager.delete(MessageBatch, { sessionId: id });
@@ -797,6 +821,12 @@ export class SessionEngineControls {
       // is undefined here and the purge would refuse it as an unsafe key and remove nothing.
       const nameIsAnId = await this.sessionRepository.exists({ where: { id: session.name } }).catch(() => true);
       await this.engineFactory.purgeSessionData(id, nameIsAnId ? undefined : session.name);
+    } catch (error) {
+      // The session survives, but the write scopes closed above stay retired for good: a bulk batch
+      // running for it stops at its next item without recording anything, and one not yet picked up
+      // never starts. Nothing else moves a PENDING or PROCESSING row on while this process lives.
+      if (!parentDeleted) await this.failUnfinishedBatches(id);
+      throw error;
     } finally {
       writes.release();
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
@@ -824,6 +854,61 @@ export class SessionEngineControls {
       // its entries self-remove on settlement (identity-checked). A delete that refused at either
       // fence MUST leave the entry in place — the name is still reserved against the live remover —
       // and a delete that succeeded already saw both fences pass, so no live remover exists.
+    }
+  }
+
+  /**
+   * Fail the session's unfinished bulk batches after a delete that closed its write scopes but did not
+   * remove it. Written here rather than through the batch service, which this module cannot reach without
+   * a cycle; the rows are the same ones its reapers fail, with the media payloads stripped as on every
+   * terminal path. Best effort: the database that just failed the delete may fail this too, and the
+   * boot reaper still gets the row on the next start.
+   */
+  private async failUnfinishedBatches(sessionId: string): Promise<void> {
+    try {
+      const batches = this.host.dataSource().getRepository(MessageBatch);
+      const unfinished = await batches.find({
+        where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
+      });
+      for (const batch of unfinished) {
+        stripBatchMediaPayloads(batch.messages);
+        await batches.update({ id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) }, {
+          status: BatchStatus.FAILED,
+          completedAt: new Date(),
+          messages: batch.messages,
+        } as QueryDeepPartialEntity<MessageBatch>);
+      }
+    } catch (error) {
+      this.logger.warn(`Could not fail the unfinished batches of session ${sessionId} after a failed delete`, {
+        sessionId,
+        action: 'session_delete_batch_fail_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Remove a session's rows of the tables that grow with traffic (its messages, its webhook outbox records
+   * and its webhook delivery failures) in batches, ahead of the transaction that removes everything else.
+   * One DELETE over a session that has stored millions of rows ran past PostgreSQL's statement timeout,
+   * which failed the whole delete (every retry the same) and, on SQLite, blocked the one event loop for the
+   * length of the statement while each message row also fired the full-text index trigger.
+   *
+   * The batches are not one atomic unit: a failure part-way leaves the session with fewer rows, and
+   * repeating the delete finishes the job. Nothing new can land meanwhile, because the engine is gone and
+   * the closing write scope refuses outbound writes. SQLite resolves each statement within the same tick, so
+   * the loop yields to the event loop between batches.
+   */
+  private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
+    for (const entity of [Message, WebhookOutboxEvent, WebhookDeliveryFailure]) {
+      const rows = this.host.dataSource().getRepository<{ id: string; sessionId: string }>(entity);
+      for (;;) {
+        const batch = await rows.find({ select: { id: true }, where: { sessionId }, take: SESSION_DELETE_BATCH_SIZE });
+        if (batch.length === 0) break;
+        await rows.delete({ sessionId, id: In(batch.map(row => row.id)) });
+        if (batch.length < SESSION_DELETE_BATCH_SIZE) break;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
     }
   }
 

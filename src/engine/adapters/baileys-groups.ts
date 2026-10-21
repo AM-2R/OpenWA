@@ -17,7 +17,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { type createLogger } from '../../common/services/logger.service';
-import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
 import { toParticipantWid } from '../identity/wa-id';
 
 /**
@@ -37,6 +37,8 @@ export interface BaileysGroupsHost {
   normalizedSelfJid(): string;
   /** Learn lid->pn pairs (write-through to the persistent table); no-ops pairs missing either side. */
   addLidMappings(mappings: { lid?: string; pn?: string }[]): void;
+  /** Drop the group's cached metadata, which a group send reuses: its members or settings are changing. */
+  forgetGroupMetadata?(groupId: string): void;
 }
 
 /**
@@ -162,7 +164,7 @@ export class BaileysGroups {
 
   /** Bound a write whose confirmation the library discards; see baileys-query-deadline.ts. */
   private confirmed<T>(work: Promise<T>, operation: string): Promise<T> {
-    return withQueryDeadline(work, this.queryBudgetMs, `WhatsApp did not confirm ${operation} in time`);
+    return confirmedWrite(work, this.queryBudgetMs, operation);
   }
 
   /** Post-ensureReady socket handle. */
@@ -176,8 +178,14 @@ export class BaileysGroups {
    * reads as not-found, so it answers 404 as whatsapp-web.js does rather than a 403 permissions
    * refusal. The w:g2 group IQs are addressed to the group jid, and a leave names only that group.
    */
-  private groupWrite<T>(groupId: string, operation: string, op: () => Promise<T>): Promise<T> {
-    return mapServerRefusal(operation, op, refusedStatusCode, () => new GroupNotFoundError(groupId));
+  private async groupWrite<T>(groupId: string, operation: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await mapServerRefusal(operation, op, refusedStatusCode, () => new GroupNotFoundError(groupId));
+    } finally {
+      // A group write may change who is in the group and how it sends, confirmed or not, so the next send
+      // to it reads the group again instead of reusing the participant list cached before.
+      this.host.forgetGroupMetadata?.(groupId);
+    }
   }
 
   /** Neutral → engine id fold for participant/mention lists. */

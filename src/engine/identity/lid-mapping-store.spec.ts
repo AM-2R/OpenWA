@@ -722,6 +722,28 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
     expect(repo.find).toHaveBeenCalledWith({ where: { phone: In(['628888']) } });
   });
 
+  // An allowlist of N lids that the mirror has not seen used to cost N single-row reads ahead of the one
+  // batched query, because the mirror was read through getCached, which warms every miss.
+  it('phonesForLidsPersisted answers a batch of lids the mirror lacks with one query and no per-lid reads', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '1';
+    try {
+      const lids = Array.from({ length: 300 }, (_, i) => `9${i}`);
+      const repo = makeFakeRepo(lids.map(lid => ({ lid, phone: `62${lid}` })));
+      const store = await newStore(repo); // the cap keeps one of the 300 resident
+      repo.find.mockClear();
+      repo.findOne.mockClear();
+
+      const answer = await store.phonesForLidsPersisted(lids);
+
+      expect(Object.keys(answer)).toHaveLength(300);
+      expect(answer['9299']).toBe('629299');
+      expect(repo.findOne).not.toHaveBeenCalled();
+      expect(repo.find).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.LID_MAPPING_CACHE_MAX;
+    }
+  });
+
   it('batched lookups handle an empty input, a null-phone row, and a read error', async () => {
     const repo = makeFakeRepo([
       { lid: '111', phone: '628999' },

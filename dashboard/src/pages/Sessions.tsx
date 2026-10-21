@@ -52,6 +52,7 @@ import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
 import './Sessions.css';
+import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
 
 /**
  * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
@@ -638,16 +639,6 @@ export function Sessions() {
     }
   };
 
-  const formatLastActive = (date?: string | null) => {
-    if (!date) return t('common.never');
-    const diff = Date.now() - new Date(date).getTime();
-    if (diff < 60000) return t('common.justNow');
-    if (diff < 3600000) return t('common.minAgo', { count: Math.floor(diff / 60000) });
-    return new Date(date).toLocaleDateString();
-  };
-
-  const formatStatus = (status: string) => t(`sessionStatus.${status}`, { defaultValue: status });
-
   const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
   const existingSessionNames = sessions.map(s => s.name);
   // Empty is a disabled button, not a message: the form stays quiet until the user types something.
@@ -976,7 +967,9 @@ export function Sessions() {
             </div>
             <div className="detail-item">
               <span className="detail-label">{t('sessions.details.status')}</span>
-              <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
+              <span className={`status-badge ${selectedSession.status}`}>
+                {formatSessionStatus(t, selectedSession.status)}
+              </span>
             </div>
             <div className="detail-item">
               <span className="detail-label">{t('sessions.details.sessionId')}</span>
@@ -1235,7 +1228,7 @@ export function Sessions() {
             <div key={session.id} className="session-card">
               <div className="card-header">
                 <h3 title={session.name}>{session.name}</h3>
-                <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
+                <span className={`status-pill ${session.status}`}>{formatSessionStatus(t, session.status)}</span>
               </div>
 
               {awaitsPairing(session) ? (
@@ -1266,7 +1259,7 @@ export function Sessions() {
                   </div>
                   <div className="info-row">
                     <span className="info-label">{t('sessions.card.lastActive')}</span>
-                    <span className="info-value">{formatLastActive(session.lastActive)}</span>
+                    <span className="info-value">{formatLastActive(t, session.lastActive)}</span>
                   </div>
                   {(session.status === 'failed' || session.status === 'action_required') && session.lastError ? (
                     <div className="info-row session-error">

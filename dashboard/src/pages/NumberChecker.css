@@ -143,6 +143,12 @@
   gap: 0.75rem;
 }
 
+/* The wide input would squeeze the button until a CJK label breaks between its characters. */
+.number-checker .nc-input-row .nc-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .number-checker .nc-input {
   width: 100%;
   padding: 0.75rem 1rem;
@@ -574,4 +580,12 @@
 .number-checker .nc-badge-sub {
   color: var(--text-muted);
   font-size: 0.75rem;
+}
+
+.number-checker .nc-batch-limit {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--error-text);
 }

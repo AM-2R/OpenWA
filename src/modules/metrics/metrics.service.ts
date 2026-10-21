@@ -117,17 +117,12 @@ export class MetricsService implements OnModuleDestroy {
       throw new HttpException('Too many failed metrics token attempts', HttpStatus.TOO_MANY_REQUESTS);
     }
     const provided = (authorizationHeader ?? '').replace(/^Bearer\s+/i, '').trim();
-    if (!provided || !this.safeEqual(provided, expected)) {
+    // Length-hiding constant-time compare, so the expected token's byte-length is not leaked through a fast
+    // length-mismatch return: this `/api/metrics` endpoint is @Public and timed by callers.
+    if (!provided || !constantTimeEqual(provided, expected)) {
       throw new UnauthorizedException('Invalid metrics token');
     }
     this.failedScrapeLimiter.refund(subject);
-  }
-
-  private safeEqual(a: string, b: string): boolean {
-    // Length-hiding constant-time compare: hash both inputs with a per-process key (fixed-length
-    // digests) then timingSafeEqual, so the expected token's byte-length is not leaked through a
-    // fast length-mismatch return. This `/api/metrics` endpoint is @Public and timed by callers.
-    return constantTimeEqual(a, b);
   }
 
   /** Render the current metrics in Prometheus text exposition format (memoized for a short TTL). */
