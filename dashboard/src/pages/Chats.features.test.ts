@@ -74,6 +74,10 @@ let groupDescription = 'old description';
 let bobIsAdmin = false;
 // When true, GROUP also lists a member WhatsApp knows by a privacy id only, which carries no phone number.
 let groupHasLidMember = false;
+// Whether the group's info is locked to admins, which decides what a member who is no admin may edit.
+let groupLocked = true;
+// When true, the session's own account is listed under an id with a device suffix.
+let ownHasDeviceSuffix = false;
 // How a membership write is refused. The dialog sends one participant at a time, and the gateway answers 403 when
 // a write fails for every participant it was asked about ('all'). A refusal inside a 200 answer ('some') is what
 // a batch it turned down in part gets; nothing in this dialog asks for one, but the answer shape is the route's.
@@ -174,9 +178,14 @@ function installFetchStub(): void {
           id: GROUP.id,
           name: groupName,
           description: groupDescription,
-          locked: true,
+          locked: groupLocked,
           participants: [
-            { id: `${SESSION.phone}@c.us`, number: SESSION.phone, isAdmin: groupAdmin, isSuperAdmin: false },
+            {
+              id: ownHasDeviceSuffix ? `${SESSION.phone}:7@c.us` : `${SESSION.phone}@c.us`,
+              number: ownHasDeviceSuffix ? `${SESSION.phone}:7` : SESSION.phone,
+              isAdmin: groupAdmin,
+              isSuperAdmin: false,
+            },
             { id: '15550002222@c.us', number: '15550002222', name: 'Bob', isAdmin: bobIsAdmin, isSuperAdmin: false },
             ...(groupHasLidMember
               ? [{ id: '262813461250071@lid', number: '262813461250071', isAdmin: false, isSuperAdmin: false }]
@@ -250,8 +259,9 @@ function installFetchStub(): void {
         jsonResponse({ pictures: Object.fromEntries(ids.map(id => [id, pictureFor[id] ?? null])) }),
       );
     }
-    if (method === 'GET' && /\/contacts\/[^/]+\/profile-picture$/.test(path)) {
-      return Promise.resolve(jsonResponse({ url: null }));
+    if (method === 'GET' && /\/contacts\/([^/]+)\/profile-picture$/.test(path)) {
+      const id = decodeURIComponent(path.split('/contacts/')[1].split('/profile-picture')[0]);
+      return Promise.resolve(jsonResponse({ url: pictureFor[id] ?? null }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts/check/`)) {
       return gated('check', () => jsonResponse({ exists: true, whatsappId: RESOLVED_ID }));
@@ -329,6 +339,8 @@ afterEach(async () => {
   groupDescription = 'old description';
   bobIsAdmin = false;
   groupHasLidMember = false;
+  groupLocked = true;
+  ownHasDeviceSuffix = false;
   refuseMember = false;
   blockedIds = [];
   window.sessionStorage.setItem('openwa_user_role', 'admin');
@@ -510,13 +522,13 @@ test('the group dialog saves a new name through the subject route and renames th
   assert.ok(within(dialog).getByRole('button', { name: 'Remove: Bob' }), 'an admin was offered no member actions');
 });
 
-/** Open Group info for Team and wait until the group has loaded. */
-async function openGroupInfo(): Promise<HTMLElement> {
+/** Open Group info for Team and wait until the group has loaded, which the badge naming the account's standing says. */
+async function openGroupInfo(badge = `Managed via ${SESSION.name}`): Promise<HTMLElement> {
   const { screen, within } = rtl;
   await screen.findByText('Team');
   pickRowAction('Team', 'Group info');
   const dialog = await screen.findByRole('dialog');
-  await within(dialog).findByText(`Managed via ${SESSION.name}`);
+  await within(dialog).findByText(badge);
   return dialog;
 }
 
@@ -610,6 +622,14 @@ test('a group picture saved in the group dialog replaces the one on the sidebar 
     fireEvent.click(save);
     await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PUT' && c.path.endsWith('/picture'))));
     await waitFor(() => assert.equal(rowPicture(), 'https://cdn.example/new.jpg', 'the row kept the old picture'));
+    // The dialog's own picture follows too, once the draft is gone.
+    await waitFor(() =>
+      assert.equal(
+        dialog.querySelector('.group-info-picture img')?.getAttribute('src'),
+        'https://cdn.example/new.jpg',
+        'the dialog kept the old picture',
+      ),
+    );
   } finally {
     URL.createObjectURL = objectUrls.create;
     URL.revokeObjectURL = objectUrls.revoke;
@@ -689,6 +709,104 @@ test('a number the gateway refuses to add stays in the box, and an accepted one 
   refuseMember = false;
   fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
   await waitFor(() => assert.equal(box().value, '', 'an accepted number stayed in the box'));
+});
+
+const notAdminBadge = `Not an admin via ${SESSION.name}`;
+
+test('an operator who is no admin of a locked group can edit none of its info and manage no member', async () => {
+  const { fireEvent, within } = rtl;
+  listGroup = true;
+  groupAdmin = false;
+  renderPage();
+  const dialog = await openGroupInfo(notAdminBadge);
+  assert.equal(
+    (within(dialog).getByLabelText(/^Group name/) as HTMLInputElement).disabled,
+    true,
+    'the name is editable',
+  );
+  assert.equal((within(dialog).getByLabelText('Description') as HTMLTextAreaElement).disabled, true);
+  assert.equal((within(dialog).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled, true);
+
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  assert.ok(!within(dialog).queryByRole('button', { name: /^Remove: / }), 'a member was offered member actions');
+  assert.ok(!within(dialog).queryByRole('button', { name: 'Add' }), 'a member was offered adding a number');
+});
+
+test('an operator who is no admin of an unlocked group can edit its info, and still manages no member', async () => {
+  const { fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  groupAdmin = false;
+  groupLocked = false;
+  renderPage();
+  const dialog = await openGroupInfo(notAdminBadge);
+  fireEvent.change(within(dialog).getByLabelText(/^Group name/), { target: { value: 'Team Nord' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => assert.equal(groupName, 'Team Nord', 'the name of an unlocked group was not saved by a member'));
+
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  assert.ok(!within(dialog).queryByRole('button', { name: /^Remove: / }), 'a member was offered member actions');
+});
+
+test('a changed description is saved on its own through the description route', async () => {
+  const { fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.change(within(dialog).getByLabelText('Description'), { target: { value: 'new description' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  await waitFor(() =>
+    assert.deepEqual(fetchCalls.find(c => c.method === 'PUT' && c.path.endsWith('/description'))?.body, {
+      description: 'new description',
+    }),
+  );
+  assert.ok(!fetchCalls.some(c => c.path.endsWith('/subject')), 'an unchanged name was saved');
+});
+
+test('removing a member asks first, and sends nothing unless it is confirmed', async () => {
+  const { fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  const confirm = window.confirm;
+  try {
+    renderPage();
+    const dialog = await openGroupInfo();
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+    const removals = () => fetchCalls.filter(c => c.method === 'DELETE' && c.path.endsWith('/participants'));
+
+    const asked: Array<string | undefined> = [];
+    window.confirm = message => {
+      asked.push(message);
+      return false;
+    };
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
+    assert.deepEqual(asked, ['Remove Bob from the group?']);
+    await settle();
+    assert.deepEqual(removals(), [], 'a member was removed without being confirmed');
+
+    window.confirm = () => true;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove: Bob' }));
+    await waitFor(() =>
+      assert.deepEqual(
+        removals().map(c => c.body),
+        [{ participants: ['15550002222@c.us'] }],
+      ),
+    );
+  } finally {
+    window.confirm = confirm;
+  }
+});
+
+// Both engines hand the number over without a device, so this id only reaches the dialog from a synthetic list;
+// the rule it pins is that the account's own entry is found by its id as well.
+test('the own account is recognised under an id with a device suffix, and is offered no member actions', async () => {
+  const { fireEvent, within } = rtl;
+  listGroup = true;
+  ownHasDeviceSuffix = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  const names = Array.from(dialog.querySelectorAll('.group-info-member .name')).map(name => name.textContent);
+  assert.deepEqual(names, ['You', 'Bob']);
+  assert.ok(!within(dialog).queryByRole('button', { name: /: You$/ }), 'the own account was offered member actions');
 });
 
 test('a member who is no admin sees the group read-only, and a viewer key gets no write actions', async () => {
