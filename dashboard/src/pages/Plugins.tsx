@@ -201,7 +201,7 @@ function ConfigField({
           minLength={field.min}
           maxLength={field.max}
           rows={4}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => onChange(coerceFieldInput(field, e.target.value))}
         />
         {desc}
       </div>

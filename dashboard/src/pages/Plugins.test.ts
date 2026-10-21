@@ -68,6 +68,10 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ success: true, message: 'Uninstalled' }));
     }
     if (method === 'GET' && path === '/api/sessions') return Promise.resolve(jsonResponse([SESSION, SESSION_2]));
+    if (method === 'PUT' && path === `/api/plugins/${PLUGIN.id}/config`) {
+      putBodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(jsonResponse(putReply));
+    }
     const put = method === 'PUT' ? path.match(new RegExp(`^/api/plugins/${PLUGIN.id}/config/([^/]+)$`)) : null;
     if (put) {
       const sid = put[1];
@@ -257,6 +261,50 @@ test('a config schema without properties opens the config modal and the Sessions
   // No declared field means nothing to override per session.
   await screen.findByText('Run for');
   assert.equal(screen.queryByRole('combobox', { name: 'Select a session…' }) === null, true);
+});
+
+// The gateway keeps a stored secret for the mask and for an empty string; only an explicit null removes it.
+// A secret textarea (a PEM key, a service-account JSON) is cleared the same way as a secret text field.
+test('clearing a stored secret textarea saves null, as clearing a secret text field does', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = {
+    config: { pem: '***', token: '***' },
+    configSchema: {
+      type: 'object',
+      properties: {
+        pem: { type: 'textarea', title: 'Private key', secret: true },
+        token: { type: 'string', title: 'Token', secret: true },
+      },
+    },
+  };
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  const pem = await screen.findByLabelText<HTMLTextAreaElement>('Private key');
+  assert.equal(pem.value, '***');
+
+  fireEvent.change(pem, { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText<HTMLInputElement>('Token'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { pem: null, token: null } }]);
+});
+
+test('a typed secret textarea is saved as typed', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = {
+    config: { pem: '***' },
+    configSchema: { type: 'object', properties: { pem: { type: 'textarea', title: 'Private key', secret: true } } },
+  };
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  fireEvent.change(await screen.findByLabelText('Private key'), { target: { value: 'NEW-KEY' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { pem: 'NEW-KEY' } }]);
 });
 
 test('a fractional value in a bounded number field does not block the override save', async () => {
