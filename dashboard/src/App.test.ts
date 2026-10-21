@@ -92,6 +92,14 @@ test('an admin keeps the Logs entry and the route', async () => {
   assert.equal(window.location.pathname, '/logs');
 });
 
+test('an operator opening /number-checker gets the Number Checker page', async () => {
+  renderAt('/number-checker', 'operator');
+  await rtl.waitFor(() => assert.ok(document.querySelector('.number-checker'), 'the page did not render'), {
+    timeout: 10_000,
+  });
+  assert.equal(window.location.pathname, '/number-checker');
+});
+
 // API keys, Infrastructure and Plugins read routes that refuse any session-scoped key, so a scoped
 // admin opening one by URL or reload must be sent home rather than mount a page whose reads all 403.
 for (const page of ['api-keys', 'infrastructure', 'plugins']) {

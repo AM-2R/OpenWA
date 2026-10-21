@@ -1033,6 +1033,29 @@ test('a failed status push closes that session QR modal', async () => {
   await waitFor(() => assert.ok(!screen.queryByRole('dialog'), 'the QR modal stayed open after its session failed'));
 });
 
+// A date-only formatter put a session active a few hours ago on a bare date.
+test('a session last active a few hours ago reads in hours, not as a date', async () => {
+  const { screen, within } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  const lastActive = new Date(Date.now() - 5 * 3_600_000).toISOString();
+  SESSIONS.push({
+    ...SESSION_QR,
+    id: 'sess-recent-1',
+    name: 'recent',
+    status: 'ready',
+    phone: '15550004444',
+    lastActive,
+  });
+  try {
+    renderSessions();
+    const card = (await screen.findByText('recent')).closest('.session-card') as HTMLElement;
+    assert.ok(within(card).getByText('5 hours ago'));
+  } finally {
+    SESSIONS.pop();
+  }
+});
+
 // The gateway writes the linked phone and lastActive when a session reaches READY; the push carries
 // only the status, so the card needs a re-read to show them.
 test('a ready push re-reads the list so a newly linked card shows its phone', async () => {

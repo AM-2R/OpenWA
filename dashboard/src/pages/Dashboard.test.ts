@@ -164,6 +164,15 @@ test('a webhook read still in flight shows the placeholder, not zero webhooks', 
   assert.notEqual(statValue('Webhooks Configured'), '0');
 });
 
+// A date-only formatter put a session active a few hours ago on a bare date.
+test('a session last active a few hours ago reads in hours, not as a date', async () => {
+  webhooksStatus = 403;
+  sessionList = [{ ...READY_SESSION, lastActive: new Date(Date.now() - 5 * 3_600_000).toISOString() }];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(document.querySelector('.last-active')?.textContent, '5 hours ago');
+});
+
 test('a read-only key is offered no Disconnect', async () => {
   webhooksStatus = 403;
   sessionList = [READY_SESSION];

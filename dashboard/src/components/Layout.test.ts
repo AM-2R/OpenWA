@@ -12,8 +12,11 @@ let RoleContext: (typeof import('../hooks/useRole.tsx'))['RoleContext'];
 // Every URL the layout asked for.
 const requested: string[] = [];
 
-/** The layout for an admin key, restricted to selected sessions when `scoped` is set. */
-function renderLayout(scoped = false): ReturnType<typeof import('@testing-library/react').render> {
+/** The layout for a key of `userRole` (admin by default), restricted to selected sessions when `scoped` is set. */
+function renderLayout(
+  scoped = false,
+  userRole: 'admin' | 'operator' | 'viewer' = 'admin',
+): ReturnType<typeof import('@testing-library/react').render> {
   const role = {
     role: 'admin' as const,
     setRole: () => undefined,
@@ -30,7 +33,7 @@ function renderLayout(scoped = false): ReturnType<typeof import('@testing-librar
     createElement(
       RoleContext.Provider,
       { value: role },
-      createElement(MemoryRouter, null, createElement(Layout, { onLogout: () => undefined, userRole: 'admin' })),
+      createElement(MemoryRouter, null, createElement(Layout, { onLogout: () => undefined, userRole })),
     ),
   );
 }
@@ -103,3 +106,11 @@ test('an unscoped admin key still checks for a newer release', async () => {
   assert.ok(rtl.screen.getByRole('link', { name: 'Plugins' }));
   await rtl.waitFor(() => assert.ok(requested.some(url => url.includes('/infra/update-check'))));
 });
+
+// The Number Checker is open to every role: a viewer sees the page and why its Check button is off.
+for (const userRole of ['admin', 'operator', 'viewer'] as const) {
+  test(`the Number Checker is offered to ${userRole} keys`, () => {
+    renderLayout(false, userRole);
+    assert.equal(rtl.screen.getByRole('link', { name: 'Number Checker' }).getAttribute('href'), '/number-checker');
+  });
+}
