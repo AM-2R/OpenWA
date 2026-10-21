@@ -935,7 +935,9 @@ set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSa
 wrong token returns 401. After 10 failed attempts from one client IP within a minute, that client is
 answered 429 (even with the correct token) until the window slides; a successful scrape does not count
 against the limit. The token is **separate** from the API key — the route is `@Public()` (skips
-the API-key guard) and `@SkipThrottle()`.
+the API-key guard) and `@SkipThrottle()`. A production boot refuses a `METRICS_TOKEN` that is the
+`.env.example` placeholder or a known weak value such as `test` or `change-me`, because the route is
+public; there is no length floor, so choose a long random value or leave it unset.
 
 ```typescript
 // metrics/metrics.service.ts (dependency-free; emits text v0.0.4 by hand)
