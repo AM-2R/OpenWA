@@ -307,6 +307,59 @@ test('a typed secret textarea is saved as typed', async () => {
   assert.deepEqual(putBodies, [{ config: { pem: 'NEW-KEY' } }]);
 });
 
+// A stored secret reads back as the mask '***', which no pattern describes. The form holds it untouched,
+// and the browser checks a pattern against whatever the field holds, so the save was refused on a field
+// the operator never edited.
+const PATTERNED_SECRET = {
+  config: { greeting: 'hello', token: '***' },
+  configSchema: {
+    type: 'object',
+    properties: {
+      greeting: { type: 'string', title: 'Greeting' },
+      token: { type: 'string', title: 'Token', secret: true, required: true, pattern: '^tok_[a-z0-9]+$' },
+    },
+  },
+};
+
+test('a stored secret with a pattern is saved without retyping it', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  fireEvent.change(await screen.findByLabelText('Greeting'), { target: { value: 'hi' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { greeting: 'hi', token: '***' } }]);
+});
+
+test('a stored secret with a pattern does not block the per-session override save', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  putReply = { success: true };
+  await openSessionOverride('Main');
+  fireEvent.change(await screen.findByLabelText('Greeting'), { target: { value: 'hi' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save override' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.equal((putBodies[0] as { config: { greeting?: string } }).config.greeting, 'hi');
+});
+
+test('a secret typed over the stored one is still held to its pattern', async () => {
+  const { screen, fireEvent } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  const token = await screen.findByLabelText<HTMLInputElement>(/Token/);
+  assert.equal(token.validity.patternMismatch, false);
+
+  fireEvent.change(token, { target: { value: 'nope' } });
+  assert.equal(token.validity.patternMismatch, true);
+  fireEvent.change(token, { target: { value: 'tok_abc1' } });
+  assert.equal(token.validity.valid, true);
+});
+
 test('a fractional value in a bounded number field does not block the override save', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   pluginOverride = {

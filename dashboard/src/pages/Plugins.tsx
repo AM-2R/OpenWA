@@ -225,7 +225,8 @@ function ConfigField({
         step={field.type === 'number' ? 'any' : undefined}
         minLength={field.type !== 'number' ? field.min : undefined}
         maxLength={field.type !== 'number' ? field.max : undefined}
-        pattern={field.type !== 'number' ? field.pattern : undefined}
+        // A stored secret reads back as the mask '***', which no pattern describes: it is only checked once typed over.
+        pattern={field.type !== 'number' && !(field.secret && value === '***') ? field.pattern : undefined}
         onChange={e => onChange(coerceFieldInput(field, e.target.value))}
       />
       {desc}
