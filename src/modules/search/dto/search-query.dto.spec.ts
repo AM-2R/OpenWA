@@ -58,6 +58,26 @@ describe('SearchQueryDto', () => {
     expect(validateSync(fromQuery({ q: 'hello', offset: '100000' }))).toHaveLength(0);
   });
 
+  // The provider binds ceil(dateFrom / 1000) into a bigint column. A bound near 1e22 overflows it on
+  // PostgreSQL (a 500 instead of a 400); the message list refuses the same values for since/until.
+  describe.each(['dateFrom', 'dateTo'] as const)('%s', field => {
+    const validate = (value: string): boolean => validateSync(fromQuery({ q: 'hello', [field]: value })).length === 0;
+
+    it.each(['9300000000000000000000', '-9300000000000000000000', String(2 ** 53), String(-(2 ** 53))])(
+      'rejects %s, which is beyond the safe integer range',
+      value => {
+        expect(validate(value)).toBe(false);
+      },
+    );
+
+    it.each([String(Number.MAX_SAFE_INTEGER), String(-Number.MAX_SAFE_INTEGER), '0', '-1', '1700000000000.5'])(
+      'accepts %s',
+      value => {
+        expect(validate(value)).toBe(true);
+      },
+    );
+  });
+
   it('rejects an invalid direction (@IsEnum(MessageDirection))', () => {
     const dto = fromQuery({ q: 'hello', direction: 'sideways' });
     expect(validateSync(dto).some(e => e.property === 'direction')).toBe(true);
@@ -84,5 +104,17 @@ describe('SearchQueryDto', () => {
       Reflect.getMetadata(DECORATORS.API_MODEL_PROPERTIES, SearchQueryDto.prototype, key);
     expect(published('limit')).toMatchObject({ type: 'integer', minimum: 1 });
     expect(published('offset')).toMatchObject({ type: 'integer', minimum: 0, maximum: SEARCH_OFFSET_MAX });
+  });
+
+  it('publishes dateFrom and dateTo with the safe integer bounds they are validated against', () => {
+    const published = (key: string): unknown =>
+      Reflect.getMetadata(DECORATORS.API_MODEL_PROPERTIES, SearchQueryDto.prototype, key);
+    for (const key of ['dateFrom', 'dateTo']) {
+      expect(published(key)).toMatchObject({
+        type: Number,
+        minimum: -Number.MAX_SAFE_INTEGER,
+        maximum: Number.MAX_SAFE_INTEGER,
+      });
+    }
   });
 });

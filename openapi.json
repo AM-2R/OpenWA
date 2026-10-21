@@ -17925,6 +17925,8 @@
             "in": "query",
             "description": "Epoch-ms lower bound (inclusive)",
             "schema": {
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "type": "number"
             }
           },
@@ -17934,6 +17936,8 @@
             "in": "query",
             "description": "Epoch-ms upper bound (inclusive)",
             "schema": {
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "type": "number"
             }
           },

@@ -10,7 +10,8 @@ import { SEARCH_OFFSET_MAX, SEARCH_QUERY_MAX_LENGTH, SEARCH_TERMS_MAX } from '..
  * Request shape for GET /search. Numeric fields are coerced from query-string strings via
  * `@Type(() => Number)` and then validated, so `?limit=abc` (Number('abc') → NaN) surfaces as a 400
  * from the global ValidationPipe, never reaching the provider as a NaN SQL param. The epoch-ms
- * bounds `dateFrom`/`dateTo` use `@IsNumber()`; `limit`/`offset` use `@IsInt()`, because they are
+ * bounds `dateFrom`/`dateTo` use `@IsNumber()` within the safe integer range, since the provider binds them
+ * as seconds into a bigint column that a larger value overflows; `limit`/`offset` use `@IsInt()`, because they are
  * bound straight into `LIMIT ?`/`OFFSET ?` where better-sqlite3 rejects a fractional value with
  * SQLITE_MISMATCH: a fraction has to be a 400 here rather than a driver-level 500. `sessionIds` and
  * `chatIds` are intentionally absent: both scopes are injected by SearchService from the caller's
@@ -59,18 +60,32 @@ export class SearchQueryDto {
   // it. @IsString() accepts any string; the provider matches it against stored messages.type values.
   type?: MessageType;
 
-  @ApiPropertyOptional({ description: 'Epoch-ms lower bound (inclusive)', type: Number })
+  @ApiPropertyOptional({
+    description: 'Epoch-ms lower bound (inclusive)',
+    type: Number,
+    minimum: -Number.MAX_SAFE_INTEGER,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(-Number.MAX_SAFE_INTEGER)
+  @Max(Number.MAX_SAFE_INTEGER)
   dateFrom?: number;
 
-  @ApiPropertyOptional({ description: 'Epoch-ms upper bound (inclusive)', type: Number })
+  @ApiPropertyOptional({
+    description: 'Epoch-ms upper bound (inclusive)',
+    type: Number,
+    minimum: -Number.MAX_SAFE_INTEGER,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(-Number.MAX_SAFE_INTEGER)
+  @Max(Number.MAX_SAFE_INTEGER)
   dateTo?: number;
 
   @ApiPropertyOptional({ description: 'Max hits to return', type: 'integer', minimum: 1 })
