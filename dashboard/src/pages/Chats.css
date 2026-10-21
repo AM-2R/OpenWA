@@ -426,6 +426,11 @@
   font-size: 0.8125rem;
   color: var(--text-muted);
   line-height: 1.2;
+  /* A number or the Group label: each takes its direction from its own text, so a phone keeps its digit
+     order inside Arabic and Hebrew pages. A line of digits resolves to left to right, so the box hugs the
+     start edge of the header (the right one in RTL, where the name is) instead of stretching across it. */
+  unicode-bidi: plaintext;
+  align-self: flex-start;
 }
 
 /* Raw JID preserved for technical use (lid resolution, webhook payloads, group ids). Muted mono,
@@ -438,6 +443,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  max-width: 100%;
+  align-self: flex-start;
 }
 
 .chats-page .room-messages {
