@@ -46,6 +46,10 @@ const SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS = 60000;
 const SANDBOX_LOG_MAX_PER_WINDOW = 200;
 const SANDBOX_LOG_WINDOW_MS = 10000;
 const SANDBOX_LOG_MAX_MESSAGE_LENGTH = 8192;
+// A meta is measured by writing it out as JSON, and a shared reference is written out again at every use, so a meta
+// that is small to hold can be enormous as text. The walk stops after this many values; a meta that long is over the
+// size limit anyway and is replaced by a marker without a length.
+const SANDBOX_LOG_MAX_META_VALUES = 100_000;
 
 /** Per-enable log-relay rate-limit window, shared by the onLog relay and the onWorkerExit final flush. */
 interface SandboxLogRelayState {
@@ -588,11 +592,17 @@ export class PluginSandboxBridge {
       let boundedMeta = meta;
       if (meta !== undefined) {
         const reason = typeof meta?.error === 'string' ? { error: truncate(meta.error) } : undefined;
+        let values = 0;
         try {
-          const metaLength = JSON.stringify(meta).length;
+          const metaLength = JSON.stringify(meta, (_key, value: unknown) => {
+            if (++values > SANDBOX_LOG_MAX_META_VALUES) throw new RangeError('meta is too large to measure');
+            return value;
+          }).length;
           if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH) boundedMeta = { ...reason, metaTruncated: true, metaLength };
         } catch {
-          boundedMeta = reason; // not serializable (circular or BigInt), so it cannot be logged as JSON anyway
+          // Past the walk limit the meta is over the size limit; otherwise it is not serializable (circular or BigInt),
+          // so it cannot be logged as JSON anyway.
+          boundedMeta = values > SANDBOX_LOG_MAX_META_VALUES ? { ...reason, metaTruncated: true } : reason;
         }
       }
       // The level comes off the wire unchecked (plugin code can post to parentPort directly), and the

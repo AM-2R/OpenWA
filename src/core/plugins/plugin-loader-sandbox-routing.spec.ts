@@ -742,4 +742,67 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     expect(longMeta.error).toBe(`${'e'.repeat(8192)}…[truncated]`);
     expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', 'undefined', { pluginId: 'p1' });
   });
+
+  // postMessage keeps shared references shared, so a meta that is small to hold writes out, at every use, as JSON
+  // text of any size: ten keys over the same child, eight levels deep, is a hundred million leaves.
+  describe('a meta whose shared references write out to an enormous text', () => {
+    const fanOut = (levels: number): Record<string, unknown> => {
+      let node: Record<string, unknown> = { leaf: 1 };
+      for (let level = 0; level < levels; level++) {
+        node = Object.fromEntries(Array.from({ length: 10 }, (_, key) => [`k${key}`, node]));
+      }
+      return node;
+    };
+    const ones = (length: number): number[] => new Array<number>(length).fill(1);
+
+    it('is replaced by a size marker at once, without being written out', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'fan-out', fanOut(8));
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] fan-out', { metaTruncated: true, pluginId: 'p1' });
+    });
+
+    it('keeps the error text of a worker error log', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const errorSpy = jest
+        .spyOn((loader as unknown as { logger: { error: jest.Mock } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('error', 'fan-out', { error: 'boom', fan: fanOut(8) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(errorSpy).toHaveBeenCalledWith('[p1] fan-out', 'undefined', {
+        error: 'boom',
+        metaTruncated: true,
+        pluginId: 'p1',
+      });
+    });
+
+    it('still reports the exact length of a meta that is large but finite, up to 100000 values', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      // The array is one value and each entry another: 99999 entries make 100000 values, the most that is walked.
+      loader.capturedOnLog!('log', 'walked', ones(99_999) as unknown as Record<string, unknown>);
+      loader.capturedOnLog!('log', 'stopped', ones(100_000) as unknown as Record<string, unknown>);
+
+      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] walked', {
+        metaTruncated: true,
+        metaLength: 99_999 + 99_998 + 2,
+        pluginId: 'p1',
+      });
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] stopped', { metaTruncated: true, pluginId: 'p1' });
+    });
+  });
 });
