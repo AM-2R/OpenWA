@@ -29,6 +29,8 @@ export class SessionLidResolver {
    */
   private readonly retryAfter = new Map<string, number>();
   private static readonly RETRY_AFTER_MS = 60_000;
+  /** Lookups under way, per key, so messages that arrive together from one sender share a single one. */
+  private readonly inFlight = new Map<string, Promise<string | null>>();
 
   constructor(
     private readonly engines: EngineRegistry,
@@ -51,6 +53,18 @@ export class SessionLidResolver {
     if ((this.retryAfter.get(key) ?? 0) > Date.now()) {
       return null;
     }
+    // Neither the cache nor the hold above is set until a lookup lands, so a burst of messages from a
+    // new sender, as a reconnect delivers, would otherwise start one engine lookup per message.
+    let lookup = this.inFlight.get(key);
+    if (!lookup) {
+      lookup = this.lookup(sessionId, contactId, key).finally(() => this.inFlight.delete(key));
+      this.inFlight.set(key, lookup);
+    }
+    return lookup;
+  }
+
+  /** One engine lookup for a sender, with its caching and persistence. */
+  private async lookup(sessionId: string, contactId: string, key: string): Promise<string | null> {
     let phone: string | null;
     // `resolved` marks a definitive engine answer: a rejection or a missing engine is a transient
     // unknown, NOT "this contact has no phone", and must never overwrite a stored mapping (#1058).

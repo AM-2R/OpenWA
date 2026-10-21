@@ -90,6 +90,55 @@ describe('SessionLidResolver', () => {
     });
   });
 
+  describe('messages that arrive together from one sender', () => {
+    // The engine answers only after the whole burst is in, as it does when a reconnect delivers the
+    // buffered messages of a busy group at once.
+    const burstWith = async (answer: () => Promise<string | null>, size = 50) => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      resolveContactPhone.mockImplementation(async () => {
+        await gate;
+        return answer();
+      });
+      const burst = Array.from({ length: size }, () => resolver.resolveSenderPhone('s1', '404@lid'));
+      release();
+      return Promise.all(burst);
+    };
+
+    it.each([
+      ['a phone', () => Promise.resolve('628111'), '628111', 1],
+      ['a definitive null', () => Promise.resolve(null), null, 1],
+      ['an unmapped lid', () => Promise.reject(new LidNotMappedError('404@lid')), null, 0],
+    ])('share one engine lookup and one write for %s', async (_label, answer, phone, writes) => {
+      await expect(burstWith(answer)).resolves.toEqual(Array.from({ length: 50 }, () => phone));
+      expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+      expect(remember).toHaveBeenCalledTimes(writes);
+    });
+
+    it('do not hold up a later message once the lookup failed, which is looked up again', async () => {
+      await burstWith(() => Promise.reject(new Error('Evaluation failed')), 5);
+      resolveContactPhone.mockResolvedValue('628111');
+
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBe('628111');
+      expect(resolveContactPhone).toHaveBeenCalledTimes(2);
+    });
+
+    it('keep other senders and other sessions apart', async () => {
+      engines.set('s2', { resolveContactPhone } as unknown as IWhatsAppEngine);
+      resolveContactPhone.mockImplementation(lid => Promise.resolve(`phone-of-${String(lid)}`));
+
+      await expect(
+        Promise.all([
+          resolver.resolveSenderPhone('s1', '1@lid'),
+          resolver.resolveSenderPhone('s1', '1@lid'),
+          resolver.resolveSenderPhone('s1', '2@lid'),
+          resolver.resolveSenderPhone('s2', '1@lid'),
+        ]),
+      ).resolves.toEqual(['phone-of-1@lid', 'phone-of-1@lid', 'phone-of-2@lid', 'phone-of-1@lid']);
+      expect(resolveContactPhone).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it('returns null when the session has no live engine', async () => {
     await expect(resolver.resolveSenderPhone('not-started', '111@lid')).resolves.toBeNull();
   });
