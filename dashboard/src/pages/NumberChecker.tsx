@@ -89,8 +89,11 @@ export function NumberChecker() {
   const [selectedSession, setSelectedSession] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
 
-  // Set default session when loaded (API requires session UUID)
-  const currentSession = selectedSession || readySessions[0]?.id || '';
+  // The chosen session, else the first ready one (API requires session UUID). A chosen session that leaves
+  // the ready list on a refetch would otherwise stay in use while the select shows the first option.
+  const currentSession = readySessions.some(s => s.id === selectedSession)
+    ? selectedSession
+    : (readySessions[0]?.id ?? '');
 
   // Single Check State
   const [phoneNumber, setPhoneNumber] = useState('');

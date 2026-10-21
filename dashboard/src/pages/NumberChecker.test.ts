@@ -31,9 +31,8 @@ function createTestQueryClient() {
   });
 }
 
-function renderComponent(role = 'operator') {
+function renderComponent(role = 'operator', queryClient = createTestQueryClient()) {
   sessionStorage.setItem('openwa_user_role', role);
-  const queryClient = createTestQueryClient();
   return rtl.render(
     createElement(
       QueryClientProvider,
@@ -459,6 +458,42 @@ test('NumberChecker: a list over the per-run limit blocks Start and names the li
   rtl.fireEvent.change(textarea, { target: { value: `${list(NUMBER_CHECK_BATCH_MAX)}\n${list(5)}` } });
   assert.equal(start().disabled, false);
   assert.equal(container.querySelector('.nc-batch-limit'), null);
+});
+
+const twoSessions = (betaStatus: string) => [
+  { id: 'sess-a', name: 'Alpha', status: 'ready', phone: '111' },
+  { id: 'sess-b', name: 'Beta', status: betaStatus, phone: '222' },
+];
+
+test('NumberChecker: a chosen session that leaves the ready list is replaced by the one the select then shows', async () => {
+  const checked: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/')) {
+      checked.push(url);
+      return Promise.resolve(jsonResponse({ number: '919876543210', exists: false, whatsappId: null }));
+    }
+    return Promise.resolve(jsonResponse(twoSessions('ready')));
+  }) as typeof fetch;
+  const client = createTestQueryClient();
+  renderComponent('operator', client);
+  await rtl.screen.findByRole('option', { name: /Beta/ });
+  const select = rtl.screen.getByRole('combobox', { name: 'WhatsApp Session' }) as HTMLSelectElement;
+  rtl.fireEvent.change(select, { target: { value: 'sess-b' } });
+  assert.equal(select.value, 'sess-b');
+
+  await rtl.act(async () => client.setQueryData(['sessions'], twoSessions('disconnected')));
+  // Only Alpha is left to show, so Alpha is the session the lookup has to use.
+  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('option', { name: /Beta/ }) === null, true));
+  assert.deepEqual(
+    [...select.options].map(option => option.value),
+    ['sess-a'],
+  );
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '919876543210' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Not Registered', { selector: '.nc-status-badge' });
+  assert.equal(checked.length, 1);
+  assert.match(checked[0], /\/sessions\/sess-a\/contacts\/check\//);
 });
 
 const statValue = (label: string) =>
