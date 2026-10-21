@@ -95,6 +95,28 @@ test('the language menu is bounded by the window and scrolls', () => {
   assert.equal(decl(collapsed.body, 'max-height'), 'calc(100vh - 9rem)');
 });
 
+// 100vh is the large viewport on a phone whose browser collapses its toolbar, so a full-height scroller ended behind
+// the toolbar and its last rows could not be scrolled into view. 100dvh follows the visible area; the 100vh line
+// before it is the fallback for a browser without dvh.
+const valuesOf = (body: string, prop: string): string[] =>
+  [...body.matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'g'))].map(m => m[1].trim());
+
+test('the full-height sidebar and mobile scroller follow the dynamic viewport', () => {
+  const sidebar = find('.sidebar').find(r => !r.media);
+  assert.ok(sidebar, 'no base .sidebar rule');
+  assert.deepEqual(valuesOf(sidebar.body, 'height'), ['100vh', '100dvh']);
+  const scroller = find('.main-content.mobile').find(r => r.media);
+  assert.ok(scroller, 'no mobile .main-content rule');
+  assert.deepEqual(valuesOf(scroller.body, 'height'), ['100vh', '100dvh']);
+});
+
+test('the language menu is bounded by the dynamic viewport too, since it hangs off the sidebar bottom', () => {
+  const menu = find('.language-menu-list').find(r => !r.media);
+  assert.deepEqual(valuesOf(menu?.body ?? '', 'max-height'), ['calc(100vh - 13rem)', 'calc(100dvh - 13rem)']);
+  const collapsed = find('.sidebar.collapsed .language-menu-list').find(r => !r.media);
+  assert.deepEqual(valuesOf(collapsed?.body ?? '', 'max-height'), ['calc(100vh - 9rem)', 'calc(100dvh - 9rem)']);
+});
+
 // The Plugins page pins its status rail with position: sticky. overflow-x: hidden makes .main-content a scroll
 // container (overflow-y computes to auto), the nearest one a sticky box sticks to, and that one never scrolls, so
 // the rail scrolled away with the page. clip hides the overflow without that.

@@ -12,6 +12,8 @@
   flex-direction: column;
   position: fixed;
   height: 100vh;
+  /* The dynamic viewport excludes a phone browser's collapsing toolbar; the line above is the fallback. */
+  height: 100dvh;
   z-index: 100;
   transition:
     width 0.3s ease,
@@ -252,6 +254,7 @@
   /* The menu grows upward from the footer, so it may be as tall as the window less the footer (up to 186px in
      Arabic) and a margin. */
   max-height: calc(100vh - 13rem);
+  max-height: calc(100dvh - 13rem);
   overflow-y: auto;
 }
 
@@ -287,6 +290,7 @@
   left: calc(100% + 0.5rem);
   bottom: 0;
   max-height: calc(100vh - 9rem);
+  max-height: calc(100dvh - 9rem);
 }
 
 .logout-btn {
@@ -425,6 +429,7 @@
     width: 100%;
     padding-top: 56px;
     height: 100vh;
+    height: 100dvh;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }

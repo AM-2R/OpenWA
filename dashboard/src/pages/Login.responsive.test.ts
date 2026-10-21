@@ -18,3 +18,10 @@ test('the login content centres with auto margins, which give way to scrolling',
   assert.equal(decl(body('.login-container .login-card'), 'margin-top'), 'auto');
   assert.equal(decl(body('.login-container .login-footer'), 'margin-bottom'), 'auto');
 });
+
+// 100vh is the large viewport on a phone whose browser collapses its toolbar, so the bottom of the fixed screen sat
+// behind the toolbar. 100dvh follows the visible area; the 100vh line before it is the fallback.
+test('the login container follows the dynamic viewport height', () => {
+  const values = [...body('.login-container').matchAll(/(?:^|;)\s*min-height\s*:\s*([^;]+)/g)].map(m => m[1].trim());
+  assert.deepEqual(values, ['100vh', '100dvh']);
+});
