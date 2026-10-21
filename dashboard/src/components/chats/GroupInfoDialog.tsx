@@ -73,17 +73,18 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const canEditInfo = canWrite && Boolean(info) && (isAdmin || info?.locked === false);
   const canManageMembers = canWrite && isAdmin;
 
-  // The form starts from the group as loaded, and again after a refresh.
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  // What the operator has typed. A field they have not touched shows the group as the server last returned it,
+  // so loading the group again (a member action, the window regaining focus) neither discards a draft nor
+  // leaves an untouched field stale. A save or a refresh drops the draft.
+  const [draft, setDraft] = useState<{ name?: string; description?: string }>({});
   const [newPicture, setNewPicture] = useState<{ base64: string; mimetype: string; preview: string } | null>(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    if (!info) return;
-    setName(info.name);
-    setDescription(info.description ?? '');
+  const name = draft.name ?? info?.name ?? '';
+  const description = draft.description ?? info?.description ?? '';
+  const dropDraft = () => {
+    setDraft({});
     setNewPicture(null);
-  }, [info]);
+  };
   // The preview is an object URL: released when replaced and when the dialog closes.
   useEffect(() => {
     if (!newPicture) return;
@@ -129,6 +130,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       }
       showSuccess(t('chats.group.saved'));
       await infoQuery.refetch();
+      dropDraft();
     } catch (err) {
       showError(t('chats.group.saveFailed'), errorText(err));
     } finally {
@@ -200,7 +202,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
       <button
         type="button"
         className="icon-btn"
-        onClick={() => void infoQuery.refetch()}
+        onClick={() => void infoQuery.refetch().then(dropDraft)}
         disabled={infoQuery.isFetching}
         title={t('common.refresh')}
         aria-label={t('common.refresh')}
@@ -262,7 +264,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               type="text"
               value={name}
               maxLength={GROUP_NAME_MAX_LENGTH}
-              onChange={e => setName(e.target.value)}
+              onChange={e => setDraft(current => ({ ...current, name: e.target.value }))}
               disabled={!canEditInfo}
             />
           </label>
@@ -303,7 +305,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               value={description}
               maxLength={GROUP_DESCRIPTION_MAX_LENGTH}
               placeholder={t('chats.group.descriptionPlaceholder')}
-              onChange={e => setDescription(e.target.value)}
+              onChange={e => setDraft(current => ({ ...current, description: e.target.value }))}
               disabled={!canEditInfo}
               rows={5}
             />
