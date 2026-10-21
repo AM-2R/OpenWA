@@ -69,6 +69,15 @@ test('the closed mobile sidebar slides off the right edge under RTL, and opens b
   assert.equal(decl(open[0].body, 'transform'), 'translateX(0)');
 });
 
+// The Plugins page pins its status rail with position: sticky. overflow-x: hidden makes .main-content a scroll
+// container (overflow-y computes to auto), the nearest one a sticky box sticks to, and that one never scrolls, so
+// the rail scrolled away with the page. clip hides the overflow without that.
+test('the main content clips sideways overflow without becoming a scroll container', () => {
+  const main = find('.main-content').find(r => !r.media);
+  assert.ok(main, 'no base .main-content rule');
+  assert.equal(decl(main.body, 'overflow-x'), 'clip');
+});
+
 test('the collapse chevron is mirrored once, by the icon Layout.tsx picks', () => {
   assert.match(tsx, /isRtl \? \(\s*<ChevronLeft/, 'Layout.tsx no longer swaps the chevron for RTL');
   for (const r of all.filter(r => r.selectors.some(s => s.includes('.collapse-toggle svg')))) {

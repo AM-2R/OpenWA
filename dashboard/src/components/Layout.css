@@ -314,7 +314,9 @@
   width: calc(100% - 260px);
   background: var(--bg-light);
   min-height: 100vh;
-  overflow-x: hidden;
+  /* clip, not hidden: hidden makes this the scroll container that a sticky child (the Plugins status rail)
+     sticks to, and it never scrolls. */
+  overflow-x: clip;
   transition:
     margin-left 0.3s ease,
     width 0.3s ease;
