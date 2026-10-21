@@ -6,7 +6,7 @@ import json
 import math
 import time
 import warnings
-from typing import get_args, get_type_hints
+from typing import Callable, get_args, get_type_hints
 
 import httpx
 import pytest
@@ -1440,3 +1440,99 @@ class TestChannelAdminOwnership:
         client.channels.transfer_ownership("s", "c@newsletter", {"newOwnerId": "b@c.us"})
         assert backend.calls[-1].url.endswith("/channels/c@newsletter/owner/transfer")
         assert backend.calls[-1].body == {"newOwnerId": "b@c.us"}
+
+
+# Twelve routes no other test calls. Each row is written from the contract (openapi.json: verb, path,
+# query and request-body keys), not read off the client, so a changed verb or a renamed body key fails here.
+_BASE = "http://localhost:2785"
+_UNTESTED_ROUTES: list[tuple[str, Callable[[OpenWAClient], object], str, str, object]] = [
+    ("sessions.get_config", lambda c: c.sessions.get_config("s1"), "GET", f"{_BASE}/api/sessions/s1/config", None),
+    (
+        "sessions.update_config",
+        lambda c: c.sessions.update_config(
+            "s1", {"autoRejectCalls": True, "maxReconnectAttempts": None, "reconnectBaseDelay": 2000}
+        ),
+        "PATCH",
+        f"{_BASE}/api/sessions/s1/config",
+        {"autoRejectCalls": True, "maxReconnectAttempts": None, "reconnectBaseDelay": 2000},
+    ),
+    ("sessions.get_proxy", lambda c: c.sessions.get_proxy("s1"), "GET", f"{_BASE}/api/sessions/s1/proxy", None),
+    (
+        "sessions.update_proxy",
+        lambda c: c.sessions.update_proxy("s1", {"proxyUrl": None}),
+        "PATCH",
+        f"{_BASE}/api/sessions/s1/proxy",
+        {"proxyUrl": None},
+    ),
+    (
+        "webhooks.list_all",
+        lambda c: c.webhooks.list_all({"limit": 5, "offset": 10}),
+        "GET",
+        f"{_BASE}/api/webhooks?limit=5&offset=10",
+        None,
+    ),
+    (
+        "webhooks.delivery_failures",
+        lambda c: c.webhooks.delivery_failures({"sessionId": "s1", "limit": 5, "offset": 10}),
+        "GET",
+        f"{_BASE}/api/webhooks/delivery-failures?sessionId=s1&limit=5&offset=10",
+        None,
+    ),
+    (
+        "chats.subscribe_presence",
+        lambda c: c.chats.subscribe_presence("s1", {"chatId": "a@c.us"}),
+        "POST",
+        f"{_BASE}/api/sessions/s1/presence/subscribe",
+        {"chatId": "a@c.us"},
+    ),
+    (
+        "chats.get_presence",
+        lambda c: c.chats.get_presence("s1", "a@c.us"),
+        "GET",
+        f"{_BASE}/api/sessions/s1/presence/a@c.us",
+        None,
+    ),
+    (
+        "status.from_contact",
+        lambda c: c.status.from_contact("s1", "a@c.us"),
+        "GET",
+        f"{_BASE}/api/sessions/s1/status/a@c.us",
+        None,
+    ),
+    ("labels.chats", lambda c: c.labels.chats("s1", "l1"), "GET", f"{_BASE}/api/sessions/s1/labels/l1/chats", None),
+    (
+        "groups.join_info",
+        lambda c: c.groups.join_info("s1", "INVITE"),
+        "GET",
+        f"{_BASE}/api/sessions/s1/groups/join-info?code=INVITE",
+        None,
+    ),
+    (
+        "messages.click_button",
+        lambda c: c.messages.click_button(
+            "s1", {"chatId": "a@c.us", "messageId": "m1", "buttonId": "b1", "text": "Yes"}
+        ),
+        "POST",
+        f"{_BASE}/api/sessions/s1/messages/click-button",
+        {"chatId": "a@c.us", "messageId": "m1", "buttonId": "b1", "text": "Yes"},
+    ),
+]
+
+
+class TestRoutesNoOtherTestCalls:
+    @pytest.mark.parametrize(
+        ("call", "method", "url", "body"),
+        [row[1:] for row in _UNTESTED_ROUTES],
+        ids=[row[0] for row in _UNTESTED_ROUTES],
+    )
+    def test_verb_path_query_and_body(
+        self, call: Callable[[OpenWAClient], object], method: str, url: str, body: object
+    ) -> None:
+        backend = MockBackend(
+            fallback=lambda _: httpx.Response(200, content=b"{}", headers={"content-type": "application/json"})
+        )
+        call(make_client(backend))
+        assert len(backend.calls) == 1
+        assert backend.last_call.method == method
+        assert backend.last_call.url == url
+        assert backend.last_call.body == body
