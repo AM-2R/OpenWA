@@ -27,6 +27,7 @@ import { SendPacingService } from '../message/send-pacing.service';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { captureSessionWrites } from '../../common/utils/session-write-scope';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -418,6 +419,21 @@ describe('Session content lifetime', () => {
         expect(JSON.stringify(row.messages)).toContain('hi');
       }
       expect(await db.getRepository(Session).countBy({ id: session.id })).toBe(1);
+    });
+
+    // Left closed, every later send, bulk batch and status ingest of the session fails until the process restarts.
+    it('reopens the write scope of the surviving session', async () => {
+      const session = await createSession();
+      jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+
+      await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
+
+      const scope = captureSessionWrites(db, session.id);
+      try {
+        expect(() => scope.assertCurrent()).not.toThrow();
+      } finally {
+        scope.close();
+      }
     });
 
     it('leaves the batches alone when the delete is refused before it closes anything', async () => {
