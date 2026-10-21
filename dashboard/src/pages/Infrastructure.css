@@ -385,11 +385,15 @@
 }
 
 /* Responsive */
-@media (max-width: 900px) {
+/* Two columns of cards need 1035px of viewport with the sidebar open (1190px in German, whose labels are
+   wider); below that they stack. */
+@media (max-width: 1200px) {
   .infrastructure-page .infra-sections {
     grid-template-columns: 1fr;
   }
+}
 
+@media (max-width: 900px) {
   .infrastructure-page {
     padding: 1rem;
   }
