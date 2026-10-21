@@ -230,6 +230,42 @@ test('NumberChecker: a bulk list in several scripts is parsed and deduplicated a
   assert.deepEqual(lookups, ['6281234567891', '6281234567892']);
 });
 
+// A plus sign that arrives behind invisible direction marks, or as a full-width character, still marks an international
+// number: with the +91 rule on, losing it would look a foreign 10-digit number up as an Indian one.
+const char = (code: number) => String.fromCharCode(code);
+const WRAPPED_PLUS = [
+  ['direction marks around the number', `${char(0x202a)}+65 8123 4567${char(0x202c)}`],
+  ['a right-to-left mark before the plus', `${char(0x200f)}+65 8123 4567`],
+  ['a full-width plus', `${char(0xff0b)}65 8123 4567`],
+] as const;
+
+for (const [label, typed] of WRAPPED_PLUS) {
+  test(`NumberChecker: with +91 on, ${label} still marks an international number`, async () => {
+    const lookups = stubLookups(registered);
+    renderComponent();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+    rtl.fireEvent.click(rtl.screen.getByRole('checkbox'));
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: typed } });
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+    await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+    assert.deepEqual(lookups, ['6581234567']);
+  });
+}
+
+test('NumberChecker: a bulk list keeps wrapped and full-width plus numbers international with +91 on', async () => {
+  const lookups = stubLookups(registered);
+  renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.click(rtl.screen.getByRole('checkbox'));
+  rtl.fireEvent.change(textarea, {
+    target: { value: WRAPPED_PLUS.map(([, typed]) => typed).join('\n') + `\n${char(0x200f)}+65 9123 4567` },
+  });
+  assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b2 unique numbers parsed$/);
+  startBatch();
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['6581234567', '6591234567']);
+});
+
 test('NumberChecker: bulk parsing also splits on the Arabic comma and semicolon', async () => {
   stubLookups(registered);
   renderComponent();

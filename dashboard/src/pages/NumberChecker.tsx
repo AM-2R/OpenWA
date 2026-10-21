@@ -87,9 +87,13 @@ function asciiDigit(digit: string): string {
   return String((code - zero) % 10);
 }
 
-// The text as typed or pasted, with every script's decimal digits as ASCII ones.
+// The text as typed or pasted: compatibility forms folded (a full-width plus or digit), invisible format marks such as
+// the direction marks of a right-to-left chat dropped, and every script's decimal digits as ASCII ones.
 function normalizePhoneText(text: string): string {
-  return text.replace(/\p{Nd}/gu, asciiDigit);
+  return text
+    .normalize('NFKC')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/\p{Nd}/gu, asciiDigit);
 }
 
 export function NumberChecker() {
