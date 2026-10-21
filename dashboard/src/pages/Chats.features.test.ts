@@ -110,6 +110,21 @@ let listDuplicateContact = false;
 let failContacts = false;
 // What the chat list reports for Alice, which a test changes to stand for the phone changing her chat.
 const aliceNow: Partial<Chat> = {};
+// The messages the gateway holds for Alice's chat, oldest first.
+let aliceThread: Array<Record<string, unknown>> = [];
+const threadRow = (n: number, direction: 'incoming' | 'outgoing' = 'incoming') => ({
+  id: `row-${n}`,
+  waMessageId: `wamid.${direction === 'incoming' ? 'in' : 'out'}.${n}`,
+  chatId: CHAT.id,
+  from: direction === 'incoming' ? CHAT.id : 'me',
+  to: direction === 'incoming' ? 'me' : CHAT.id,
+  body: `message ${n}`,
+  type: 'text',
+  direction,
+  status: 'sent',
+  timestamp: 1_700_000_000 + n,
+  createdAt: new Date((1_700_000_000 + n) * 1000).toISOString(),
+});
 // The number the new-chat tests type, and the id the gateway resolves it to.
 const TYPED_NUMBER = '+1 555 000 9999';
 const RESOLVED_ID = '15550009999@c.us';
@@ -231,7 +246,8 @@ function installFetchStub(): void {
       );
     }
     if (method === 'GET' && path.startsWith(`${base}/messages?`)) {
-      return Promise.resolve(jsonResponse({ messages: [], total: 0 }));
+      // The gateway answers newest first.
+      return gated('thread', () => jsonResponse({ messages: [...aliceThread].reverse(), total: aliceThread.length }));
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) return Promise.resolve(jsonResponse([]));
     if (method === 'POST' && path === `${base}/chats/read`) return gated('read', () => jsonResponse({ success: true }));
@@ -280,6 +296,7 @@ afterEach(async () => {
   listDuplicateContact = false;
   failContacts = false;
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
+  aliceThread = [];
   declineWrites = false;
   for (const id of Object.keys(pictureFor)) delete pictureFor[id];
   gates.clear();
@@ -1273,6 +1290,71 @@ test('Mark as unread waits for an automatic read already sent, so the unread mar
   const readIndex = fetchCalls.indexOf(readsOf(CHAT.id)[0]);
   assert.ok(readIndex < unreadIndex(CHAT.id), 'the read was not ordered before the unread mark');
   assert.equal(readsOf(CHAT.id).length, 1, 'another automatic read followed the unread mark');
+});
+
+// ── Baileys acknowledges the messages a read names, so the page names them. ──
+
+const readBodies = (chatId: string) => readsOf(chatId).map(c => c.body);
+
+test('on Baileys the automatic read names the incoming messages of the thread, newest included', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceThread = [threadRow(1), threadRow(2, 'outgoing'), threadRow(3), threadRow(4)];
+  renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(readsOf(CHAT.id).length >= 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+  await screen.findByText('message 4');
+  await waitFor(() => assert.ok(readBodies(CHAT.id).at(-1) !== undefined), { timeout: 3_000 });
+  assert.deepEqual(readBodies(CHAT.id).at(-1), {
+    chatId: CHAT.id,
+    messageIds: ['wamid.in.1', 'wamid.in.3', 'wamid.in.4'],
+  });
+});
+
+test('a message that arrives later is the only one the next read names', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceThread = [threadRow(1), threadRow(2)];
+  renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText('message 2');
+  await waitFor(
+    () => assert.deepEqual(readBodies(CHAT.id).at(-1), { chatId: CHAT.id, messageIds: ['wamid.in.1', 'wamid.in.2'] }),
+    {
+      timeout: 3_000,
+    },
+  );
+  fetchCalls.length = 0;
+
+  receiveFromAlice('wamid.live.1', 'a live one');
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1), { timeout: 3_000 });
+  assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id, messageIds: ['wamid.live.1'] }]);
+});
+
+test('a thread that loads after the opening read is read again with its ids', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceThread = [threadRow(1), threadRow(2)];
+  const release = hold('thread');
+  renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  // The opening read is due before the thread has come, so it names nothing.
+  await waitFor(() => assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id }]), { timeout: 3_000 });
+
+  release();
+  await screen.findByText('message 2');
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 2), { timeout: 3_000 });
+  assert.deepEqual(readBodies(CHAT.id).at(-1), { chatId: CHAT.id, messageIds: ['wamid.in.1', 'wamid.in.2'] });
+});
+
+test('on whatsapp-web.js the read names no message, since the engine reads the whole chat', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  aliceThread = [threadRow(1), threadRow(2)];
+  renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText('message 2');
+  await waitFor(() => assert.ok(readsOf(CHAT.id).length >= 1), { timeout: 3_000 });
+  assert.deepEqual(readBodies(CHAT.id), [{ chatId: CHAT.id }]);
 });
 
 /** Make the document read as hidden (a background tab) or visible again, as the browser does before `visibilitychange`. */

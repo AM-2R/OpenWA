@@ -475,3 +475,23 @@ export function applyMessageEdit(
   next[idx] = { ...next[idx], body: event.body, metadata: { ...next[idx].metadata, edited: true } };
   return next;
 }
+
+/**
+ * The ids a read of a chat should name on an engine that acknowledges messages one by one: the incoming messages
+ * of the thread that no read has acknowledged yet, at most `max` of the newest, oldest first. An id the gateway
+ * would refuse (whitespace, or longer than 128 characters) is left out, since one of them fails the whole read.
+ */
+export function unacknowledgedIncomingIds(
+  thread: ChatMessageView[],
+  acknowledged: ReadonlySet<string>,
+  max: number,
+): string[] {
+  const ids: string[] = [];
+  for (let i = thread.length - 1; i >= 0 && ids.length < max; i--) {
+    const { direction, waMessageId } = thread[i];
+    if (direction === 'incoming' && waMessageId && /^\S{1,128}$/.test(waMessageId) && !acknowledged.has(waMessageId)) {
+      ids.push(waMessageId);
+    }
+  }
+  return ids.reverse();
+}

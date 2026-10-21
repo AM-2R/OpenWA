@@ -979,10 +979,12 @@ export const sessionApi = {
       return true;
     });
   },
-  markChatRead: (id: string, chatId: string) =>
+  // `messageIds` are the messages to acknowledge. Baileys acknowledges them one by one and, without any, only the
+  // newest it holds; whatsapp-web.js reads the whole chat and ignores them.
+  markChatRead: (id: string, chatId: string, messageIds?: string[]) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
       method: 'POST',
-      body: JSON.stringify({ chatId }),
+      body: JSON.stringify({ chatId, ...(messageIds?.length ? { messageIds } : {}) }),
     }),
   // Both also delete the gateway's stored copy of the chat's messages (rows, media, search entries).
   clearChatMessages: (id: string, chatId: string) =>

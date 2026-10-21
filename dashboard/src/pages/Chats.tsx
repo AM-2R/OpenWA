@@ -50,6 +50,7 @@ import {
   getMediaSrc,
   liveMessageMetadata,
   stripMentionDelimiters,
+  unacknowledgedIncomingIds,
   type ChatMessageView,
   type MessageMedia,
 } from '../utils/chatMessages';
@@ -65,6 +66,8 @@ import {
   messagesQueryKey,
   updateCachedMessages,
   cachedSessionThreads,
+  flattenMessagePages,
+  type MessagesData,
 } from '../hooks/useChatMessages';
 import { useChannelMessages } from '../hooks/useChannelMessages';
 import { useContactStatuses } from '../hooks/useContactStatuses';
@@ -89,6 +92,8 @@ import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
 const MARK_READ_DEBOUNCE_MS = 750;
+// Most messages the gateway takes in one read (MarkChatReadDto).
+const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
 
 // Longest one background chat-list walk may take before it is abandoned. A walk is a dozen small requests, and
@@ -542,6 +547,9 @@ export function Chats() {
   const [readsInFlight] = useState(() => new Map<string, Promise<void>>());
   const [keptUnread] = useState(() => new Set<string>());
   const [withheldReads] = useState(() => new Set<string>());
+  // Baileys acknowledges the messages a read names, and without any only the newest one it holds. A read names the
+  // incoming messages of the thread that an earlier read has not acknowledged (the ones it named, per chat).
+  const [acknowledged] = useState(() => new Map<string, Set<string>>());
   const markReadCoalescer = useMemo(
     () =>
       createTrailingCoalescer<string>(chatId => {
@@ -550,8 +558,22 @@ export function Chats() {
           withheldReads.add(key);
           return;
         }
-        const read = sessionApi.markChatRead(selectedSessionId, chatId).then(
-          () => undefined,
+        let named: string[] = [];
+        if (engineType === 'baileys') {
+          const thread = queryClient.getQueryData<MessagesData>(messagesQueryKey(selectedSessionId, chatId));
+          named = unacknowledgedIncomingIds(
+            thread ? flattenMessagePages(thread) : [],
+            acknowledged.get(key) ?? new Set(),
+            MARK_READ_MESSAGE_IDS_MAX,
+          );
+        }
+        const read = sessionApi.markChatRead(selectedSessionId, chatId, named).then(
+          result => {
+            if (!result.success || named.length === 0) return;
+            const sent = acknowledged.get(key) ?? new Set<string>();
+            for (const id of named) sent.add(id);
+            acknowledged.set(key, sent);
+          },
           err => {
             showWarningToast(t('chats.errors.markRead'), err instanceof Error ? err.message : undefined);
           },
@@ -561,7 +583,7 @@ export function Chats() {
           if (readsInFlight.get(key) === read) readsInFlight.delete(key);
         });
       }, MARK_READ_DEBOUNCE_MS),
-    [selectedSessionId, t, showWarningToast, readsInFlight, withheldReads],
+    [selectedSessionId, t, showWarningToast, readsInFlight, withheldReads, acknowledged, engineType, queryClient],
   );
 
   // Flush pending trailing calls on unmount / session switch: the mark-as-read POST is
@@ -1026,6 +1048,15 @@ export function Chats() {
     if (canWrite) setChats(prev => prev.map(c => (c.id === activeChat.id ? { ...c, unreadCount: 0 } : c)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat?.id, markChatRead, canWrite]);
+
+  // On Baileys the read of an opened chat falls due before its thread has loaded, so it names no message. Once
+  // the thread is there the chat is read again, naming what it holds (the coalescer merges the two when close).
+  useEffect(() => {
+    if (activeChat && engineType === 'baileys' && !loadingMessages && messages.length > 0) {
+      markChatRead(activeChat.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.id, loadingMessages, engineType]);
 
   // --- Global search: jump to a hit's chat (and best-effort scroll to the message) ---
   // A cross-session hit switches session, which asynchronously reloads the chats list — so the

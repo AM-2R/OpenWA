@@ -1248,9 +1248,10 @@ test('switching session with a chat open marks only the chats opened on the new 
     unmount();
     await flush();
     await flush();
-    assert.deepEqual(readsOnTwo, [{ chatId: CHAT_2.id }]);
+    const chatIdsOf = (reads: unknown[]) => reads.map(read => (read as { chatId: string }).chatId);
+    assert.deepEqual(chatIdsOf(readsOnTwo), [CHAT_2.id]);
     // The read queued for the session that was left still reaches that session.
-    assert.deepEqual(readsOnOne, [{ chatId: CHAT.id }]);
+    assert.deepEqual(chatIdsOf(readsOnOne), [CHAT.id]);
   } finally {
     globalThis.fetch = stub;
     twoSessions = false;

@@ -8,6 +8,7 @@ import {
   mergeChatMessages,
   mergeReactionSnapshot,
   liveMessageMetadata,
+  unacknowledgedIncomingIds,
   type EngineHistoryMessage,
 } from './chatMessages.ts';
 import { MENTION_CLOSE, MENTION_OPEN } from './messageFormatter.ts';
@@ -791,4 +792,24 @@ test('a later message echo preserves the edited marker', () => {
   );
   assert.equal(after[0].metadata?.edited, true);
   assert.deepEqual(after[0].metadata?.reactions, { alice: '👍' });
+});
+
+test('unacknowledgedIncomingIds names the newest incoming messages that no read has acknowledged', () => {
+  const incoming = (n: number, over: Partial<ChatMessage> = {}): ChatMessage =>
+    db({ id: `row-${n}`, waMessageId: `wamid.${n}`, direction: 'incoming', timestamp: n, ...over });
+  const thread = [
+    incoming(1),
+    incoming(2, { direction: 'outgoing' }),
+    incoming(3),
+    incoming(4, { waMessageId: undefined }),
+    // The gateway refuses an id with whitespace, and the whole read with it.
+    incoming(5, { waMessageId: 'has space' }),
+    incoming(6),
+  ];
+
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(), 100), ['wamid.1', 'wamid.3', 'wamid.6']);
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(['wamid.3']), 100), ['wamid.1', 'wamid.6']);
+  // Past the cap it is the newest that are named, in the order they were sent.
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(), 2), ['wamid.3', 'wamid.6']);
+  assert.deepEqual(unacknowledgedIncomingIds([], new Set(), 100), []);
 });
