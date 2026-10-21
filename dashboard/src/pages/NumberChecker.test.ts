@@ -422,6 +422,63 @@ test('NumberChecker: Stop followed by Start while lookup is pending cancels earl
   assert.ok(regBox?.textContent?.includes('1'));
 });
 
+const THREE_NUMBERS = '911111111111\n912222222222\n913333333333';
+const startBatch = () => rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+// Past the one-second pacing delay, which is when a run that went on would send its next lookup.
+const pastPacing = () => new Promise(resolve => setTimeout(resolve, 1_200));
+
+test('NumberChecker: leaving the page ends a running batch', async () => {
+  const lookups = stubLookups(registered);
+  const { unmount } = renderComponent();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.waitFor(() => assert.equal(lookups.length, 1));
+
+  unmount();
+  await pastPacing();
+  assert.deepEqual(lookups, ['911111111111']);
+});
+
+test('NumberChecker: Stop ends the run, so no further lookup is sent', async () => {
+  const lookups = stubLookups(registered);
+  renderComponent();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.waitFor(() => assert.equal(lookups.length, 1));
+
+  rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: /Stop Checking/i }));
+  await pastPacing();
+  assert.deepEqual(lookups, ['911111111111']);
+  assert.ok(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+});
+
+test('NumberChecker: a lookup of an abandoned run that fails late adds no row to the next run', async () => {
+  let failFirst!: () => void;
+  const firstLookup = new Promise<Response>((_, reject) => {
+    failFirst = () => reject(new TypeError('Failed to fetch'));
+  });
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/911111111111')) return firstLookup;
+    if (url.includes('/contacts/check/')) return Promise.resolve(registered(url.split('/contacts/check/')[1]));
+    return defaultFetch(input);
+  }) as typeof fetch;
+  renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111' } });
+  startBatch();
+  rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: /Stop Checking/i }));
+  rtl.fireEvent.change(textarea, { target: { value: '912222222222' } });
+  startBatch();
+  await rtl.screen.findByText('+912222222222');
+
+  failFirst();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(rtl.screen.queryByText('Failed', { selector: '.nc-status-badge' }) === null, true);
+  assert.ok(rtl.screen.getByText('+912222222222'));
+  assert.equal(statValue('Checked'), '1');
+});
+
 test('NumberChecker: the +91 rule is off by default in both tabs and the hints say numbers are checked as typed', async () => {
   renderComponent();
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
