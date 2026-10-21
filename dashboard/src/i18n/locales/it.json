@@ -977,6 +977,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} inviati",
     "groupSendCancelled": "{{count}}, annullati",
     "groupSendStopped": "{{count}}, interrotto dopo HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, interrotto: il gateway non ha risposto",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "ID Messaggio",

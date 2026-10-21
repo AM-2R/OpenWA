@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} भेजे गए",
     "groupSendCancelled": "{{count}}, रद्द किए गए",
     "groupSendStopped": "{{count}}, HTTP {{status}} के बाद रोक दिए गए",
+    "groupSendStoppedNoAnswer": "{{count}}, रोक दिए गए: गेटवे ने जवाब नहीं दिया",
     "response": {
       "timestamp": "समय",
       "messageId": "संदेश ID",

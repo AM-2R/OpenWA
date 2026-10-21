@@ -52,6 +52,7 @@ interface ApiResponse {
     failures: { id: string; name: string; error: string }[];
     notSent: number;
     stoppedBy?: 'abort' | 'refusal';
+    // The status that stopped the run; absent when a fetch got no answer at all.
     refusedWith?: number;
   };
 }
@@ -1284,10 +1285,12 @@ export function MessageTester() {
                     <span className="detail-label">{t('messageTester.response.notSent')}</span>
                     <span className="detail-value">
                       {response.groups.stoppedBy === 'refusal'
-                        ? t('messageTester.groupSendStopped', {
-                            count: response.groups.notSent,
-                            status: response.groups.refusedWith,
-                          })
+                        ? response.groups.refusedWith === undefined
+                          ? t('messageTester.groupSendStoppedNoAnswer', { count: response.groups.notSent })
+                          : t('messageTester.groupSendStopped', {
+                              count: response.groups.notSent,
+                              status: response.groups.refusedWith,
+                            })
                         : t('messageTester.groupSendCancelled', { count: response.groups.notSent })}
                     </span>
                   </div>

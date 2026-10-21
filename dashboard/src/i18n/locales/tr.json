@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gönderildi",
     "groupSendCancelled": "{{count}}, iptal edildi",
     "groupSendStopped": "{{count}}, HTTP {{status}} sonrası durduruldu",
+    "groupSendStoppedNoAnswer": "{{count}}, durduruldu: ağ geçidi yanıt vermedi",
     "response": {
       "timestamp": "Zaman Damgası",
       "messageId": "Mesaj ID'si",

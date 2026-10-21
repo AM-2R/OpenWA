@@ -78,12 +78,17 @@ test('forward uses the first group as its source chat instead of looping', () =>
   assert.deepEqual(planGroupSend(['111@g.us', '222@g.us'], 'forward'), { mode: 'single', chatId: '111@g.us' });
 });
 
-test('409, 429 and 503 are refusals that stop a run, other failures are not', () => {
+test('a stopped session, a refusal and a fetch with no answer end a run, other failures do not', () => {
   const withStatus = (status: number) => Object.assign(new Error('refused'), { status });
+  assert.equal(isGatewayRefusal(withStatus(400)), true);
   assert.equal(isGatewayRefusal(withStatus(409)), true);
   assert.equal(isGatewayRefusal(withStatus(429)), true);
   assert.equal(isGatewayRefusal(withStatus(503)), true);
+  assert.equal(isGatewayRefusal(new TypeError('Failed to fetch')), true);
   assert.equal(isGatewayRefusal(withStatus(404)), false);
+  assert.equal(isGatewayRefusal(withStatus(500)), false);
+  // An error the page raised itself, or an unreadable answer, is not a fetch that got no answer.
   assert.equal(isGatewayRefusal(new Error('offline')), false);
+  assert.equal(isGatewayRefusal(new SyntaxError('Unexpected token')), false);
   assert.equal(isGatewayRefusal(null), false);
 });

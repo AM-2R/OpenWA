@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}}개 전송됨",
     "groupSendCancelled": "{{count}}개, 취소됨",
     "groupSendStopped": "{{count}}개, HTTP {{status}} 후 중지됨",
+    "groupSendStoppedNoAnswer": "{{count}}개, 중지됨: 게이트웨이가 응답하지 않았습니다",
     "response": {
       "timestamp": "타임스탬프",
       "messageId": "메시지 ID",

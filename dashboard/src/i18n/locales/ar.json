@@ -996,6 +996,7 @@
     "groupsSentSummary": "تم إرسال {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}}، أُلغيت",
     "groupSendStopped": "{{count}}، توقف بعد HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}، توقف: لم تردّ البوابة",
     "response": {
       "timestamp": "الوقت",
       "messageId": "معرّف الرسالة",

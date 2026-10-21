@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} terkirim",
     "groupSendCancelled": "{{count}}, dibatalkan",
     "groupSendStopped": "{{count}}, dihentikan setelah HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, dihentikan: gateway tidak merespons",
     "response": {
       "timestamp": "Waktu",
       "messageId": "ID Pesan",

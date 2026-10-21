@@ -144,9 +144,12 @@ function groupJsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+// How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed';
+
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
-  refuseFirstWith?: number,
+  refuseFirstWith?: FirstSendFailure,
 ): { textSends: string[]; imageBodies: { chatId: string; url?: string; caption?: string }[] } {
   const previousFetch = globalThis.fetch;
   restoreFetch = () => {
@@ -168,7 +171,11 @@ function stubGroupGateway(
       const { chatId } = JSON.parse(String(init?.body)) as { chatId: string };
       textSends.push(chatId);
       if (refuseFirstWith && textSends.length === 1) {
-        return Promise.resolve(groupJsonResponse({ message: 'Too many requests' }, refuseFirstWith));
+        if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
+        if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        const message =
+          refuseFirstWith === 400 ? "Session 's1' is not active. Start the session first." : 'Too many requests';
+        return Promise.resolve(groupJsonResponse({ message }, refuseFirstWith));
       }
       return Promise.resolve(groupJsonResponse({ messageId: `m${textSends.length}`, timestamp: 1 }, 201));
     }
@@ -258,6 +265,56 @@ test('a 409 (engine not ready) stops the run, since every group would fail alike
 
   await rtl.screen.findByText('1, stopped after HTTP 409');
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+test('a 400 (the session is not active) stops the run, since every group would fail alike', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    400,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 400');
+  assert.ok(rtl.screen.getByText(/is not active/, { selector: 'li' }));
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+test('a gateway that does not answer stops the run, and the notice says so', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unreachable',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped: the gateway did not answer');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The page's own "no message id" failure has no HTTP status either, but the gateway did answer.
+test('a send answered without a message id fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unconfirmed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/Failed to send message/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
 });
 
 test('an empty message or a media type with no file or URL keeps Send disabled', async () => {

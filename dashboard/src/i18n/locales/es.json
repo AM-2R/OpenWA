@@ -927,6 +927,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} enviados",
     "groupSendCancelled": "{{count}}, cancelados",
     "groupSendStopped": "{{count}}, detenido tras HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, detenido: la puerta de enlace no respondió",
     "response": {
       "timestamp": "Fecha/Hora",
       "messageId": "ID de mensaje",

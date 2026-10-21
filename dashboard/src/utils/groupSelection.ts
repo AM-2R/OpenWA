@@ -10,8 +10,9 @@ export interface GroupPickerRow {
 
 export type GroupSendPlan = { mode: 'single'; chatId: string } | { mode: 'sequential'; chatIds: string[] };
 
-// 409 on a send route means the session's engine is not ready, which fails every group alike.
-const GATEWAY_REFUSAL_STATUSES: readonly number[] = [409, 429, 503];
+// Answers the next call of the same run gets too: 400 a session with no engine (the send and lookup routes answer it),
+// 409 an engine that is not ready, which fails every group alike, 429 the rate limit, 503 WhatsApp not answering.
+const GATEWAY_REFUSAL_STATUSES: readonly number[] = [400, 409, 429, 503];
 
 export function groupLabel(group: SelectableGroup): string {
   return group.name?.trim() || group.id;
@@ -52,7 +53,11 @@ export function planGroupSend(selectedIds: readonly string[], messageType: strin
   return { mode: 'sequential', chatIds: [...selectedIds] };
 }
 
+// A failure the rest of a run would meet too, so the run stops instead of recording one failure per remaining target:
+// one of the statuses above, or a fetch that got no answer at all (it rejects with a TypeError). An error the page
+// raised itself, or an answer it could not read, fails that call only.
 export function isGatewayRefusal(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
   const status = (err as { status?: unknown } | null)?.status;
   return typeof status === 'number' && GATEWAY_REFUSAL_STATUSES.includes(status);
 }

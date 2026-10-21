@@ -984,6 +984,7 @@
     "groupsSentSummary": "נשלחו {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}}, בוטלו",
     "groupSendStopped": "{{count}}, נעצר אחרי HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, נעצר: השער לא השיב",
     "response": {
       "timestamp": "חותמת זמן",
       "messageId": "מזהה הודעה",

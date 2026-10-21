@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} పంపబడ్డాయి",
     "groupSendCancelled": "{{count}}, రద్దు చేయబడ్డాయి",
     "groupSendStopped": "{{count}}, HTTP {{status}} తర్వాత ఆపబడింది",
+    "groupSendStoppedNoAnswer": "{{count}}, ఆపబడింది: గేట్‌వే స్పందించలేదు",
     "response": {
       "timestamp": "సమయము",
       "messageId": "సందేశం ID",

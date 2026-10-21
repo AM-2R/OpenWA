@@ -971,6 +971,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gesendet",
     "groupSendCancelled": "{{count}}, abgebrochen",
     "groupSendStopped": "{{count}}, gestoppt nach HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, gestoppt: das Gateway hat nicht geantwortet",
     "response": {
       "timestamp": "Zeitstempel",
       "messageId": "Nachrichten-ID",

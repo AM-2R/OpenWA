@@ -977,6 +977,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} envoyés",
     "groupSendCancelled": "{{count}}, annulés",
     "groupSendStopped": "{{count}}, arrêté après HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, arrêté : la passerelle n'a pas répondu",
     "response": {
       "timestamp": "Horodatage",
       "messageId": "ID du message",

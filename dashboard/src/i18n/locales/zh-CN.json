@@ -971,6 +971,7 @@
     "groupsSentSummary": "已发送 {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}} 个，已取消",
     "groupSendStopped": "{{count}} 个，在 HTTP {{status}} 后停止",
+    "groupSendStoppedNoAnswer": "{{count}} 个，已停止：网关未响应",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",
