@@ -725,7 +725,13 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
 
       this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
     } catch (error) {
-      if (!engineAsked) settleAdmission?.();
+      if (!engineAsked) {
+        settleAdmission?.();
+        // A session deleted under an item the engine was never asked to send is no delivery failure to
+        // count or report; the run stops here and the batch goes with the session (or is failed by the
+        // delete that did not complete).
+        lifetime.assertCurrent();
+      }
       result.status = BatchMessageStatus.FAILED;
       // Sanitize: an SSRF block names an internal address — never store/return/log it verbatim.
       const sanitized = sanitizeBatchError(error);
