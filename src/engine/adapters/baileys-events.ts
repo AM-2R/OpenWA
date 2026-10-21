@@ -421,6 +421,12 @@ export class BaileysEvents {
       if (!msg.message || !msg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
       }
+      // A receipt that arrives while this message's own upsert is still in Baileys' event buffer is merged
+      // into the upsert and raised as no message-receipt.update, which the echo skip below would then drop
+      // with the rest of the echo.
+      if (msg.userReceipt?.length) {
+        this.handleMessageReceiptUpdate(msg.userReceipt.map(receipt => ({ key: msg.key, receipt })));
+      }
       // Baileys echoes every message this session sends through the API back through this same
       // path, tagged 'append', and sendContent() already emits onMessageCreate for those via
       // emitOwnSendEcho(). WhatsApp replays what the account typed on its phone while the gateway

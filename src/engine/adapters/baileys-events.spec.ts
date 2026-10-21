@@ -715,6 +715,84 @@ describe('BaileysEvents.handleMessageReceiptUpdate', () => {
   });
 });
 
+// Baileys' event buffer merges a receipt that lands while a message's own upsert is still buffered (about
+// 100 ms after the send, or inside an offline replay) into that upsert as `userReceipt`, and raises no
+// message-receipt.update for it.
+describe('BaileysEvents.handleMessagesUpsert receipts merged into the upsert', () => {
+  const group = '120363000000000001@g.us';
+  const member = '6281111111111@s.whatsapp.net';
+  const other = '6282222222222@s.whatsapp.net';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const upsert = (userReceipt?: unknown[], fromMe = true): Parameters<BaileysEvents['handleMessagesUpsert']>[0] =>
+    ({
+      type: 'append',
+      messages: [
+        {
+          key: { id: 'OUT1', remoteJid: group, fromMe },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+          ...(userReceipt ? { userReceipt } : {}),
+        },
+      ],
+    }) as Parameters<BaileysEvents['handleMessagesUpsert']>[0];
+  const merged = [
+    { userJid: member, receiptTimestamp: 1_700_000_001 },
+    { userJid: other, receiptTimestamp: 1_700_000_002, readTimestamp: 1_700_000_005 },
+  ];
+  const reported = (onMessageReceipt: jest.Mock): unknown[] =>
+    (onMessageReceipt.mock.calls as Array<[MessageReceiptEvent]>).map(([e]) => [e.participant, e.status, e.timestamp]);
+
+  it('reports them for the echo of a message this session sent, which is still skipped', async () => {
+    const onMessageReceipt = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnMessageReceipt: () => onMessageReceipt,
+        getOnMessageCreate: () => onMessageCreate,
+        consumeOwnSend: id => id === 'OUT1',
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(merged));
+    await flush();
+
+    expect(reported(onMessageReceipt)).toEqual([
+      [member, 'delivered', 1_700_000_001],
+      [other, 'delivered', 1_700_000_002],
+      [other, 'read', 1_700_000_005],
+    ]);
+    expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('reports them for a message the phone sent while the gateway was down, which is still processed', async () => {
+    const onMessageReceipt = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({ getOnMessageReceipt: () => onMessageReceipt, getOnMessageCreate: () => onMessageCreate }),
+    );
+
+    events.handleMessagesUpsert(upsert(merged));
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(reported(onMessageReceipt)).toHaveLength(3);
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['carries none', upsert(undefined)],
+    ['carries an empty list', upsert([])],
+    ['is not one the account sent', upsert(merged, false)],
+  ])('reports nothing for a message that %s', async (_label, event) => {
+    const onMessageReceipt = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageReceipt: () => onMessageReceipt }));
+
+    events.handleMessagesUpsert(event);
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+});
+
 describe('BaileysEvents record of conflicting copies removed', () => {
   it('forgets the id removed longest ago once it holds its limit', async () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
