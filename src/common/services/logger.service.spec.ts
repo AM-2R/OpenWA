@@ -664,11 +664,70 @@ describe('redactSecrets', () => {
     });
 
     it('copies a deep array that fits in what is left of the node budget and writes a longer one as [Truncated]', () => {
-      // The array sits at the fifth level: it costs 1 of the 1000 nodes, which leaves 999 entries.
+      // The array sits just below the fifth level: it costs 1 of the 1000 nodes, which leaves 999 entries.
       const deep = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });
 
       expect(redactSecrets(deep(zeros(999)))).toEqual(deep(zeros(999)));
       expect(redactSecrets(deep(zeros(1000)))).toEqual(deep('[Truncated]'));
+    });
+  });
+
+  describe('the bounds of the copy', () => {
+    // `rows` ends up `above` objects below the top, so its entries sit one level lower: with 3 above they are in
+    // the fifth level, the last one copied whole, and with 4 above they are in the sixth, the first one that costs.
+    const rowsBelow = (above: number, rows: unknown): unknown => {
+      let value = rows;
+      for (let i = 0; i < above; i++) value = { level: value };
+      return value;
+    };
+    const rowsIn = (copy: unknown, above: number): unknown[] => {
+      let value = copy as Record<string, unknown>;
+      for (let i = 0; i < above; i++) value = value.level as Record<string, unknown>;
+      return value as unknown as unknown[];
+    };
+    const objects = (length: number): Array<{ id: number }> => Array.from({ length }, (_, id) => ({ id }));
+
+    it('copies every entry of the fifth level whole, however many there are', () => {
+      const rows = rowsIn(redactSecrets(rowsBelow(3, objects(1500))), 3);
+
+      expect(rows).toHaveLength(1500);
+      expect(rows[1499]).toEqual({ id: 1499 });
+    });
+
+    it('copies exactly 1000 objects of the sixth level and writes the rest as [Truncated]', () => {
+      const rows = rowsIn(redactSecrets(rowsBelow(4, objects(1500))), 4);
+
+      expect(rows).toHaveLength(1500);
+      expect(rows[999]).toEqual({ id: 999 });
+      expect(rows[1000]).toBe('[Truncated]');
+      expect(rows.filter(row => row === '[Truncated]')).toHaveLength(500);
+    });
+
+    it('writes an object met again inside itself as [Circular], however many objects lie between', () => {
+      const first: Record<string, unknown> = { id: 'first' };
+      first.second = { id: 'second', first };
+
+      expect(redactSecrets({ first })).toEqual({
+        first: { id: 'first', second: { id: 'second', first: '[Circular]' } },
+      });
+    });
+
+    it('writes an array met again inside itself as [Circular], however many arrays lie between', () => {
+      const outer: unknown[] = [];
+      outer.push([outer]);
+      const own: unknown[] = [];
+      own.push(own);
+
+      expect(redactSecrets({ outer, own })).toEqual({ outer: [['[Circular]']], own: ['[Circular]'] });
+    });
+
+    it('keeps an own toJSON that is not a function, and drops one that is', () => {
+      expect(
+        redactSecrets({ kept: { id: 1, toJSON: 'not a function' }, dropped: { id: 2, toJSON: () => 'x' } }),
+      ).toEqual({
+        kept: { id: 1, toJSON: 'not a function' },
+        dropped: { id: 2 },
+      });
     });
   });
 });
