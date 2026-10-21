@@ -92,6 +92,31 @@ describe('Chat-restricted API keys (e2e)', () => {
     expect((await get(`/api/sessions/${sessionId}/contacts/${ALLOWED}`, chatKey)).status).not.toBe(403);
   });
 
+  // Default deny answers 403 on the key's OWN chat as well when a mark is lost, and a refusal on another
+  // chat is a 403 either way, so the cases above cannot tell a marked route from an unmarked one. Each row
+  // shows both halves: the allowed chat gets past the fence, and another chat is refused by the chat
+  // check (not the blanket refusal), which also shows the route exists and the fence reads that field.
+  it.each<[string, (chatId: string) => object]>([
+    ['messages/send-text', chatId => ({ chatId, text: 'hi' })],
+    ['messages/reply', chatId => ({ chatId, quotedMessageId: 'wamid.quoted', text: 'hi' })],
+    ['messages/forward', chatId => ({ fromChatId: chatId, toChatId: chatId, messageId: 'wamid.source' })],
+    ['messages/send-bulk', chatId => ({ messages: [{ chatId, text: 'hi' }] })],
+    ['messages/react', chatId => ({ chatId, messageId: 'wamid.target', emoji: 'ok' })],
+    ['chats/read', chatId => ({ chatId })],
+    ['chats/mute', chatId => ({ chatId, muteUntil: 1_800_000_000_000 })],
+  ])('POST %s admits the allowed chat and refuses another', async (route, body) => {
+    const send = (chatId: string) =>
+      request(app.getHttpServer())
+        .post(`/api/sessions/${sessionId}/${route}`)
+        .set('X-API-Key', chatKey)
+        .send(body(chatId));
+
+    expect((await send(ALLOWED)).status).not.toBe(403);
+
+    const refused = await send(OTHER).expect(403);
+    expect((refused.body as { message: string }).message).toBe('API key not authorized for this chat');
+  });
+
   it('reads stored messages only for a chat it names', async () => {
     const path = `/api/sessions/${sessionId}/messages`;
     const missing = await get(path, chatKey).expect(403);
