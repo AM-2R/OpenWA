@@ -2,7 +2,48 @@ import 'reflect-metadata';
 import { DECORATORS } from '@nestjs/swagger';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { GLOBAL_VALIDATION_OPTIONS } from '../../../config/app-validation';
 import { MuteChatDto } from './mute-chat.dto';
+
+// A mute expiry that is not a positive integer is an instant in the past, so the mute would expire as it
+// is set while the request still answered 200 (see the DTO). `null` is the unmute instruction and skips
+// the numeric checks; a missing field is not null and must still be refused.
+describe('MuteChatDto muteUntil validation', () => {
+  const failing = async (body: object): Promise<string[]> =>
+    (
+      await validate(
+        plainToInstance(
+          MuteChatDto,
+          { chatId: '1234567890-123@g.us', ...body },
+          GLOBAL_VALIDATION_OPTIONS.transformOptions,
+        ),
+        GLOBAL_VALIDATION_OPTIONS,
+      )
+    ).map(error => error.property);
+
+  it.each([
+    ['the smallest positive integer', 1],
+    ['an epoch-millisecond expiry', 1_800_000_000_000],
+    ['null, which unmutes', null],
+  ])('accepts %s', async (_label, muteUntil) => {
+    expect(await failing({ muteUntil })).toEqual([]);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['a negative number', -1],
+    ['a fraction', 1.5],
+    ['a numeric string', '1'],
+    ['an empty string', ''],
+    ['a boolean', true],
+  ])('rejects %s', async (_label, muteUntil) => {
+    expect(await failing({ muteUntil })).toEqual(['muteUntil']);
+  });
+
+  it('rejects a missing muteUntil rather than guessing between unmute and mute forever', async () => {
+    expect(await failing({})).toEqual(['muteUntil']);
+  });
+});
 
 describe('MuteChatDto published schema', () => {
   // @nestjs/swagger derives nothing from @IsInt/@Min/@Max, so the decorator has to state all of them.
