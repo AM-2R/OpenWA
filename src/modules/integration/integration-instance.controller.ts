@@ -25,6 +25,17 @@ import { CreateInstanceDto, InstanceView, UpdateInstanceDto } from './dto/instan
 import { sessionScopeVisible } from '../../common/security/session-scope';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
+const isWildcardScope = (scope: string | null): boolean => !scope || scope === '*';
+
+/**
+ * What the instance has put into the plugin's base config: its config while it is enabled on the wildcard
+ * scope, nothing otherwise. That merged config is where a secret the instance stops contributing would stay
+ * behind (see ScopeBindingService.applyScopeBinding), and an instance that was not contributing, being
+ * disabled or on one session, left nothing there to take back.
+ */
+const contributedConfig = (inst: PluginInstance): Record<string, unknown> | undefined =>
+  inst.enabled && isWildcardScope(inst.sessionScope) ? (inst.config ?? undefined) : undefined;
+
 // ADMIN-only provisioning surface for per-plugin instances (e.g. one Chatwoot account). Only plugins
 // that declare an ingress route AND the webhook:ingress permission can have instances; everything
 // else is rejected before touching persistence.
@@ -136,9 +147,7 @@ export class IntegrationInstanceController {
     let inst: PluginInstance | null = await this.resolveVisible(pluginId, instanceId, apiKey);
     if (dto.sessionScope !== undefined) this.assertScopeWritable(apiKey, dto.sessionScope);
     const previousScope = inst.sessionScope;
-    // Only a wildcard instance projected its config into the plugin's base config, where a secret it no
-    // longer defines would stay behind (see ScopeBindingService.applyScopeBinding).
-    const previousConfig = !previousScope || previousScope === '*' ? inst.config : undefined;
+    const previousConfig = contributedConfig(inst);
     // One update() writes every field in a single save. Restoring the masked config can refuse the
     // PATCH with a 400 before that save, so a rejected body changes nothing, `enabled` included.
     if (dto.enabled !== undefined || dto.sessionScope !== undefined || dto.config !== undefined) {
@@ -156,7 +165,11 @@ export class IntegrationInstanceController {
     // firing with stale config. The new scope is (re)bound right after; teardown runs first with the new
     // scope already persisted, so the wildcard retirement check sees the current state correctly.
     if (previousScope !== updated.sessionScope) {
-      await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false);
+      // A move between the spellings of the wildcard scope is re-bound right below: retracting here would
+      // only hand the running plugin a config without its secrets for the length of one call.
+      await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false, {
+        previousConfig: isWildcardScope(updated.sessionScope) ? undefined : previousConfig,
+      });
     }
     await this.scopeBinding.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled, {
       previousConfig,
@@ -184,7 +197,7 @@ export class IntegrationInstanceController {
     // Delete the row FIRST, then tear down its scope: for a wildcard/null scope the teardown lists the
     // remaining instances to decide whether to retire '*', and that check must not count this instance.
     await this.instances.remove(pluginId, instanceId);
-    await this.scopeBinding.applyScopeBinding(pluginId, scope, {}, false);
+    await this.scopeBinding.applyScopeBinding(pluginId, scope, {}, false, { previousConfig: contributedConfig(inst) });
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_DELETED, { metadata: { pluginId, instanceId } });
   }
 

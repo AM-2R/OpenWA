@@ -185,8 +185,9 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * scope even when that session has since been deleted, leaving it activated for nothing. So the boot
    * path only ever ADDS the row's scope; it removes nothing.
    *
-   * `previousConfig` is what a wildcard instance held before the change being applied. The base config
-   * merges, so a secret that config no longer defines would otherwise stay in it; see retractedSecrets.
+   * `previousConfig` is what an enabled wildcard instance contributed to the base config before the change
+   * being applied. The base config merges, so a secret that the instance no longer defines (activation) or
+   * no longer contributes at all (teardown) would otherwise stay in it; see retractedSecrets.
    */
   async applyScopeBinding(
     pluginId: string,
@@ -210,6 +211,8 @@ export class ScopeBindingService implements OnApplicationBootstrap {
           this.loader.setPluginSessions(pluginId, ['*']);
           return;
         }
+        const retracted = await this.retractedSecrets(pluginId, {}, opts.previousConfig);
+        if (Object.keys(retracted).length > 0) this.loader.updatePluginConfig(pluginId, retracted);
         const rows = await this.instances.list(pluginId);
         const anyWildcardLeft = rows.some(i => i.enabled && (!i.sessionScope || i.sessionScope === '*'));
         if (!anyWildcardLeft) {
@@ -279,8 +282,9 @@ export class ScopeBindingService implements OnApplicationBootstrap {
 
   /**
    * What to write over the base config to take back the secrets `previous` held and `config` no longer
-   * defines. The wildcard projection only merges, so on its own it cannot delete a key: a secret the
-   * operator revoked would stay in the base config, in registry.json and in the config of every hook and
+   * defines (none, for a teardown). The wildcard projection only merges, so on its own it cannot delete a
+   * key: a secret the operator revoked, or one of an instance that was disabled, deleted or moved off the
+   * wildcard scope, would stay in the base config, in registry.json and in the config of every hook and
    * ingress delivery. Each is written as the value another enabled wildcard instance still defines (the
    * last by id, as boot reconciliation replays them), else as null, which is how a removed top-level
    * secret is stored there. Siblings are read only when a secret was actually removed.

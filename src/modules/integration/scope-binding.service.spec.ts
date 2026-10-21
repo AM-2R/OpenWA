@@ -581,19 +581,20 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
   function build() {
     const updatePluginConfig = jest.fn();
     const setPluginSessionConfig = jest.fn();
+    const setPluginSessions = jest.fn();
     const loader = {
       getPlugin: jest
         .fn()
         .mockReturnValue({ manifest: { id: 'chatwoot', configSchema: schema }, activeSessions: ['*'] }),
       setPluginSessionConfig,
-      setPluginSessions: jest.fn(),
+      setPluginSessions,
       updatePluginConfig,
     } as unknown as PluginLoaderService;
     const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
     const sessions = { findOne: jest.fn().mockResolvedValue({ id: 'sess-1' }) } as unknown as Repository<Session>;
     const list = jest.fn().mockResolvedValue([]);
     const svc = new ScopeBindingService({ list } as unknown as PluginInstanceService, loader, audit, sessions);
-    return { svc, list, updatePluginConfig, setPluginSessionConfig };
+    return { svc, list, updatePluginConfig, setPluginSessionConfig, setPluginSessions };
   }
 
   const sibling = (
@@ -646,6 +647,38 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
 
     // The last wildcard instance by id wins, as it does when boot reconciliation replays them.
     expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { baseUrl: 'https://crm', apiToken: 'C-TOKEN' });
+  });
+
+  it('retracts every secret the instance held when it is torn down, and ends the "*" activation as before', async () => {
+    const { svc, updatePluginConfig, setPluginSessions } = build();
+
+    await svc.applyScopeBinding('chatwoot', null, {}, false, {
+      previousConfig: { apiToken: 'LEAKED', baseUrl: 'https://crm', crm: { key: 'K', url: 'https://x' } },
+    });
+
+    expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { apiToken: null, crm: null });
+    expect(setPluginSessions).toHaveBeenCalledWith('chatwoot', []);
+  });
+
+  it('hands the base the value another enabled wildcard instance still defines when it is torn down', async () => {
+    const { svc, list, updatePluginConfig } = build();
+    list.mockResolvedValue([sibling('b', { apiToken: 'B-TOKEN' }), sibling('c', { baseUrl: 'https://c' })]);
+
+    await svc.applyScopeBinding('chatwoot', '*', {}, false, { previousConfig: { apiToken: 'LEAKED' } });
+
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { apiToken: 'B-TOKEN' });
+  });
+
+  it('leaves the base config alone on a teardown that holds no secret, or that is given no previous config', async () => {
+    const { svc, list, updatePluginConfig } = build();
+
+    await svc.applyScopeBinding('chatwoot', null, {}, false, { previousConfig: { baseUrl: 'https://crm' } });
+    await svc.applyScopeBinding('chatwoot', null, {}, false, { previousConfig: null });
+    await svc.applyScopeBinding('chatwoot', null, {}, false);
+
+    expect(updatePluginConfig).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(3); // only the '*' retirement check reads the siblings
   });
 
   it('only looks at siblings when a secret was removed', async () => {
