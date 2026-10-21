@@ -459,12 +459,21 @@ export class SessionEngineControls {
     }
   }
 
-  /** Tears down the engine a start registered for a session that was stopped or deleted meanwhile. */
+  /**
+   * Tears down the engine a start registered for a session that was stopped or deleted meanwhile, and drops
+   * the reconnect state it armed for it.
+   */
   private async reapRetiredEngine(id: string): Promise<void> {
     const resurrected = this.engines.get(id);
     if (resurrected) {
       await this.fences.destroyWithEscalation(id, resurrected);
       this.engines.deleteIfLive(id, resurrected);
+    }
+    // The reconnect state this start armed up front serves no engine now, and the stop or delete that retired it
+    // may have run before the state was armed, so nothing else would drop it. A replacement engine that
+    // registered meanwhile keeps its own.
+    if (!this.engines.has(id)) {
+      this.host.cancelReconnect(id);
     }
     // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created them, so
     // purge again: the window then leaves no credential residue behind (no-op for a stop()).

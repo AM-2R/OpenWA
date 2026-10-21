@@ -76,6 +76,7 @@ const flush = async (): Promise<void> => {
 
 interface Internals {
   engines: EngineRegistry;
+  controls: { reapRetiredEngine(id: string): Promise<void> };
   stoppingSessions: Set<string>;
   reconnectStates: Map<string, ReconnectState>;
   logger: { warn: (...args: unknown[]) => void };
@@ -93,10 +94,12 @@ describe('SessionEngineLifecycle races', () => {
   let webhookService: { dispatch: jest.Mock };
   let config: Record<string, unknown>;
   let dataSource: Record<string, unknown>;
+  let hookManager: { execute: jest.Mock };
 
   beforeEach(async () => {
     config = {};
     dataSource = {};
+    hookManager = { execute: jest.fn().mockResolvedValue({ continue: true, data: {} }) };
     repository = {
       findOne: jest.fn().mockResolvedValue(session()),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -131,7 +134,7 @@ describe('SessionEngineLifecycle races', () => {
           },
         },
         { provide: WebhookService, useValue: { dispatch: jest.fn().mockResolvedValue(undefined) } },
-        { provide: HookManager, useValue: { execute: jest.fn().mockResolvedValue({ continue: true, data: {} }) } },
+        { provide: HookManager, useValue: hookManager },
         {
           provide: ConfigService,
           useValue: { get: jest.fn(<T>(key: string, def?: T): T => (key in config ? (config[key] as T) : (def as T))) },
@@ -355,6 +358,81 @@ describe('SessionEngineLifecycle races', () => {
       gate.resolve([]);
       await settled;
       expect(internals.engines.has(ID)).toBe(false);
+    });
+
+    // A start waiting in its session:starting hook has armed no reconnect state yet, so the stop or delete that
+    // retires it has nothing to cancel. The start arms the state afterwards and must drop it when it is retired.
+    describe('a start retired while it waits in its session:starting hook', () => {
+      const parkInHook = async (): Promise<{ release: () => void; outcome: Promise<unknown> }> => {
+        const hook = deferred();
+        hookManager.execute.mockImplementation(async (event: string) => {
+          if (event === 'session:starting') await hook.promise;
+          return { continue: true, data: {} };
+        });
+        const outcome = lifecycle.start(ID, { explicit: true }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        await flush();
+        expect(internals.reconnectStates.has(ID)).toBe(false);
+        return { release: hook.resolve, outcome };
+      };
+
+      it('leaves no reconnect state behind after a stop', async () => {
+        const { release, outcome } = await parkInHook();
+        await lifecycle.stop(ID);
+
+        release();
+        await outcome;
+
+        expect(internals.engines.has(ID)).toBe(false);
+        expect(internals.reconnectStates.has(ID)).toBe(false);
+      });
+
+      it('leaves no reconnect state behind after a delete that is still running', async () => {
+        const { release, outcome } = await parkInHook();
+        const gate = hold();
+        const deleted = settle(lifecycle.delete(ID));
+        await flush();
+
+        release();
+        await outcome;
+
+        expect(internals.engines.has(ID)).toBe(false);
+        expect(internals.reconnectStates.has(ID)).toBe(false);
+        gate.resolve([]);
+        await deleted;
+      });
+
+      it('leaves no reconnect state behind after a delete that has finished', async () => {
+        const { release, outcome } = await parkInHook();
+        await settle(lifecycle.delete(ID));
+        repository.findOne.mockResolvedValue(null);
+
+        release();
+        await outcome;
+
+        expect(internals.engines.has(ID)).toBe(false);
+        expect(internals.reconnectStates.has(ID)).toBe(false);
+      });
+
+      it('keeps the state of an engine that registered while the retired one was torn down', async () => {
+        const destroyed = deferred();
+        const retired = { ...makeEngine(), destroy: jest.fn().mockReturnValue(destroyed.promise) };
+        const replacement = makeEngine();
+        const state: ReconnectState = { attempts: 0, timer: null, maxAttempts: 5, baseDelay: 5000 };
+        internals.engines.set(ID, retired as never);
+
+        const reaping = internals.controls.reapRetiredEngine(ID);
+        await flush();
+        internals.engines.set(ID, replacement as never);
+        internals.reconnectStates.set(ID, state);
+        destroyed.resolve();
+        await reaping;
+
+        expect(internals.engines.get(ID)).toBe(replacement);
+        expect(internals.reconnectStates.get(ID)).toBe(state);
+      });
     });
   });
 
