@@ -642,7 +642,8 @@
   }
 }
 
-/* Status Pill for Card Headers */
+/* Status Pill for Card Headers. The detail modal's .status-badge takes the same tint for each status below
+   (disconnected keeps its own grey above). */
 .sessions-page .status-pill {
   display: inline-flex;
   padding: 0.25rem 0.75rem;
@@ -653,19 +654,23 @@
 }
 
 .sessions-page .status-pill.created,
-.sessions-page .status-pill.idle {
+.sessions-page .status-pill.idle,
+.sessions-page .status-badge.created {
   background: rgba(107, 114, 128, 0.1);
   color: var(--text-secondary);
 }
 
 .sessions-page .status-pill.initializing,
 .sessions-page .status-pill.connecting,
-.sessions-page .status-pill.authenticating {
+.sessions-page .status-pill.authenticating,
+.sessions-page .status-badge.initializing,
+.sessions-page .status-badge.authenticating {
   background: rgba(234, 179, 8, 0.1);
   color: var(--warning-text);
 }
 
-.sessions-page .status-pill.qr_ready {
+.sessions-page .status-pill.qr_ready,
+.sessions-page .status-badge.qr_ready {
   background: rgba(59, 130, 246, 0.1);
   color: var(--info);
 }
@@ -673,18 +678,21 @@
 /* Same amber token as the transient states above — a literal here was the only pill not on a theme
    variable, and it lost contrast on the dark card. The heavier tint is what separates "needs a human"
    from the in-progress amber, since the two must not read alike. */
-.sessions-page .status-pill.action_required {
+.sessions-page .status-pill.action_required,
+.sessions-page .status-badge.action_required {
   background: rgba(245, 158, 11, 0.22);
   color: var(--warning-text);
 }
 
-.sessions-page .status-pill.ready {
+.sessions-page .status-pill.ready,
+.sessions-page .status-badge.ready {
   background: rgba(34, 197, 94, 0.1);
   color: var(--success-text);
 }
 
 .sessions-page .status-pill.disconnected,
-.sessions-page .status-pill.failed {
+.sessions-page .status-pill.failed,
+.sessions-page .status-badge.failed {
   background: rgba(239, 68, 68, 0.1);
   color: var(--error-text);
 }
