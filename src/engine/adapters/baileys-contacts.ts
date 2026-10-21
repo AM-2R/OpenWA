@@ -178,7 +178,8 @@ export class BaileysContacts {
    * The read half of block/unblockContact. Bounded by our own clock: Baileys' `query()` swallows
    * its timeout, and an unanswered blocklist query would otherwise surface as an EMPTY blocklist —
    * a claim about the account sold in place of a transport failure. Wire items without a jid attr
-   * are dropped rather than reported as "undefined".
+   * are dropped rather than reported as "undefined". A contact held under both its LID and its phone
+   * is two wire items that read as one id, which is listed once.
    */
   async getBlockedContacts(budgetMs: number = this.queryBudgetMs): Promise<string[]> {
     this.host.ensureReady();
@@ -187,7 +188,8 @@ export class BaileysContacts {
       budgetMs,
       'WhatsApp did not answer the blocklist query in time',
     );
-    return (jids ?? []).filter((jid): jid is string => Boolean(jid)).map(jid => this.host.toNeutralJid(jid));
+    const ids = (jids ?? []).filter((jid): jid is string => Boolean(jid)).map(jid => this.host.toNeutralJid(jid));
+    return [...new Set(ids)];
   }
 
   async setProfileName(name: string): Promise<void> {
