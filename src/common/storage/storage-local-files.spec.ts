@@ -62,6 +62,26 @@ describe('iterateLocalFiles', () => {
       await expect(walk()).rejects.toThrow(/maximum traversal depth/);
     });
 
+    // A link is neither followed (it can loop, or leave the store) nor listed, so what it points at would be
+    // missing from an export or a count without a word. Refusing is the only answer that cannot lose it.
+    it.each([
+      ['directory', 'linked'],
+      ['file', 'alias.bin'],
+    ])('fails on a symbolic link to a %s, naming it', async (kind, name) => {
+      write('real/inside.bin');
+      write('real.bin');
+      fs.symlinkSync(path.join(root, kind === 'directory' ? 'real' : 'real.bin'), path.join(root, name));
+
+      await expect(walk()).rejects.toThrow(new RegExp(`symbolic link.*${name.replace('.', '\\.')}`));
+    });
+
+    it('walks a prefix that is itself a symbolic link, since the walk starts from a path', async () => {
+      write('elsewhere/s1/archived.bin');
+      fs.symlinkSync(path.join(root, 'elsewhere'), path.join(root, 'chat-media'));
+
+      expect(await walk('chat-media/')).toEqual(['chat-media/s1/archived.bin']);
+    });
+
     it('treats a directory removed during the walk as empty', async () => {
       write('ok.bin');
       write('gone/file.bin');
@@ -96,6 +116,16 @@ describe('iterateLocalFiles', () => {
 
       expect(await walk('', options)).toEqual(['ok.bin']);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('maximum traversal depth'));
+    });
+
+    it('skips a symbolic link, names it, and still lists the rest', async () => {
+      write('ok.bin');
+      write('real/inside.bin');
+      fs.symlinkSync(path.join(root, 'real'), path.join(root, 'linked'));
+      const { options, warn } = lenient();
+
+      expect(await walk('', options)).toEqual(['ok.bin', 'real/inside.bin']);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"linked".*symbolic link/));
     });
 
     it('skips without a logger too', async () => {

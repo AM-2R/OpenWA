@@ -435,3 +435,36 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     expect(ticks).toBeGreaterThan(100);
   }, 30000);
 });
+
+describe('StorageService local store holding a symbolic link', () => {
+  let baseDir: string;
+  let localPath: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    ({ service, baseDir, localPath } = makeLocalService());
+    fs.mkdirSync(path.join(baseDir, 'bigdisk'), { recursive: true });
+    fs.writeFileSync(path.join(baseDir, 'bigdisk', 'archived.bin'), 'archived');
+    fs.mkdirSync(localPath, { recursive: true });
+    fs.writeFileSync(path.join(localPath, 'real.bin'), 'real');
+    fs.symlinkSync(path.join(baseDir, 'bigdisk'), path.join(localPath, 'chat-media'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  // The file count is the pre-check before the export that moves the store to another backend. Both must
+  // fail on a link rather than answer for a store that is missing the media behind it.
+  it('refuses a file count and an export, which would otherwise leave that media behind', async () => {
+    await expect(service.getFileCount()).rejects.toThrow(/symbolic link.*chat-media/);
+    await expect(service.createExportStream()).rejects.toThrow(/symbolic link.*chat-media/);
+  });
+
+  it('still serves the linked file and lets a sweep of the linked prefix list it', async () => {
+    expect((await service.getFile('chat-media/archived.bin')).toString()).toBe('archived');
+    const listed: string[] = [];
+    for await (const file of service.iterateFiles('chat-media/', { skipUnreadable: true })) listed.push(file);
+    expect(listed).toEqual(['chat-media/archived.bin']);
+  });
+});

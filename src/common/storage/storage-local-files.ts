@@ -65,6 +65,10 @@ export async function* iterateLocalFiles(
         queue.push({ dir: relativePath, depth: depth + 1 });
       } else if (entry.isFile()) {
         yield relativePath;
+      } else if (entry.isSymbolicLink()) {
+        // Not followed: a link can loop or leave the store, and what it points at would be missing from the
+        // listing. getFile and a walk that starts below the link still reach it.
+        unreadable(relativePath, new Error(`Storage path is a symbolic link and is not followed: ${relativePath}`));
       }
     }
   }
