@@ -310,12 +310,14 @@ export class WwebjsContacts {
   /**
    * The read half of block/unblockContact. Ids only — the neutral common subset with Baileys,
    * whose blocklist query answers bare jids. An entry whose wid is unreadable (#747 rename
-   * hazard) is dropped rather than reported as the literal "undefined".
+   * hazard) is dropped rather than reported as the literal "undefined". A contact blocked under both
+   * its LID and its phone is two entries that read as one id, which is listed once.
    */
   async getBlockedContacts(): Promise<string[]> {
     this.host.ensureReady();
     const contacts = await withPage(this.host, 'getBlockedContacts', () => this.client().getBlockedContacts());
-    return contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
+    const ids = contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
+    return [...new Set(ids)];
   }
 
   async unblockContact(contactId: string): Promise<void> {

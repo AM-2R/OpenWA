@@ -2539,7 +2539,8 @@ On Baileys the list is the saved address book: contacts with a name saved on the
 The contacts this account has blocked — the read half of the block/unblock endpoints. A bare array
 of neutral contact ids, and ids only: whatsapp-web.js resolves full contact models, but Baileys'
 blocklist query answers bare jids, and inventing the other fields on one engine would make the two
-engines claim different things about the same account.
+engines claim different things about the same account. An id is listed once, even when whatsapp-web.js
+holds the contact under both its LID and its phone.
 
 **Auth:** API key
 
