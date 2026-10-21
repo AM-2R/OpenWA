@@ -194,18 +194,22 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly locallyPending = new Map<string, number>();
   /**
-   * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that at least one active webhook names.
-   * The promise is cached, not its result, so a burst of receipts on a cold entry shares one lookup.
+   * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that active webhooks name, with how many
+   * name each. The promise is cached, not its result, so a burst of receipts on a cold entry shares one lookup.
    */
-  private readonly optInSubscriptions = new Map<string, { events: Promise<ReadonlySet<string>>; expiresAt: number }>();
+  private readonly optInSubscriptions = new Map<
+    string,
+    { named: Promise<ReadonlyMap<string, number>>; expiresAt: number }
+  >();
   /**
    * Per session, the stage its opt-in events (WILDCARD_EXCLUDED_EVENTS) pass before the shared dispatch
    * pool. One flush of buffered receipts is thousands of dispatches in a tick: a quarter of the dispatch
-   * concurrency of them run at once, up to three quarters of WEBHOOK_DISPATCH_MAX_QUEUED wait their turn
-   * (holding only the event), and the rest are dropped before they open an outbox row, a failure row or a
-   * hook call. The pool never sees more than the running ones, so a flood, or a receiver that never
-   * answers, cannot shed or hold back what another session sends. An entry lives while its session has
-   * events in the stage; `dropped` counts those turned away since it was created.
+   * concurrency runs at once, shared by the webhooks that name the event since one event is a delivery to
+   * each, up to three quarters of WEBHOOK_DISPATCH_MAX_QUEUED events wait their turn (holding only the
+   * event), and the rest are dropped before they open an outbox row, a failure row or a hook call. The pool
+   * never sees more than a session's running deliveries, so a flood, or a receiver that never answers,
+   * cannot shed or hold back what another session sends. An entry lives while its session has events in
+   * the stage; `dropped` counts those turned away since it was created.
    */
   private readonly optInStages = new Map<string, { stage: ConcurrencyLimiter; dropped: number }>();
 
@@ -305,14 +309,15 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data);
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
-    if (!(await this.sessionNamesOptInEvent(sessionId, event))) return;
+    const named = await this.webhooksNamingOptInEvent(sessionId, event);
+    if (named === 0) return;
     let entry = this.optInStages.get(sessionId);
     if (!entry) {
-      // A quarter of the pool runs at once (the limiter keeps at least one) and three quarters of the park bound
-      // wait, at least one place.
+      // A quarter of the pool runs at once, divided among the webhooks that name the event (the limiter keeps at
+      // least one event running), and three quarters of the park bound wait, at least one place.
       entry = {
         stage: new ConcurrencyLimiter(
-          Math.floor(this.dispatchLimiter.maxCount / 4),
+          Math.floor(this.dispatchLimiter.maxCount / 4 / named),
           Math.max(1, Math.floor((this.dispatchMaxQueued * 3) / 4)),
         ),
         dropped: 0,
@@ -396,38 +401,40 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Whether an active webhook of the session names `event`, read at most once per
-   * OPT_IN_SUBSCRIPTIONS_TTL_MS. A failed lookup is not cached and lets the event through, so
-   * dispatch's own lookup reports the failure as before.
+   * How many active webhooks of the session name `event`, read at most once per
+   * OPT_IN_SUBSCRIPTIONS_TTL_MS. A failed lookup is not cached and counts as one, which lets the event
+   * through, so dispatch's own lookup reports the failure as before.
    */
-  private async sessionNamesOptInEvent(sessionId: string, event: string): Promise<boolean> {
+  private async webhooksNamingOptInEvent(sessionId: string, event: string): Promise<number> {
     const now = Date.now();
     let entry = this.optInSubscriptions.get(sessionId);
     if (!entry || entry.expiresAt <= now) {
       const created = {
-        events: this.webhookRepository
+        named: this.webhookRepository
           .find({ select: { id: true, events: true }, where: { sessionId, active: true } })
           .then(rows => {
-            const named = new Set<string>();
+            const named = new Map<string, number>();
             for (const row of rows) {
               if (!Array.isArray(row.events)) continue;
-              for (const e of row.events) if (WILDCARD_EXCLUDED_EVENTS.includes(e)) named.add(e);
+              for (const e of new Set(row.events)) {
+                if (WILDCARD_EXCLUDED_EVENTS.includes(e)) named.set(e, (named.get(e) ?? 0) + 1);
+              }
             }
             return named;
           }),
         expiresAt: now + OPT_IN_SUBSCRIPTIONS_TTL_MS,
       };
       // Identity check: an invalidation (or a newer entry) since this lookup started must not be undone.
-      created.events.catch(() => {
+      created.named.catch(() => {
         if (this.optInSubscriptions.get(sessionId) === created) this.optInSubscriptions.delete(sessionId);
       });
       this.optInSubscriptions.set(sessionId, created);
       entry = created;
     }
     try {
-      return (await entry.events).has(event);
+      return (await entry.named).get(event) ?? 0;
     } catch {
-      return true;
+      return 1;
     }
   }
 

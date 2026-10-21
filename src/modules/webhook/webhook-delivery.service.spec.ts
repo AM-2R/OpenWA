@@ -2991,6 +2991,36 @@ describe('WebhookDeliveryService', () => {
         await Promise.all(failing);
       });
 
+      // One event is a delivery to each webhook that names it, so the stage's share of the pool is divided among them:
+      // otherwise a session with several receipt webhooks, all with receivers that never answer, would hold a
+      // multiple of its share.
+      it("shares a session's quarter of the pool among the webhooks that name the event", async () => {
+        internals().dispatchLimiter = new ConcurrencyLimiter(16, 8); // a quarter of 16 slots is 4 deliveries
+        hooksBySession['sess-m'] = [
+          // The API does not refuse a repeated event name, and a webhook that lists it twice is still one delivery.
+          createMockWebhook({
+            id: 'wh-m1',
+            url: 'https://receipt.one.example/hook',
+            events: ['message.receipt', 'message.receipt'],
+          }),
+          createMockWebhook({ id: 'wh-m2', url: 'https://receipt.two.example/hook', events: ['message.receipt'] }),
+          // These two do not receive receipts: one names another event, the other is a catch-all.
+          createMockWebhook({ id: 'wh-m3', url: 'https://other.example/hook', events: ['message.received'] }),
+          createMockWebhook({ id: 'wh-m4', url: 'https://other.example/all', events: ['*'] }),
+        ];
+        const receipts = burst(10, 'sess-m');
+        await settle(() => hangingReceipts.length > 4);
+
+        // Two events at a time, each to its two receipt webhooks: 4 deliveries, not 8 and not 2.
+        expect(hangingReceipts).toHaveLength(4);
+        expect(outboxService.open).toHaveBeenCalledTimes(4);
+
+        await drain(receipts);
+
+        // Two running and six waiting events were admitted, each delivered to both webhooks; two were dropped.
+        expect(urlsCalled()).toHaveLength(16);
+      });
+
       it('forgets a session once its events have settled, and counts the next burst afresh', async () => {
         const warn = warnSpy();
         for (let round = 0; round < 2; round++) {
