@@ -653,7 +653,7 @@ export function NumberChecker() {
                         )}
                       </td>
                       <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '—'}</bdi>
+                        <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
                       </td>
                       <td style={{ color: 'var(--text-muted)' }}>
                         <bdi>{item.timestamp}</bdi>
@@ -945,7 +945,7 @@ export function NumberChecker() {
                         )}
                       </td>
                       <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '—'}</bdi>
+                        <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
                       </td>
                       <td style={{ color: 'var(--text-muted)' }}>
                         <bdi>{item.timestamp}</bdi>

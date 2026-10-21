@@ -31,7 +31,7 @@ const GROUP_NAME_MAX_LENGTH = 100;
 /**
  * Digits of a number typed with its country code, or null. The engine resolves digits as they are, so
  * a national "0170…" would silently reach a different country; only "+49…", "0049…" or bare
- * international digits are taken. 7–15 digits covers E.164.
+ * international digits are taken. 7-15 digits covers E.164.
  */
 const toInternationalDigits = (input: string): string | null => {
   const trimmed = input.trim();
