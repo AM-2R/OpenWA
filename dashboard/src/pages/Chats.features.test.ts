@@ -1028,6 +1028,29 @@ test("the contact dialog follows the address book the menu read, not the chat's 
   assert.equal((within(dialog).getByLabelText('First name') as HTMLInputElement).value, '');
 });
 
+test("the contact dialog's Save button submits its form, so Enter in a name field saves", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  pickRowAction('Alice', 'Rename contact');
+  const dialog = await screen.findByRole('dialog');
+  const form = dialog.querySelector('form') as HTMLFormElement;
+  const save = within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+  // A browser submits a form on Enter through its submit button, which has to belong to that form. The Save
+  // button sits in the dialog's footer, outside the form element.
+  assert.ok(save.type === 'submit' && save.form === form, 'Enter in a name field has no submit button to press');
+
+  fireEvent.change(within(dialog).getByLabelText('First name'), { target: { value: 'Alicia' } });
+  fireEvent.click(save);
+  await waitFor(() =>
+    assert.deepEqual(
+      fetchCalls.filter(c => c.method === 'PUT' && c.path.includes('/contacts/')).map(c => c.body),
+      [{ firstName: 'Alicia' }],
+      'a click on Save did not send the name exactly once',
+    ),
+  );
+});
+
 test('a chat keyed by a privacy id offers Save contact disabled, with the reason, and sends nothing', async () => {
   const { screen, fireEvent } = rtl;
   listExtra = true;

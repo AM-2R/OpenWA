@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { Modal } from '../Modal';
@@ -87,6 +87,8 @@ export function SaveContactDialog({
   const [firstName, setFirstName] = useState(first ?? '');
   const [lastName, setLastName] = useState(rest.join(' '));
   const canSave = firstName.trim().length > 0 && !busy;
+  // The footer's Save button belongs to the form through this id, so Enter in a name field presses it.
+  const formId = useId();
   return (
     <Modal
       open
@@ -99,13 +101,14 @@ export function SaveContactDialog({
           <button className="btn-secondary" onClick={onClose} disabled={busy}>
             {t('common.cancel')}
           </button>
-          <button className="btn-primary" onClick={() => onSave(firstName.trim(), lastName.trim())} disabled={!canSave}>
+          <button type="submit" form={formId} className="btn-primary" disabled={!canSave}>
             {busy ? <Loader2 className="animate-spin" size={16} /> : t('common.save')}
           </button>
         </>
       }
     >
       <form
+        id={formId}
         className="chat-dialog-form"
         onSubmit={event => {
           event.preventDefault();
