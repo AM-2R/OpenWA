@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConsoleLogger, Logger } from '@nestjs/common';
-import { LoggerService, LogLevel, LogFormat, createLogger } from './logger.service';
+import { LoggerService, LogLevel, LogFormat, createLogger, redactSecrets } from './logger.service';
 import { runWithRequestId } from './request-context';
 
 interface LogEntry {
@@ -523,5 +523,30 @@ describe('LoggerService', () => {
       const output = getLogOutput(consoleSpy);
       expect(output.context).toBe('MyContext');
     });
+  });
+});
+
+// The Baileys wire logger reuses this copy with its own key policy and marker, so the options are pinned directly.
+describe('redactSecrets', () => {
+  it('replaces the value under a secret-named key with [REDACTED] unless told otherwise', () => {
+    expect(redactSecrets({ accessToken: 't', visible: 'v' })).toEqual({ accessToken: '[REDACTED]', visible: 'v' });
+  });
+
+  it('takes the credential keys and the marker from its options', () => {
+    const options = { isSecretKey: (key: string) => key === 'password', marker: '[masked]' };
+
+    expect(redactSecrets({ accessToken: 't', password: 'p' }, options)).toEqual({
+      accessToken: 't',
+      password: '[masked]',
+    });
+  });
+
+  it('copies an Error with its name, message and stack, and its own props through the same checks, when asked to', () => {
+    const error = Object.assign(new Error('boom'), { token: 't', attempts: 5n });
+
+    const copy = redactSecrets({ error }, { errors: true }) as { error: Record<string, unknown> };
+
+    expect(copy.error).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
+    expect(copy.error.stack).toContain('Error: boom');
   });
 });

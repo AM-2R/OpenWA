@@ -34,26 +34,44 @@ const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorizati
 const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
 
+export interface RedactOptions {
+  /** Whether the value under this key is a credential. Defaults to the secret-name pattern above. */
+  isSecretKey?: (key: string) => boolean;
+  /** Written in place of a credential's value. */
+  marker?: string;
+  /** Copy an Error with its name, message and stack too, which a copy of its own properties alone would lose. */
+  errors?: boolean;
+}
+
+const isSecretName = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
+
 /**
- * Return a copy of `value` with secret-named keys' values replaced by `[REDACTED]` (recursive). The copy always
+ * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
- * whatever lies beyond the deep node budget `[Truncated]`.
+ * whatever lies beyond the deep node budget `[Truncated]`. Shared with the Baileys wire logger.
  */
-function redactSecrets(value: unknown, path: object[] = [], budget = { nodes: REDACT_DEEP_NODES }): unknown {
-  if (value === null || typeof value !== 'object') return value;
-  if (path.includes(value)) return '[Circular]';
-  if (path.length >= REDACT_FULL_DEPTH && --budget.nodes < 0) return '[Truncated]';
-  const parents = [...path, value];
-  const copy = (child: unknown): unknown =>
-    typeof child === 'bigint' ? child.toString() : redactSecrets(child, parents, budget);
-  if (Array.isArray(value)) return value.map(copy);
-  const out: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
-    if (key === 'toJSON' && typeof val === 'function') continue;
-    out[key] = SECRET_KEY_PATTERN.test(key) ? '[REDACTED]' : copy(val);
-  }
-  return out;
+export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
+  const { isSecretKey = isSecretName, marker = '[REDACTED]', errors = false } = options;
+  const budget = { nodes: REDACT_DEEP_NODES };
+  const walk = (node: unknown, path: object[]): unknown => {
+    if (node === null || typeof node !== 'object') return node;
+    if (path.includes(node)) return '[Circular]';
+    if (path.length >= REDACT_FULL_DEPTH && --budget.nodes < 0) return '[Truncated]';
+    const parents = [...path, node];
+    const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
+    if (Array.isArray(node)) return node.map(copy);
+    const props = node as Record<string, unknown>;
+    const source =
+      errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(source)) {
+      // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
+      if (key === 'toJSON' && typeof val === 'function') continue;
+      out[key] = isSecretKey(key) ? marker : copy(val);
+    }
+    return out;
+  };
+  return walk(value, []);
 }
 
 /** A non-string, non-Error message as one line of text (redacted like metadata, never throwing). */
