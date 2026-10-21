@@ -16,11 +16,31 @@ import { type WwebjsEngineHost } from './wwebjs-host';
 const MAX_MESSAGES_IN_PROCESSING = 5_000;
 const MAX_CHANGES_KEPT_PER_MESSAGE = 64;
 
-/** A message this adapter is still processing: the text it carries so far, and the changes that reached it. */
+/** A message this adapter is still processing: what it carries so far, and the changes that reached it. */
 interface MessageInProcessing {
+  /** The text it arrived with, then that of the latest edit. */
   text: string;
+  /** A delete for everyone reached it. */
+  deleted: boolean;
   changes: Array<() => void>;
 }
+
+/** What the processing of one message does with the changes that reached it meanwhile. */
+interface Processing {
+  /** Apply the latest edit to the copy about to be handed over. False when a delete reached it: it is not handed over. */
+  handOver: (message: IncomingMessage) => boolean;
+  /** The processing ended, however it did: deliver the kept changes in arrival order and forget the message. */
+  end: () => void;
+}
+
+/** A change to a message that is processed: the text of an edit, or a delete for everyone. */
+interface Change {
+  editedText?: string;
+  deletes?: boolean;
+}
+
+/** The processing of a message whose changes are not kept: the session holds it, or it is not tracked. */
+const NOT_KEPT: Processing = { handOver: () => true, end: () => undefined };
 
 /**
  * Message-domain client events (message, message_create, ack, revoke, reaction, edit) extracted
@@ -61,9 +81,11 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
   // A message reaches the session once its contact, media and quoted message were fetched. A session that holds
   // each arrival (a ticket, PostgreSQL) keeps what reaches the message meanwhile for its row. Any other learns of
   // the message only when it is handed over, so an edit or a delete for everyone that came first would find no
-  // row to change, and the message would then be stored and announced as it was: a deleted one with its content.
-  // A reaction would never reach the row. Those changes are kept here, by message id, and delivered right after
-  // the message.
+  // row to change, and the message would then be hooked, stored and announced as it was: a deleted one with its
+  // content. A reaction would never reach the row. So the adapter keeps those changes here, by message id. The
+  // message is handed over with the latest edit applied, or not at all when it was deleted, as the Baileys adapter
+  // does, and the changes themselves are delivered right after it, so the session still announces them and marks
+  // the edit.
   const inProcessing = new Map<string, MessageInProcessing>();
 
   const deliverKept = (kept: MessageInProcessing): void => {
@@ -77,37 +99,45 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
   };
 
   /**
-   * Start keeping what reaches a message the session does not hold. Returns the call that ends the processing,
-   * however it ends: it delivers what was kept, in arrival order, and forgets the message. Safe to call twice.
+   * Start keeping what reaches a message the session does not hold. `end` must run when the processing ends,
+   * however it ends; it is safe to call twice. A repeat delivery of an id shares the record of the first.
    */
-  const keepChanges = (message: IncomingMessage, ticket: InboundTicket | undefined): (() => void) => {
-    if (ticket || !message.id || message.isStatusBroadcast) return () => undefined;
+  const keepChanges = (message: IncomingMessage, ticket: InboundTicket | undefined): Processing => {
+    if (ticket || !message.id || message.isStatusBroadcast) return NOT_KEPT;
     let kept = inProcessing.get(message.id);
     if (!kept) {
       // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
-      if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return () => undefined;
-      kept = { text: message.body, changes: [] };
+      if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return NOT_KEPT;
+      kept = { text: message.body, deleted: false, changes: [] };
       inProcessing.set(message.id, kept);
     }
     const mine = kept;
-    return () => {
-      if (inProcessing.get(message.id) === mine) inProcessing.delete(message.id);
-      deliverKept(mine);
+    return {
+      handOver: handedOver => {
+        if (mine.deleted) return false;
+        handedOver.body = mine.text;
+        return true;
+      },
+      end: () => {
+        if (inProcessing.get(message.id) === mine) inProcessing.delete(message.id);
+        deliverKept(mine);
+      },
     };
   };
 
   /**
    * Deliver a change aimed at `messageId`: right after the message while it is still being processed, else at
-   * once. An edit passes its text: one that repeats the text the message carries so far changes nothing, and goes
-   * through at once as it always did. Past the bound the changes kept so far go first, so none overtakes another.
+   * once. An edit that repeats the text the message carries so far changes nothing, and goes through at once as
+   * it always did. Past the bound the changes kept so far go first, so none overtakes another.
    */
-  const afterMessage = (messageId: string, deliver: () => void, editedText?: string): void => {
+  const afterMessage = (messageId: string, deliver: () => void, change: Change = {}): void => {
     const kept = inProcessing.get(messageId);
-    if (!kept || editedText === kept.text) {
+    if (!kept || change.editedText === kept.text) {
       deliver();
       return;
     }
-    if (editedText !== undefined) kept.text = editedText;
+    if (change.editedText !== undefined) kept.text = change.editedText;
+    if (change.deletes) kept.deleted = true;
     if (kept.changes.length < MAX_CHANGES_KEPT_PER_MESSAGE) {
       kept.changes.push(deliver);
       return;
@@ -125,10 +155,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       return;
     }
     const ticket = admit(msg, base, true);
-    const endProcessing = keepChanges(base, ticket);
-    const done = handleIncoming(host, msg, base, ticket);
+    const processing = keepChanges(base, ticket);
+    const done = handleIncoming(host, msg, base, ticket, processing);
     holdWhileProcessing(ticket, done);
-    void done.then(endProcessing, endProcessing);
+    void done.then(processing.end, processing.end);
   });
 
   client.on('message_create', msg => {
@@ -141,7 +171,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     }
 
     let ticket: InboundTicket | undefined;
-    let endProcessing: (() => void) | undefined;
+    let processing = NOT_KEPT;
     const done = (async () => {
       let incomingMessage: IncomingMessage;
       try {
@@ -154,7 +184,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       }
       // Synchronous, as the first await comes after it.
       ticket = admit(msg, incomingMessage, !incomingMessage.isStatusBroadcast);
-      endProcessing = keepChanges(incomingMessage, ticket);
+      processing = keepChanges(incomingMessage, ticket);
       // Enrich with the media payload through the same capped path the incoming handler uses —
       // the base builder is sync and carries none, so a phone-sent image would otherwise persist
       // and render as a bare 📎 marker even though the media is downloadable right here. Not for an own
@@ -170,6 +200,12 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         }
       }
       try {
+        if (!processing.handOver(incomingMessage)) {
+          host.logger.debug('Not handing over an own message deleted for everyone while it was processed', {
+            msgId: incomingMessage.id,
+          });
+          return;
+        }
         // The ticket goes along only where one was issued, so elsewhere the call is unchanged.
         if (ticket) host.getCallbacks().onMessageCreate?.(incomingMessage, ticket);
         else host.getCallbacks().onMessageCreate?.(incomingMessage);
@@ -179,8 +215,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     })();
     holdWhileProcessing(ticket, done);
     void done.then(
-      () => endProcessing?.(),
-      () => endProcessing?.(),
+      () => processing.end(),
+      () => processing.end(),
     );
   });
 
@@ -237,7 +273,9 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         body: '',
         timestamp: after.timestamp,
       };
-      afterMessage(payload.revokedId ?? payload.id, () => host.getCallbacks().onMessageRevoked?.(payload));
+      afterMessage(payload.revokedId ?? payload.id, () => host.getCallbacks().onMessageRevoked?.(payload), {
+        deletes: true,
+      });
     } catch (error) {
       host.logger.error('Error processing message_revoke_everyone', String(error));
     }
@@ -285,7 +323,9 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         mentionedIds: message.mentionedIds,
       });
       const payload: EditedMessage = buildEditedMessage(base, Boolean(message.hasMedia));
-      afterMessage(payload.messageId, () => host.getCallbacks().onMessageEdited?.(payload), payload.body);
+      afterMessage(payload.messageId, () => host.getCallbacks().onMessageEdited?.(payload), {
+        editedText: payload.body,
+      });
     } catch (error) {
       host.logger.error('Error processing message_edit', String(error));
     }
@@ -294,13 +334,15 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
 
 /**
  * The `message` event body: enrich the incoming message (contact, location, media, quote, call) and
- * emit it with its ticket. Never rejects.
+ * emit it with its ticket, carrying the latest edit that reached it, or not at all once a delete for everyone did.
+ * Never rejects.
  */
 async function handleIncoming(
   host: WwebjsEngineHost,
   msg: Message,
   incomingMessage: IncomingMessage,
   ticket: InboundTicket | undefined,
+  processing: Processing,
 ): Promise<void> {
   // A held message (a ticket) keeps every later message of its chat waiting until it is emitted, so its
   // page lookups get the download deadline instead of Puppeteer's protocol timeout, and go without.
@@ -373,6 +415,12 @@ async function handleIncoming(
     const call = extractWwebjsCall(msg);
     if (call) incomingMessage.call = call;
 
+    if (!processing.handOver(incomingMessage)) {
+      host.logger.debug('Not handing over a message deleted for everyone while it was processed', {
+        msgId: incomingMessage.id,
+      });
+      return;
+    }
     if (ticket) host.getCallbacks().onMessage?.(incomingMessage, ticket);
     else host.getCallbacks().onMessage?.(incomingMessage);
   } catch (error) {

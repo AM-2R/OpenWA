@@ -109,10 +109,13 @@ describe.each([
   let rows: Row[];
   let dispatch: jest.Mock;
   let client: EventEmitter;
+  // The bodies the message:received and message:sent hooks were given.
+  let hooked: string[];
 
   beforeEach(() => {
     process.env.INBOUND_MEDIA_CONCURRENCY = '1';
     rows = [];
+    hooked = [];
     // The real projector over a stand-in `messages` table, wired as the database wires it: only PostgreSQL
     // admits a message on arrival.
     const repo = {
@@ -121,6 +124,12 @@ describe.each([
       findOne: jest.fn(({ where }: { where: Row }) => Promise.resolve(rows.find(r => matches(r, where)) ?? null)),
       create: jest.fn((x: Row) => ({ ...x })),
       insert: jest.fn((row: Row) => {
+        // As the real table's unique index refuses a second row under an id.
+        if (rows.some(r => r.waMessageId === row.waMessageId)) {
+          return Promise.reject(
+            Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
+          );
+        }
         rows.push({ ...row });
         return Promise.resolve({ identifiers: [{ id: `pk-${String(row.waMessageId)}` }], generatedMaps: [] });
       }),
@@ -141,7 +150,10 @@ describe.each([
       new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
       { dispatch } as unknown as WebhookService,
       {
-        execute: jest.fn((_event: string, data: unknown) => Promise.resolve({ continue: true, data })),
+        execute: jest.fn((event: string, data: unknown) => {
+          if (event === 'message:received' || event === 'message:sent') hooked.push(String((data as Row).body));
+          return Promise.resolve({ continue: true, data });
+        }),
       } as unknown as HookManager,
       { ingest: jest.fn() } as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
@@ -188,7 +200,15 @@ describe.each([
     return { page: jest.fn(() => page.promise), finish: () => page.resolve({ mimetype: 'image/png', data: 'QUJD' }) };
   };
 
-  it('stores a message deleted for everyone during its contact lookup cleared, and announces no content', async () => {
+  // What a message deleted for everyone while it was processed leaves behind. PostgreSQL held the message from its
+  // arrival and stores it cleared. SQLite is told of it only at the hand-over, which is skipped, as the Baileys
+  // adapter skips it: no row, no hook, no announcement.
+  const deletedRows = (id: string): unknown[] =>
+    type === 'postgres'
+      ? [expect.objectContaining({ waMessageId: id, body: '', type: 'revoked', metadata: null })]
+      : [];
+
+  it('leaves no content of a message deleted for everyone during its contact lookup, and announces none', async () => {
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'secret', { contact: contact.promise }));
     await flush();
@@ -197,12 +217,13 @@ describe.each([
     contact.resolve(null);
     await flush();
 
-    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: '', type: 'revoked', metadata: null })]);
+    expect(rows).toEqual(deletedRows('A'));
+    expect(hooked).toEqual([]);
     expect(events('message.received')).toEqual([]);
     expect(events('message.revoked')).toHaveLength(1);
   });
 
-  it('stores a message deleted for everyone during its media download cleared, and announces no content', async () => {
+  it('leaves no content of a message deleted for everyone during its media download, and announces none', async () => {
     const media = download();
     client.emit('message', incoming('M', 'caption', { page: media.page }));
     await flush();
@@ -211,7 +232,8 @@ describe.each([
     media.finish();
     await flush();
 
-    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: '', type: 'revoked', metadata: null })]);
+    expect(rows).toEqual(deletedRows('M'));
+    expect(hooked).toEqual([]);
     expect(events('message.received')).toEqual([]);
     expect(events('message.revoked')).toHaveLength(1);
   });
@@ -226,6 +248,7 @@ describe.each([
     await flush();
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
+    expect(hooked).toEqual(['fixed']);
     expect(events('message.received').map(m => m.body)).toEqual(['fixed']);
     expect(events('message.edited').map(m => m.body)).toEqual(['fixed']);
   });
@@ -246,6 +269,7 @@ describe.each([
         metadata: { media: expect.objectContaining({ mimetype: 'image/png' }) as unknown, edited: true },
       }),
     ]);
+    expect(hooked).toEqual(['new cap']);
     expect(events('message.received').map(m => m.body)).toEqual(['new cap']);
   });
 
@@ -260,6 +284,7 @@ describe.each([
     await flush();
 
     expect(rows[0].body).toBe('v2');
+    expect(hooked).toEqual(['v2']);
     expect(events('message.edited').map(m => m.body)).toEqual(['v1', 'v2']);
     expect(events('message.received').map(m => m.body)).toEqual(['v2']);
   });
@@ -309,7 +334,7 @@ describe.each([
     ]);
   });
 
-  it('stores a message edited and then deleted during its contact lookup cleared', async () => {
+  it('leaves no content of a message edited and then deleted during its contact lookup', async () => {
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     await flush();
@@ -319,11 +344,36 @@ describe.each([
     contact.resolve(null);
     await flush();
 
-    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: '', type: 'revoked', metadata: null })]);
+    expect(rows).toEqual(deletedRows('A'));
+    expect(hooked).toEqual([]);
     expect(events('message.received')).toEqual([]);
   });
 
-  it('stores an own send deleted for everyone during its media download cleared, and announces no content', async () => {
+  it('leaves no content of an own send deleted for everyone during its media download, and announces none', async () => {
+    const media = download();
+    client.emit('message_create', incoming('S', 'sent', { page: media.page, fromMe: true }));
+    await flush();
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+    media.finish();
+    await flush();
+
+    expect(rows).toEqual(deletedRows('S'));
+    expect(hooked).toEqual([]);
+    expect(events('message.sent')).toEqual([]);
+  });
+
+  // The REST send stored its row before the echo came, so the delete has a row to clear on both wirings.
+  it('clears the row a REST send stored when its echo is deleted during its media download', async () => {
+    rows.push({
+      sessionId: 's1',
+      waMessageId: 'S',
+      chatId: CHAT,
+      direction: 'outgoing',
+      type: 'image',
+      body: 'sent',
+      metadata: { media: { mimetype: 'image/png', data: 'QUJD' } },
+    });
     const media = download();
     client.emit('message_create', incoming('S', 'sent', { page: media.page, fromMe: true }));
     await flush();
@@ -333,6 +383,7 @@ describe.each([
     await flush();
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', body: '', type: 'revoked', metadata: null })]);
+    expect(hooked).toEqual([]);
     expect(events('message.sent')).toEqual([]);
   });
 
@@ -347,6 +398,7 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', body: 'sent again' })]);
     expect((rows[0].metadata as Row).edited).toBe(true);
+    expect(hooked).toEqual(['sent again']);
     expect(events('message.sent').map(m => m.body)).toEqual(['sent again']);
   });
 
@@ -375,12 +427,16 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
   /** Calls of the engine callbacks in the order they were made, with the registration under test. */
   const wire = (extra: Partial<EngineEventCallbacks> = {}, media: Promise<undefined> = Promise.resolve(undefined)) => {
     const order: string[] = [];
+    // The body of each message handed over, in order.
+    const bodies: string[] = [];
     const callbacks: EngineEventCallbacks = {
       onMessage: (m: IncomingMessage) => {
         order.push(`message ${m.id}`);
+        bodies.push(m.body);
       },
       onMessageCreate: (m: IncomingMessage) => {
         order.push(`own ${m.id}`);
+        bodies.push(m.body);
       },
       onMessageEdited: (e: EditedMessage) => {
         order.push(`edit ${e.messageId} ${e.body}`);
@@ -400,15 +456,32 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
       capInboundMediaFor: jest.fn(() => media),
     } as unknown as WwebjsEngineHost;
     registerWwebjsMessageEvents(client as unknown as Client, host);
-    return { client, order, callbacks };
+    return { client, order, bodies, callbacks };
   };
 
   // The bounds of wwebjs-message-events.ts: changes kept per message, and messages tracked at once.
   const PER_MESSAGE = 64;
   const TRACKED = 5_000;
 
-  it('delivers what reached a message right after it, in the order it arrived', async () => {
-    const { client, order } = wire();
+  it('hands a message over with its latest edit, and delivers what reached it right after, in order', async () => {
+    const { client, order, bodies } = wire();
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    editEvent(client, 'A', 'fixed');
+    reactionEvent(client, 'A', '👍');
+    editEvent(client, 'A', 'fixed twice');
+    await flush();
+    expect(order).toEqual([]);
+
+    contact.resolve(null);
+    await flush();
+
+    expect(order).toEqual(['message A', 'edit A fixed', 'react A 👍', 'edit A fixed twice']);
+    expect(bodies).toEqual(['fixed twice']);
+  });
+
+  it('does not hand over a message deleted meanwhile, and delivers what reached it', async () => {
+    const { client, order, bodies } = wire();
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'A', 'fixed');
@@ -420,7 +493,35 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     contact.resolve(null);
     await flush();
 
-    expect(order).toEqual(['message A', 'edit A fixed', 'react A 👍', 'revoke A']);
+    expect(order).toEqual(['edit A fixed', 'react A 👍', 'revoke A']);
+    expect(bodies).toEqual([]);
+  });
+
+  it('does not hand over a message deleted after more changes than are kept', async () => {
+    const { client, order, bodies } = wire();
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    for (let i = 1; i <= PER_MESSAGE; i++) editEvent(client, 'A', `v${i}`);
+    revokeEvent(client, 'A');
+    expect(order).toHaveLength(PER_MESSAGE + 1);
+    expect(order.at(-1)).toBe('revoke A');
+
+    contact.resolve(null);
+    await flush();
+
+    expect(order).toHaveLength(PER_MESSAGE + 1);
+    expect(bodies).toEqual([]);
+  });
+
+  it('delivers at once a delete that reaches a message already handed over', async () => {
+    const { client, order } = wire();
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    contact.resolve(null);
+    await flush();
+    revokeEvent(client, 'A');
+
+    expect(order).toEqual(['message A', 'revoke A']);
   });
 
   it('delivers at once what reaches a message the session holds from its arrival', async () => {
@@ -430,7 +531,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
       drop: () => undefined,
       revoked: false,
     };
-    const { client, order } = wire({ admitInbound: () => ticket });
+    const { client, order, bodies } = wire({ admitInbound: () => ticket });
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'A', 'fixed');
@@ -440,7 +541,9 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     contact.resolve(null);
     await flush();
 
+    // The session applies them itself: the message goes over as it arrived.
     expect(order).toEqual(['edit A fixed', 'revoke A', 'message A']);
+    expect(bodies).toEqual(['orig']);
   });
 
   it('delivers at once what reaches another message, and what reaches a message already handed over', async () => {
@@ -473,7 +576,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
   });
 
   it('delivers an edit that repeats the text at once and keeps one that changes it', async () => {
-    const { client, order } = wire();
+    const { client, order, bodies } = wire();
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'A', 'orig');
@@ -486,6 +589,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     await flush();
 
     expect(order).toEqual(['edit A orig', 'edit A v1', 'message A', 'edit A v1', 'edit A orig']);
+    expect(bodies).toEqual(['orig']);
   });
 
   it('forgets the message when its processing fails, after delivering what it kept', async () => {
@@ -507,19 +611,34 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     expect(order).toEqual(['edit A fixed', 'edit A later']);
   });
 
-  it('delivers what reached an own send right after it, once its media is fetched', async () => {
+  it('hands an own send over with its latest edit, and delivers what reached it right after', async () => {
     const download = deferred<undefined>();
-    const { client, order } = wire({}, download.promise);
+    const { client, order, bodies } = wire({}, download.promise);
     client.emit('message_create', incoming('S', 'sent', { page: jest.fn(), fromMe: true }));
     editEvent(client, 'S', 'sent again', { media: true, fromMe: true });
-    revokeEvent(client, 'S', { fromMe: true });
     await flush();
     expect(order).toEqual([]);
 
     download.resolve(undefined);
     await flush();
 
-    expect(order).toEqual(['own S', 'edit S sent again', 'revoke S']);
+    expect(order).toEqual(['own S', 'edit S sent again']);
+    expect(bodies).toEqual(['sent again']);
+  });
+
+  it('does not hand over an own send deleted meanwhile, and delivers what reached it', async () => {
+    const download = deferred<undefined>();
+    const { client, order, bodies } = wire({}, download.promise);
+    client.emit('message_create', incoming('S', 'sent', { page: jest.fn(), fromMe: true }));
+    editEvent(client, 'S', 'sent again', { media: true, fromMe: true });
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+
+    download.resolve(undefined);
+    await flush();
+
+    expect(order).toEqual(['edit S sent again', 'revoke S']);
+    expect(bodies).toEqual([]);
   });
 
   it('forgets an own send when handing it over fails, after delivering what it kept', async () => {
@@ -555,6 +674,24 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     await flush();
   });
 
+  it('hands over neither delivery of an id that was deleted meanwhile', async () => {
+    const { client, order, bodies } = wire();
+    const first = deferred<null>();
+    const second = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    client.emit('message', incoming('A', 'orig', { contact: second.promise }));
+    revokeEvent(client, 'A');
+
+    second.resolve(null);
+    await flush();
+    first.resolve(null);
+    await flush();
+    revokeEvent(client, 'A');
+
+    expect(order).toEqual(['revoke A', 'revoke A']);
+    expect(bodies).toEqual([]);
+  });
+
   it('shares what reached an id between two deliveries of it, and forgets the id after both', async () => {
     const { client, order } = wire();
     const first = deferred<null>();
@@ -584,12 +721,12 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     const contact = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
     editEvent(client, 'A', 'fixed');
-    revokeEvent(client, 'A');
+    reactionEvent(client, 'A', '👍');
 
     contact.resolve(null);
     await flush();
 
-    expect(order).toEqual(['message A', 'revoke A']);
+    expect(order).toEqual(['message A', 'react A 👍']);
   });
 
   it('keeps a bounded number of changes for one message, delivering the rest in order at once', async () => {
