@@ -70,12 +70,16 @@ describe('A session being deleted', () => {
   let db: DataSource;
   let module: TestingModule;
   let service: SessionService;
+  let lifecycle: SessionEngineLifecycle;
   let ownership: SessionOwnershipService;
   let engineFactory: { create: jest.Mock; purgeSessionData: jest.Mock };
   let sessionId: string;
   let reachedBatch: ReturnType<typeof deferred>;
   let finishBatch: ReturnType<typeof deferred>;
   let deletion: Promise<void>;
+
+  const config = (nodeId: string): ConfigService =>
+    new ConfigService({ session: { nodeId, leaseTtlMs: 60_000, leaseHeartbeatMs: 20_000 } });
 
   beforeEach(async () => {
     db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities, synchronize: true });
@@ -125,7 +129,10 @@ describe('A session being deleted', () => {
       ],
     }).compile();
     service = module.get(SessionService);
+    lifecycle = module.get(SessionEngineLifecycle);
     ownership = module.get(SessionOwnershipService);
+    // What SessionService wires at bootstrap, without the interval: renew() asks whether anything still runs.
+    ownership.setEngineLiveness(id => lifecycle.isEngineActive(id));
 
     const row = await db.getRepository(Session).save({
       name: 'big-session',
@@ -179,5 +186,17 @@ describe('A session being deleted', () => {
     expect(ownership.ownedIds()).toEqual([]);
     // The stop of a session that no longer exists answers 404, which it could not if an engine lingered.
     await expect(service.stop(sessionId)).rejects.toThrow('not found');
+  });
+
+  it('keeps its lease with the node that is deleting it, so a peer cannot adopt it meanwhile', async () => {
+    // Stands in for batches that outlast the lease TTL: without a renewal the peer takes the row.
+    await db.getRepository(Session).update(sessionId, { leaseExpiresAt: new Date(Date.now() - 1_000) });
+    const peer = new SessionOwnershipService(db.getRepository(Session), config('node-b'));
+
+    await ownership.renew();
+
+    expect(await peer.claim(sessionId)).toBe(false);
+    finishBatch.resolve();
+    await deletion;
   });
 });

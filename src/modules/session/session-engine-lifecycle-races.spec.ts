@@ -292,6 +292,18 @@ describe('SessionEngineLifecycle races', () => {
       expect(internals.stoppingSessions.has(ID)).toBe(false);
     });
 
+    it('counts the delete as live until the rows are gone, so the lease of the session is renewed', async () => {
+      expect(lifecycle.isEngineActive(ID)).toBe(false);
+      const { gate, settled } = await deleteInBatchPhase();
+
+      // The engine is evicted and nothing is starting or reconnecting: only the delete is left.
+      expect(lifecycle.isEngineActive(ID)).toBe(true);
+
+      gate.resolve([]);
+      await settled;
+      expect(lifecycle.isEngineActive(ID)).toBe(false);
+    });
+
     it('lets the session start again when the delete failed', async () => {
       transaction.mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
       const { gate, settled } = await deleteInBatchPhase();
