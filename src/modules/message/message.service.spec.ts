@@ -219,6 +219,13 @@ describe('MessageService', () => {
       expect(qb.take).toHaveBeenCalledWith(100);
       expect(qb.skip).toHaveBeenCalledWith(0);
     });
+
+    it('caps an offset past the largest safe integer, which a driver would refuse as an OFFSET', async () => {
+      const qb = makeQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      await service.getMessages('sess-1', { offset: 2 ** 63 });
+      expect(qb.skip).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER);
+    });
   });
 
   // ── getMessages keyset cursor ─────────────────────────────────────

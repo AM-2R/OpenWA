@@ -313,7 +313,12 @@ export class MessageService implements PluginMessagePort {
     const rawOffset = options.offset;
     const limit =
       typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 50;
-    const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
+    // Capped at the largest safe integer: a driver refuses an OFFSET of 2^63 or more, and any offset that
+    // large is past the last row anyway.
+    const offset =
+      typeof rawOffset === 'number' && Number.isFinite(rawOffset)
+        ? Math.min(Math.max(Math.trunc(rawOffset), 0), Number.MAX_SAFE_INTEGER)
+        : 0;
 
     const tiebreak = messageTimeOrder ? 'id' : this.orderTiebreak;
     // Match across dialects: a stored chatId may be `@s.whatsapp.net` (e.g. an outbound send addressed
