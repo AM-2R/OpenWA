@@ -704,6 +704,38 @@ describe('BaileysEvents.handleMessageReceiptUpdate', () => {
     expect(onMessageReceipt).not.toHaveBeenCalled();
   });
 
+  it('reports the receipts of a status post as well as a group message', () => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'ST1', remoteJid: 'status@broadcast', fromMe: true },
+        receipt: { userJid: member, readTimestamp: 5 },
+      },
+    ]);
+    expect(onMessageReceipt.mock.calls).toEqual([
+      [{ messageId: 'ST1', chatId: 'status@broadcast', participant: member, status: 'read', timestamp: 5 }],
+    ]);
+  });
+
+  // message.receipt is documented for group and status messages only, which is the split Baileys itself makes
+  // (1:1 receipts arrive as messages.update). A list the phone filled in reaches this handler through a
+  // message's own userReceipt, whatever the chat, so the handler holds the line.
+  it.each([
+    ['a 1:1 chat', '6282222222222@s.whatsapp.net'],
+    ['a 1:1 chat in the lid dialect', '55555@lid'],
+    ['a broadcast list', '1700000000@broadcast'],
+    ['a channel', '120363000000000002@newsletter'],
+  ])('does not report a receipt for %s', (_kind, remoteJid) => {
+    const { events, onMessageReceipt } = setup();
+    events.handleMessageReceiptUpdate([
+      {
+        key: { id: 'OUT1', remoteJid, fromMe: true },
+        receipt: { userJid: member, receiptTimestamp: 1, readTimestamp: 2 },
+      },
+    ]);
+    expect(onMessageReceipt).not.toHaveBeenCalled();
+  });
+
   it('neutralises the chat and participant ids', () => {
     const { events, onMessageReceipt } = setup({ toNeutralJid: (jid: string) => `n:${jid}` });
     events.handleMessageReceiptUpdate([

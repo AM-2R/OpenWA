@@ -56,7 +56,7 @@ import type { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter'
 import { type createLogger } from '../../common/services/logger.service';
 import { createSilentLogger } from './baileys-logger';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
-import { parseWaId, userPart } from '../identity/wa-id';
+import { chatKind, parseWaId, userPart, type ChatKind } from '../identity/wa-id';
 
 /**
  * Inbound event handling extracted from BaileysAdapter: the socket event handlers
@@ -95,6 +95,12 @@ const PRESENCE_STATES: ReadonlySet<PresenceState> = new Set<PresenceState>([
   'recording',
   'paused',
 ]);
+
+/**
+ * The chats a per-recipient receipt is reported for: the two Baileys raises message-receipt.update for, and the
+ * only ones message.receipt is documented for. A 1:1 chat reports through messages.update instead.
+ */
+const RECEIPT_CHAT_KINDS: ReadonlySet<ChatKind> = new Set<ChatKind>(['group', 'status']);
 
 /**
  * Top-level Message keys that carry no user content. A live message made only of these is dropped;
@@ -1394,10 +1400,11 @@ export class BaileysEvents {
   /**
    * Baileys `message-receipt.update`: per-participant receipts, which Baileys raises only for group
    * and status messages (1:1 receipts arrive as `messages.update` instead). Only receipts for
-   * messages this account sent are reported, and receipts from the account's own linked devices are
-   * dropped. The event buffer can merge several receipts of one participant into one entry, so each
-   * timestamp the entry carries becomes its own event. rc14 files a `played` receipt under
-   * `readTimestamp`, so on that version a voice note that was played reports `read`.
+   * messages this account sent are reported, and only for those two chat kinds whichever way the list
+   * reached this handler; receipts from the account's own linked devices are dropped. The event
+   * buffer can merge several receipts of one participant into one entry, so each timestamp the entry
+   * carries becomes its own event. rc14 files a `played` receipt under `readTimestamp`, so on that
+   * version a voice note that was played reports `read`.
    */
   handleMessageReceiptUpdate(
     updates: Array<{
@@ -1416,7 +1423,14 @@ export class BaileysEvents {
     }
     const isSelf = this.selfMatcher();
     for (const { key, receipt } of Array.isArray(updates) ? updates : []) {
-      if (!key?.id || !key.remoteJid || key.fromMe !== true || !receipt?.userJid || isSelf(receipt.userJid)) {
+      if (
+        !key?.id ||
+        !key.remoteJid ||
+        key.fromMe !== true ||
+        !RECEIPT_CHAT_KINDS.has(chatKind(key.remoteJid)) ||
+        !receipt?.userJid ||
+        isSelf(receipt.userJid)
+      ) {
         continue;
       }
       const stamps: Array<[MessageReceiptStatus, typeof receipt.receiptTimestamp]> = [
