@@ -908,7 +908,7 @@ describe('PluginWorkerHost', () => {
           hm.runInFlight(events as HookEvent[], run),
         );
         const dispatch = (event: string) => host.dispatchHook({ event, data: {}, source: 'test', timeoutMs: 5000 });
-        return { ch, dispatch };
+        return { ch, dispatch, host };
       };
 
       afterEach(() => jest.useRealTimers());
@@ -946,7 +946,7 @@ describe('PluginWorkerHost', () => {
 
       it('holds a bounded number of late claims, giving the oldest back first', async () => {
         fakeTimers();
-        const { ch, dispatch } = build();
+        const { ch, dispatch, host } = build();
         const first = dispatch('message:sending');
         await jest.advanceTimersByTimeAsync(5000);
         await first;
@@ -960,6 +960,9 @@ describe('PluginWorkerHost', () => {
         }
 
         await expect(guardedResult(ch, 2, ['message:sending'])).resolves.toBe(false);
+        // The waiter of a dispatch whose claim was given back goes with it: an answer that late is ignored,
+        // and one entry per timed-out dispatch would otherwise pile up for as long as the worker lives.
+        expect((host as unknown as { hookPending: Map<number, unknown> }).hookPending.size).toBe(32);
         ch.crash();
       });
     });
