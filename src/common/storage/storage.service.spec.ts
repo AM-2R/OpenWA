@@ -468,3 +468,36 @@ describe('StorageService local store holding a symbolic link', () => {
     expect(listed).toEqual(['chat-media/archived.bin']);
   });
 });
+
+describe('StorageService local store on a volume whose lost+found it cannot read', () => {
+  let baseDir: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    let localPath: string;
+    ({ service, baseDir, localPath } = makeLocalService());
+    fs.mkdirSync(path.join(localPath, 'lost+found'), { recursive: true });
+    fs.writeFileSync(path.join(localPath, 'real.bin'), 'real');
+    // A mode-000 directory is still readable by root, so the failure is injected for that one path.
+    const readdir = fs.promises.readdir.bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
+    jest
+      .spyOn(fs.promises, 'readdir')
+      .mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+        String(target).endsWith('lost+found')
+          ? Promise.reject(Object.assign(new Error('EACCES: permission denied, scandir'), { code: 'EACCES' }))
+          : readdir(target, ...rest)) as never);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it('counts the media around it, as it did before directories were required to be readable', async () => {
+    expect(await service.getFileCount()).toEqual({ count: 1, sizeBytes: 4 });
+    const listed: string[] = [];
+    for await (const file of service.iterateFiles()) listed.push(file);
+    expect(listed).toEqual(['real.bin']);
+  });
+});

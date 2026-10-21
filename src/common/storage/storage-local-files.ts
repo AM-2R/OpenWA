@@ -14,8 +14,11 @@ export interface LocalWalkOptions {
    * could not read alone. An export or a count must not set it, because a short answer hides files.
    */
   skipUnreadable?: boolean;
-  logger?: Pick<LoggerService, 'warn'>;
+  logger?: Pick<LoggerService, 'log' | 'warn'>;
 }
+
+/** Created by mkfs at the top of a volume; root-owned and mode 0700, so an unprivileged app cannot read it. */
+const LOST_AND_FOUND = 'lost+found';
 
 /**
  * Local enumeration as a stream. Async + iterative (a work queue, not recursion) so a deep/wide
@@ -52,8 +55,14 @@ export async function* iterateLocalFiles(
     try {
       entries = await fs.promises.readdir(fullPath, { withFileTypes: true });
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
       // A directory removed during enumeration has no files left to export.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadable(dir, error as Error);
+      if (code === 'ENOENT') continue;
+      if (dir === LOST_AND_FOUND && (code === 'EACCES' || code === 'EPERM')) {
+        options.logger?.log(`Skipping the unreadable ${LOST_AND_FOUND} directory at the storage root`);
+        continue;
+      }
+      unreadable(dir, error as Error);
       continue;
     }
 

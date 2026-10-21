@@ -56,6 +56,42 @@ describe('iterateLocalFiles', () => {
       await expect(walk()).rejects.toBe(error);
     });
 
+    // mkfs leaves a root-owned lost+found (mode 0700) at the top of a volume. A store that sits on a volume of
+    // its own, read by an unprivileged user, would otherwise refuse every export and count for good.
+    describe('for lost+found', () => {
+      const lostAndFound = 'lost+found';
+
+      it.each(['EACCES', 'EPERM'])('skips an unreadable %s at the storage root and says so', async code => {
+        write('ok.bin');
+        write(`${lostAndFound}/recovered.bin`);
+        failReaddirAt(path.join(root, lostAndFound), code);
+        const log = jest.fn();
+
+        expect(await walk('', { logger: { log, warn: jest.fn() } })).toEqual(['ok.bin']);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining(lostAndFound));
+      });
+
+      it('walks one it can read like any other directory', async () => {
+        write(`${lostAndFound}/recovered.bin`);
+
+        expect(await walk()).toEqual([`${lostAndFound}/recovered.bin`]);
+      });
+
+      it('still fails on one that is not at the storage root', async () => {
+        write(`nested/${lostAndFound}/recovered.bin`);
+        const error = failReaddirAt(path.join(root, 'nested', lostAndFound));
+
+        await expect(walk()).rejects.toBe(error);
+      });
+
+      it('still fails on an error that is not a permission error', async () => {
+        write(`${lostAndFound}/recovered.bin`);
+        const error = failReaddirAt(path.join(root, lostAndFound), 'EIO');
+
+        await expect(walk()).rejects.toBe(error);
+      });
+    });
+
     it('fails on a directory below the maximum depth', async () => {
       write(deepKey);
 
@@ -94,7 +130,7 @@ describe('iterateLocalFiles', () => {
   describe('when asked to skip what it cannot read', () => {
     const lenient = (): { options: LocalWalkOptions; warn: jest.Mock } => {
       const warn = jest.fn();
-      return { options: { skipUnreadable: true, logger: { warn } }, warn };
+      return { options: { skipUnreadable: true, logger: { log: jest.fn(), warn } }, warn };
     };
 
     it('skips an unreadable directory, names it, and still lists the rest', async () => {
