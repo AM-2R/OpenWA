@@ -2095,11 +2095,16 @@
 }
 
 .chats-page .chat-row-menu-popover button:hover:not(:disabled),
-.chats-page .chat-row-menu-popover button:focus-visible,
-.chats-page .room-menu-popover button:hover:not(:disabled),
-.chats-page .room-menu-popover button:focus-visible {
+.chats-page .room-menu-popover button:hover:not(:disabled) {
   background: var(--bg-light);
-  outline: none;
+}
+
+/* A one-step background change does not show keyboard focus, so the entry also gets a ring. */
+.chats-page .chat-row-menu-popover button:focus-visible,
+.chats-page .room-menu-popover button:focus-visible {
+  background: var(--primary-soft);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .chats-page .chat-row-menu-popover button svg,

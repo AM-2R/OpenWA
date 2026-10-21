@@ -74,10 +74,14 @@
   color: var(--text-primary);
 }
 
-.global-search-hit:hover,
-.global-search-hit:focus-visible {
+.global-search-hit:hover {
   background: var(--bg-light);
-  outline: none;
+}
+
+.global-search-hit:focus-visible {
+  background: var(--primary-soft);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .global-search-hit:last-child {
