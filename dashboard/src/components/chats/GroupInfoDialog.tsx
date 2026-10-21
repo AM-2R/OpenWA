@@ -112,8 +112,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   const descriptionChanged = Boolean(info) && description !== (info?.description ?? '');
   const dirty = nameChanged || descriptionChanged || Boolean(newPicture);
 
-  // Each field is its own route, so each is saved on its own: a picture the engine refuses does not take
-  // a saved name down with it, and the toast names the step that failed.
+  // Each field is its own route, called in turn: name, description, picture. Those before a refusal stay saved,
+  // those after it are not tried, and the toast carries the gateway's text for the refusal.
   const save = async () => {
     if (!info || !dirty || !trimmedName || saving) return;
     setSaving(true);

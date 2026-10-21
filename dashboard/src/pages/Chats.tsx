@@ -131,30 +131,6 @@ interface IncomingWsMessage {
 // system face); 3–5 are legacy slots older clients still emit. Approximated with generic
 // families/weights since the actual faces are proprietary; slot 0 and unknown slots keep the UI
 // default.
-// The confirmation dialog's copy for each destructive chat row action; its confirm button repeats the title.
-const CONFIRM_TEXT = {
-  leave: {
-    title: 'chats.group.leave',
-    question: 'chats.group.leaveConfirm',
-    warning: 'chats.group.leaveWarning',
-  },
-  clear: {
-    title: 'chats.rowActions.clear',
-    question: 'chats.rowActions.clearConfirm',
-    warning: 'chats.rowActions.clearWarning',
-  },
-  block: {
-    title: 'chats.rowActions.block',
-    question: 'chats.rowActions.blockConfirm',
-    warning: 'chats.rowActions.blockWarning',
-  },
-  delete: {
-    title: 'chats.rowActions.delete',
-    question: 'chats.rowActions.deleteConfirm',
-    warning: 'chats.rowActions.deleteWarning',
-  },
-} as const;
-
 const STATUS_FONT: Record<number, { family?: string; weight?: number }> = {
   1: { family: 'serif' },
   2: { family: 'cursive' },
@@ -178,6 +154,30 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
     ...(slot.weight ? { fontWeight: slot.weight } : {}),
   };
 };
+
+// The confirmation dialog's copy for each destructive chat row action; its confirm button repeats the title.
+const CONFIRM_TEXT = {
+  leave: {
+    title: 'chats.group.leave',
+    question: 'chats.group.leaveConfirm',
+    warning: 'chats.group.leaveWarning',
+  },
+  clear: {
+    title: 'chats.rowActions.clear',
+    question: 'chats.rowActions.clearConfirm',
+    warning: 'chats.rowActions.clearWarning',
+  },
+  block: {
+    title: 'chats.rowActions.block',
+    question: 'chats.rowActions.blockConfirm',
+    warning: 'chats.rowActions.blockWarning',
+  },
+  delete: {
+    title: 'chats.rowActions.delete',
+    question: 'chats.rowActions.deleteConfirm',
+    warning: 'chats.rowActions.deleteWarning',
+  },
+} as const;
 
 export function Chats() {
   const { t } = useTranslation();
