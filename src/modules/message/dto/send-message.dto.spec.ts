@@ -296,6 +296,25 @@ describe('SendTemplateMessageDto identifiers', () => {
   });
 });
 
+describe('SendTextMessageDto customLinkPreview', () => {
+  const base = { chatId: 'g@g.us', text: 'hi https://example.com' };
+  const preview = { url: 'https://example.com', title: 'Example' };
+  const previewErrors = async (customLinkPreview: unknown) =>
+    (await validateDto(SendTextMessageDto, { ...base, customLinkPreview })).filter(
+      e => e.property === 'customLinkPreview',
+    );
+
+  it('accepts the preview as an object', async () => {
+    expect(await previewErrors(preview)).toHaveLength(0);
+  });
+
+  // @ValidateNested checks an array element by element, so [] and [{...}] passed and reached the engine as
+  // an array, which Baileys read .url and .title off to send an empty preview without an error.
+  it.each([[[]], [[preview]]])('refuses an array: %j', async value => {
+    expect(await previewErrors(value)).toHaveLength(1);
+  });
+});
+
 describe('published schema bounds', () => {
   const published = (cls: new () => object, key: string): Record<string, unknown> | undefined =>
     Reflect.getMetadata(DECORATORS.API_MODEL_PROPERTIES, cls.prototype as object, key) as

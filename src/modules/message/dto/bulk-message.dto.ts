@@ -68,24 +68,28 @@ export class BulkMessageContentDto {
   // object pass straight through and are persisted verbatim.
   @ApiPropertyOptional({ description: 'Image URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   image?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Video URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   video?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Audio URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   audio?: BulkMediaDto;
 
   @ApiPropertyOptional({ description: 'Document URL or base64', type: BulkMediaDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMediaDto)
   document?: BulkMediaDto;
@@ -127,6 +131,7 @@ class BulkMessageItemDto {
   type!: 'text' | 'image' | 'video' | 'audio' | 'document';
 
   @ApiProperty({ description: 'Message content based on type' })
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMessageContentDto)
   content!: BulkMessageContentDto;
@@ -190,6 +195,7 @@ export class SendBulkMessageDto {
 
   @ApiPropertyOptional({ description: 'Batch processing options' })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => BulkMessageOptionsDto)
   options?: BulkMessageOptionsDto;

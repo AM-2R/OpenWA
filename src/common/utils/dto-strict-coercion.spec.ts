@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { getMetadataStorage, validate } from 'class-validator';
+import { getMetadataStorage, validate, ValidationTypes } from 'class-validator';
 import { ClassConstructor, plainToInstance } from 'class-transformer';
 import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
@@ -115,4 +115,32 @@ describe('DTO input-coercion drift gate', () => {
       ).toBe(true);
     },
   );
+});
+
+/**
+ * The same class of drift for a single nested object. It is declared with `@ValidateNested() @Type()`,
+ * and `@ValidateNested` checks an array element by element, so without `@IsObject()` an array (even an
+ * empty one) passed and the handler read the object's fields off it: bulk `options` sent as `[{...}]`
+ * was stored as the defaults with the caller's values dropped.
+ */
+function nestedObjectProps(cls: ValidatedClass): string[] {
+  const metas = getMetadataStorage().getTargetValidationMetadatas(cls, cls.name, true, false);
+  const nested = metas.filter(m => m.type === ValidationTypes.NESTED_VALIDATION && !m.each);
+  return [...new Set(nested.map(m => m.propertyName))];
+}
+
+describe('DTO nested-object drift gate', () => {
+  const targets = registeredClasses().flatMap(cls => nestedObjectProps(cls).map(prop => ({ cls, prop })));
+
+  it('finds the nested object properties to check', () => {
+    expect(targets.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it.each(targets.map(t => [`${t.cls.name}.${t.prop}`, t] as const))('%s refuses an array', async (_label, target) => {
+    const instance = plainToInstance(target.cls, { [target.prop]: [] }, PIPE_TRANSFORM_OPTS);
+    const errors = await validate(instance, PIPE_VALIDATOR_OPTS);
+
+    const refused = errors.some(e => e.property === target.prop);
+    expect(refused || `${target.cls.name}.${target.prop} accepted an array. Add @IsObject().`).toBe(true);
+  });
 });

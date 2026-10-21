@@ -8,6 +8,7 @@ import {
   IsArray,
   ArrayMaxSize,
   IsBoolean,
+  IsObject,
   Validate,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -165,6 +166,7 @@ export class SendTextMessageDto {
       'with `linkPreview: false`, which asks for the opposite.',
   })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => CustomLinkPreviewDto)
   customLinkPreview?: CustomLinkPreviewDto;

@@ -6,6 +6,7 @@ import {
   ArrayMaxSize,
   IsDefined,
   IsNotEmpty,
+  IsObject,
   Matches,
   MaxLength,
   ValidateIf,
@@ -46,6 +47,7 @@ class StatusMediaInput {
 export class SendImageStatusDto {
   @ApiProperty({ description: 'Image source (URL or base64).', type: StatusMediaInput })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   image!: StatusMediaInput;
@@ -77,6 +79,7 @@ export class SendImageStatusDto {
 export class SendVideoStatusDto {
   @ApiProperty({ description: 'Video source (URL or base64).', type: StatusMediaInput })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   video!: StatusMediaInput;
@@ -117,6 +120,7 @@ export class SendVoiceStatusDto {
     type: StatusMediaInput,
   })
   @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => StatusMediaInput)
   audio!: StatusMediaInput;

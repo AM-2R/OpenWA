@@ -75,6 +75,29 @@ describe('SendBulkMessageDto media url', () => {
   });
 });
 
+// @ValidateNested checks an array element by element, so a nested object sent as an array passed. The
+// service then read its fields off the array: options [{...}] was stored as the defaults with the caller's
+// values dropped, and a media object in an array was only refused later, with a message about the text.
+describe('SendBulkMessageDto nested objects refuse an array', () => {
+  const options = { delayBetweenMessages: 60000, randomizeDelay: false, stopOnError: true };
+
+  it('accepts the options as an object', async () => {
+    await accepts({ ...textItem('hi'), options });
+  });
+
+  it.each([[[]], [[{}]], [[options]]])('refuses options given as an array: %j', async value => {
+    await rejects({ ...textItem('hi'), options: value });
+  });
+
+  it('refuses a message content given as an array', async () => {
+    await rejects({ messages: [{ chatId: 'c@c.us', type: 'text', content: [{ text: 'hi' }] }] });
+  });
+
+  it.each(['image', 'video', 'audio', 'document'])('refuses %s given as an array', async kind => {
+    await rejects({ messages: [{ chatId: 'c@c.us', type: kind, content: { [kind]: [{ base64: 'AAAA' }] } }] });
+  });
+});
+
 // @nestjs/swagger does not derive bounds from the validators, so the published schema has to declare
 // them itself, or a client generated from it accepts arrays the server answers with a 400.
 describe('SendBulkMessageDto published schema', () => {

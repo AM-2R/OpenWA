@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 /**
@@ -180,30 +180,35 @@ export class EngineConfigDto {
 export class SaveConfigDto {
   @ApiPropertyOptional({ type: () => DatabaseConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => DatabaseConfigDto)
   database?: DatabaseConfigDto;
 
   @ApiPropertyOptional({ type: () => RedisConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => RedisConfigDto)
   redis?: RedisConfigDto;
 
   @ApiPropertyOptional({ type: () => QueueConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => QueueConfigDto)
   queue?: QueueConfigDto;
 
   @ApiPropertyOptional({ type: () => StorageConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => StorageConfigDto)
   storage?: StorageConfigDto;
 
   @ApiPropertyOptional({ type: () => EngineConfigDto })
   @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => EngineConfigDto)
   engine?: EngineConfigDto;
