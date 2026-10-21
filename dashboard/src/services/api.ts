@@ -458,6 +458,18 @@ export interface GroupAck {
   message: string;
 }
 
+/** One participant's outcome of a membership write; the gateway answers 200 even when some are refused. */
+export interface GroupParticipantResult {
+  id: string;
+  success: boolean;
+  status?: number;
+  message?: string;
+}
+
+export interface GroupParticipantsAck extends GroupAck {
+  results: GroupParticipantResult[];
+}
+
 export interface Contact {
   id: string;
   name?: string;
@@ -923,17 +935,17 @@ export const sessionApi = {
       body: JSON.stringify({ base64, mimetype }),
     }),
   addGroupParticipants: (id: string, groupId: string, participants: string[]) =>
-    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
+    request<GroupParticipantsAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
       method: 'POST',
       body: JSON.stringify({ participants }),
     }),
   removeGroupParticipants: (id: string, groupId: string, participants: string[]) =>
-    request<GroupAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
+    request<GroupParticipantsAck>(`/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants`, {
       method: 'DELETE',
       body: JSON.stringify({ participants }),
     }),
   setGroupAdmins: (id: string, groupId: string, participants: string[], admin: boolean) =>
-    request<GroupAck>(
+    request<GroupParticipantsAck>(
       `/sessions/${id}/groups/${encodeURIComponent(groupId)}/participants/${admin ? 'promote' : 'demote'}`,
       { method: 'POST', body: JSON.stringify({ participants }) },
     ),

@@ -3,7 +3,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Crown, Info, Loader2, RefreshCw, ShieldCheck, ShieldOff, UserMinus, UserPlus, Users } from 'lucide-react';
 import { Modal } from '../Modal';
-import { contactApi, sessionApi, type Chat, type GroupInfo, type Session } from '../../services/api';
+import {
+  contactApi,
+  sessionApi,
+  type Chat,
+  type GroupInfo,
+  type GroupParticipantResult,
+  type GroupParticipantsAck,
+  type Session,
+} from '../../services/api';
 import { useProfilePicture } from '../../hooks/useProfilePicture';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
@@ -26,6 +34,13 @@ interface GroupInfoDialogProps {
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : undefined);
+
+/** The participant a membership write refused, with the reason the engine gave. */
+const refusalText = (r: GroupParticipantResult) => {
+  const who = r.id.replace(/@.*/, '');
+  const why = r.message ?? (r.status ? `HTTP ${r.status}` : undefined);
+  return why ? `${who}: ${why}` : who;
+};
 
 /** Whether a participant is this session's own account. */
 const isOwnAccount = (participant: GroupInfo['participants'][number], session: Session) => {
@@ -124,28 +139,37 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // --- Participants ---
   const [pending, setPending] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
-  const runMemberAction = async (key: string, action: () => Promise<unknown>) => {
+  // The gateway answers 200 for a membership write even when it refused some participants, and says
+  // which in `results`. Returns whether every participant was accepted.
+  const runMemberAction = async (key: string, action: () => Promise<GroupParticipantsAck>): Promise<boolean> => {
     setPending(key);
     try {
-      await action();
+      const { results } = await action();
+      const refused = results.filter(r => !r.success);
+      if (refused.length > 0) {
+        showError(t('chats.group.memberActionFailed'), refused.map(refusalText).join('; '));
+      }
       await infoQuery.refetch();
+      return refused.length === 0;
     } catch (err) {
       showError(t('chats.group.memberActionFailed'), errorText(err));
+      return false;
     } finally {
       setPending(null);
     }
   };
   // A number is checked first, as in the new-chat panel: the gateway resolves it to the id WhatsApp uses.
-  const addMember = () =>
-    runMemberAction('add', async () => {
+  const addMember = async () => {
+    const added = await runMemberAction('add', async () => {
       const digits = newMember.replace(/\D/g, '').replace(/^00/, '');
       const check = await contactApi.checkNumber(session.id, digits);
       if (!check.exists || !check.whatsappId) {
         throw new Error(t('chats.newChat.notOnWhatsApp', { number: formatPhoneForDisplay(digits) ?? `+${digits}` }));
       }
-      await sessionApi.addGroupParticipants(session.id, group.id, [check.whatsappId]);
-      setNewMember('');
+      return sessionApi.addGroupParticipants(session.id, group.id, [check.whatsappId]);
     });
+    if (added) setNewMember('');
+  };
 
   const sessionName = session.name;
   const subheader = (

@@ -66,6 +66,8 @@ let listGroup = false;
 let blockedIds: string[] = [];
 // Whether the session's own number administers GROUP.
 let groupAdmin = true;
+// When true, a membership write answers HTTP 200 and reports every participant as refused.
+let refuseMember = false;
 
 const CONTACT = { id: '15550002222@c.us', name: 'Bob', number: '15550002222', isMyContact: true, isBlocked: false };
 const ALICE_CONTACT = { id: CHAT.id, name: 'Alice', number: '15550001111', isMyContact: true, isBlocked: false };
@@ -152,6 +154,17 @@ function installFetchStub(): void {
     ) {
       return Promise.resolve(jsonResponse({ success: !declineWrites }));
     }
+    if (path.startsWith(`${groupPath}/participants`)) {
+      const { participants } = body as { participants: string[] };
+      const refusal = refuseMember ? { status: 403, message: 'not-authorized' } : {};
+      return Promise.resolve(
+        jsonResponse({
+          success: true,
+          message: 'ok',
+          results: participants.map(id => ({ id, success: !refuseMember, ...refusal })),
+        }),
+      );
+    }
     if (path.startsWith(`${groupPath}/`)) {
       return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
     }
@@ -218,6 +231,7 @@ afterEach(async () => {
   gates.clear();
   listGroup = false;
   groupAdmin = true;
+  refuseMember = false;
   blockedIds = [];
   window.sessionStorage.setItem('openwa_user_role', 'admin');
   window.sessionStorage.setItem('openwa_engine_type', 'baileys');
@@ -381,6 +395,32 @@ test('the group dialog saves a new name through the subject route and renames th
   fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
   assert.ok(within(dialog).getByText('Bob'));
   assert.ok(within(dialog).getByRole('button', { name: 'Remove: Bob' }), 'an admin was offered no member actions');
+});
+
+test('a participant the gateway refuses is reported although the write answered 200', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  renderPage();
+  await screen.findByText('Team');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Team' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Group info' }));
+  const dialog = await screen.findByRole('dialog');
+  await within(dialog).findByText(`Managed via ${SESSION.name}`);
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+
+  const promotes = () => fetchCalls.filter(c => c.path.endsWith('/participants/promote')).length;
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Make admin: Bob' }));
+  await waitFor(() => assert.equal(promotes(), 1));
+  await waitFor(() =>
+    assert.ok(!(within(dialog).getByRole('button', { name: 'Make admin: Bob' }) as HTMLButtonElement).disabled),
+  );
+  assert.ok(!screen.queryByText('The action failed'), 'an accepted write was reported as failed');
+
+  refuseMember = true;
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Make admin: Bob' }));
+  await screen.findByText('The action failed');
+  await screen.findByText('15550002222: not-authorized');
+  assert.equal(promotes(), 2);
 });
 
 test('a member who is no admin sees the group read-only, and a viewer key gets no write actions', async () => {
