@@ -44,6 +44,8 @@ const toInternationalDigits = (input: string): string | null => {
 
 const contactLabel = (c: Contact): string => c.name || c.pushName || formatPhoneForDisplay(c.id) || c.number;
 
+const numberMatchesId = (c: Contact): boolean => c.number === c.id.split('@')[0];
+
 // A chat row for a conversation the engine may not list yet (no history). The first message, or the
 // next chat-list load, replaces it with the engine's own row.
 const draftChat = (id: string, name: string, kind: Chat['kind'], timestamp = 0): Chat => ({
@@ -95,14 +97,18 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
   });
 
   // Saved, unblocked personal contacts, alphabetically. The address book also lists groups and
-  // broadcast lists, which can be neither a 1:1 chat nor a group participant.
-  const contacts = useMemo(
-    () =>
-      (contactsQuery.data ?? [])
-        .filter(c => c.isMyContact && !c.isBlocked && !c.id.endsWith('@g.us') && !c.id.endsWith('@broadcast'))
-        .sort((a, b) => contactLabel(a).localeCompare(contactLabel(b))),
-    [contactsQuery.data],
-  );
+  // broadcast lists, which can be neither a 1:1 chat nor a group participant. whatsapp-web.js lists a
+  // contact it holds as both a LID and a phone record twice under one id, and only the copy whose
+  // `number` is the id's is found by its phone number below, so that is the copy kept.
+  const contacts = useMemo(() => {
+    const byId = new Map<string, Contact>();
+    for (const c of contactsQuery.data ?? []) {
+      if (!c.isMyContact || c.isBlocked || c.id.endsWith('@g.us') || c.id.endsWith('@broadcast')) continue;
+      const kept = byId.get(c.id);
+      if (!kept || (!numberMatchesId(kept) && numberMatchesId(c))) byId.set(c.id, c);
+    }
+    return [...byId.values()].sort((a, b) => contactLabel(a).localeCompare(contactLabel(b)));
+  }, [contactsQuery.data]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const queryDigits = query.replace(/\D/g, '');

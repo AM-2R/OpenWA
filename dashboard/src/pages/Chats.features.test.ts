@@ -84,6 +84,10 @@ const PUSH_ONLY_CONTACT = {
 };
 const LID_CHAT: Chat = { ...CHAT, id: '262813461250071@lid', name: 'Lia', lastMessage: 'from a lid' };
 let listExtra = false;
+// Served when a test turns `listDuplicateContact` on: Bob listed twice under one id, as whatsapp-web.js lists a
+// contact it holds as both a LID and a phone record. The first copy carries another number than the id's.
+const DUPLICATE_CONTACT = { ...CONTACT, number: '262813461250071' };
+let listDuplicateContact = false;
 // The number the new-chat tests type, and the id the gateway resolves it to.
 const TYPED_NUMBER = '+1 555 000 9999';
 const RESOLVED_ID = '15550009999@c.us';
@@ -178,7 +182,14 @@ function installFetchStub(): void {
       return gated('check', () => jsonResponse({ exists: true, whatsappId: RESOLVED_ID }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts?`)) {
-      return Promise.resolve(jsonResponse([ALICE_CONTACT, CONTACT, ...(listExtra ? [PUSH_ONLY_CONTACT] : [])]));
+      return Promise.resolve(
+        jsonResponse([
+          ALICE_CONTACT,
+          ...(listDuplicateContact ? [DUPLICATE_CONTACT] : []),
+          CONTACT,
+          ...(listExtra ? [PUSH_ONLY_CONTACT] : []),
+        ]),
+      );
     }
     if (method === 'GET' && path.startsWith(`${base}/messages?`)) {
       return Promise.resolve(jsonResponse({ messages: [], total: 0 }));
@@ -227,6 +238,7 @@ afterEach(async () => {
   fetchCalls.length = 0;
   listSecond = false;
   listExtra = false;
+  listDuplicateContact = false;
   declineWrites = false;
   gates.clear();
   listGroup = false;
@@ -266,6 +278,21 @@ test('a quick filter that matches no chat says so instead of claiming the accoun
   fireEvent.click(screen.getByRole('button', { name: 'Groups' }));
   assert.ok(screen.getByText('No chats match this filter'));
   assert.ok(!screen.queryByText('Alice'), 'the filter left a 1:1 chat in the groups list');
+});
+
+test('a contact the engine lists twice under one id is offered once, and found by its phone number', async () => {
+  const { screen, fireEvent } = rtl;
+  listDuplicateContact = true;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  await screen.findByRole('button', { name: /Bob/ });
+  assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was listed twice');
+
+  fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
+    target: { value: CONTACT.number },
+  });
+  assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was not found by his phone number');
 });
 
 for (const reactStrictMode of [false, true]) {
