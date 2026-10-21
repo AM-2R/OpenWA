@@ -1045,7 +1045,7 @@
       "copy": "Copy",
       "copied": "Copied",
       "checkedAt": "Checked At",
-      "openTester": "Open in Message Tester"
+      "openTester": "Go to Message Tester"
     },
     "recent": {
       "title": "Recent Checks",

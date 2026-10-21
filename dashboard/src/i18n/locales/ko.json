@@ -1045,7 +1045,7 @@
       "copy": "복사",
       "copied": "복사됨",
       "checkedAt": "확인 시각",
-      "openTester": "메시지 테스터에서 열기"
+      "openTester": "메시지 테스터로 이동"
     },
     "recent": {
       "title": "최근 확인 기록",

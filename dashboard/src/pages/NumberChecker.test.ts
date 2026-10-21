@@ -272,6 +272,16 @@ test('NumberChecker: both result tables sit in a scroll container, so a narrow c
   assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
 });
 
+test('NumberChecker: the Message Tester button reads as a plain link, because it passes no number along', async () => {
+  stubLookups(registered);
+  renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '919876543210' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+  assert.ok(rtl.screen.getByRole('button', { name: 'Go to Message Tester' }));
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
