@@ -72,6 +72,7 @@
     "logs": "Logs"
   },
   "chats": {
+    "edited": "Edited",
     "media": {
       "location": "Location",
       "call": "Call",

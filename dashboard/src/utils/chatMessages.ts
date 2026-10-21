@@ -249,6 +249,7 @@ export interface ChatMessageView extends ChatMessage {
     media?: MessageMedia;
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    edited?: boolean;
     call?: { video: boolean; missed: boolean };
     buttons?: Array<{ id: string; text: string }>;
     poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
@@ -336,6 +337,7 @@ function mergeMessageMetadata(
     return incoming.media;
   })();
   const merged: NonNullable<ChatMessageView['metadata']> = {};
+  if (existing.edited || incoming.edited) merged.edited = true;
   if (media) merged.media = media;
   const quotedMessage = incoming.quotedMessage ?? existing.quotedMessage;
   if (quotedMessage) merged.quotedMessage = quotedMessage;
@@ -470,6 +472,6 @@ export function applyMessageEdit(
   const idx = list.findIndex(byMessageId(event.messageId));
   if (idx === -1 || list[idx].type === 'revoked') return list;
   const next = list.slice();
-  next[idx] = { ...next[idx], body: event.body };
+  next[idx] = { ...next[idx], body: event.body, metadata: { ...next[idx].metadata, edited: true } };
   return next;
 }

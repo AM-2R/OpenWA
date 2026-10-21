@@ -151,6 +151,7 @@ export class MessageMutationProjector {
         { sessionId: id, waMessageId: message.messageId, type: Not('revoked') },
         { body: message.body },
       );
+      await this.markMessageEdited(id, message.messageId);
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }
@@ -158,6 +159,14 @@ export class MessageMutationProjector {
     const editedPayload = message as unknown as Record<string, unknown>;
     this.eventsGateway.emitMessageEdited(id, editedPayload);
     void this.webhookService.dispatch(id, 'message.edited', editedPayload);
+  }
+
+  /** Keep the marker alongside existing reactions, media and quote metadata. */
+  private async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
+    await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
+      ...metadata,
+      edited: true,
+    }));
   }
 
   /**
@@ -187,6 +196,7 @@ export class MessageMutationProjector {
             return;
           }
           await this.messageRepository.update({ sessionId, waMessageId: messageId, type: Not('revoked') }, { body });
+          await this.markMessageEdited(sessionId, messageId);
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
         } finally {

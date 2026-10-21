@@ -74,6 +74,7 @@
     "logs": "Journaux"
   },
   "chats": {
+    "edited": "Modifié",
     "media": {
       "location": "Localisation",
       "call": "Appel",

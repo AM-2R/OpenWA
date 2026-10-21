@@ -637,7 +637,7 @@ describe('Baileys inbound messages held for storage', () => {
       });
       await flush();
 
-      expect(h.rows).toEqual([{ ...real(), body: 'fixed' }]);
+      expect(h.rows).toEqual([{ ...real(), body: 'fixed', metadata: { edited: true } }]);
     });
   });
 

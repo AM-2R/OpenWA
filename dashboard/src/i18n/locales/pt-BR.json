@@ -74,6 +74,7 @@
     "templates": "Modelos"
   },
   "chats": {
+    "edited": "Editado",
     "media": {
       "location": "Localização",
       "call": "Chamada",

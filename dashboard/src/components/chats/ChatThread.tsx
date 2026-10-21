@@ -741,6 +741,7 @@ function ChatThread({
                   )}
 
                   <div className="message-meta">
+                    {!isRevoked && msg.metadata?.edited && <span className="message-edited">{t('chats.edited')}</span>}
                     <span className="message-time">{formattedTime}</span>
                     {/* delivered and read render the SAME glyph and differ only in colour, which
                         carries the meaning nowhere a screen reader or a colour-blind reader can

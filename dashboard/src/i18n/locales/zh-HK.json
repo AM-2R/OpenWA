@@ -72,6 +72,7 @@
     "logs": "記錄"
   },
   "chats": {
+    "edited": "已編輯",
     "media": {
       "location": "位置",
       "call": "通話",

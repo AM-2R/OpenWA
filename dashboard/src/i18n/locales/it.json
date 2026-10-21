@@ -74,6 +74,7 @@
     "logs": "Log"
   },
   "chats": {
+    "edited": "Modificato",
     "media": {
       "location": "Posizione",
       "call": "Chiamata",
