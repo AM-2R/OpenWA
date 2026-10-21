@@ -150,6 +150,16 @@
 > exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
 > every form for the rooms to match.
 >
+> **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
+> than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches
+> the other replicas late. A longer silence, a restart, a failover or an outage drops the connection a node
+> publishes on, and what was written to it may be lost with it. The events that node raises while it is
+> disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are dropped for the clients
+> connected to the other replicas: they are not delivered late and not twice. Clients connected to the node
+> that raised an event are served directly, and webhooks do not use this path, so neither is affected. The
+> node holds at most 10 s of unanswered events, which bounds what a stalled Redis can cost in memory. A
+> replica whose own Redis connection is reconnecting also misses what the others publish meanwhile.
+>
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The
 > node that processes a revoke, delete, or narrowing tears down that key's sockets synchronously, in
 > the same request. Nothing is published to peers. Every node re-validates the keys behind its own

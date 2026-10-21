@@ -75,7 +75,15 @@ export function rejectRootNamespace(server: Server): void {
  * Failure posture: if the pub/sub clients cannot be created the server falls back to the in-memory
  * adapter — the local node keeps working, only cross-node fan-out is lost — rather than refusing to
  * boot. A Redis outage, at boot or after it, is ioredis's problem to retry; the adapter recovers on reconnect.
- * Events raised on this node while Redis is unreachable or silent are not replayed to the other replicas.
+ *
+ * Delivery while Redis is away: the fan-out to the other replicas is best effort and keeps no replay queue.
+ * A Redis that pauses for less than WS_REDIS_SOCKET_TIMEOUT_MS answers afterwards, and every event raised
+ * meanwhile reaches them late. A longer silence, a restart, a failover or an outage drops the publisher's
+ * connection, and what was written to it may be lost with it. The events this node raises while it is
+ * disconnected, plus its reconnect backoff of up to 5 s once Redis is back (wsRedisOptions), are dropped for
+ * the other replicas, never delivered late and never twice. Clients on this node are served by the local
+ * broadcast and webhooks do not use this path, so neither is affected, and what the publisher holds is
+ * bounded by one socket deadline of traffic.
  */
 export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
@@ -94,10 +102,11 @@ export class RedisIoAdapter extends IoAdapter {
       // The publisher is the only client that waits for replies, and a Redis that keeps the connection open but
       // stops answering (a frozen process, a stalled disk) never errors it: every broadcast would wait in the
       // client, payload and all, for as long as the stall lasts. So the promise of a command the peer does not
-      // answer in time is rejected (the command stays on the wire), a socket that stays silent for the socket
-      // deadline is destroyed and the client reconnects, nothing is queued while it is disconnected, and nothing
-      // the old socket may already have delivered is sent again. A stall holds at most that many seconds of
-      // traffic and never delivers an event twice.
+      // answer in time is rejected (the command stays on the wire, so a slow Redis still delivers it), a socket
+      // that stays silent for the socket deadline is destroyed and the client reconnects, nothing is queued for
+      // a connection it does not have, and nothing the old socket may already have delivered is sent again. An
+      // event raised while disconnected is therefore dropped for the other replicas rather than replayed late,
+      // and a stall holds at most one socket deadline of traffic.
       const pubClient = new Redis({
         ...wsRedisOptions(),
         commandTimeout: WS_REDIS_COMMAND_TIMEOUT_MS,
@@ -119,12 +128,13 @@ export class RedisIoAdapter extends IoAdapter {
       }
       // The adapter fires publish() on every broadcast and drops the promise. During an outage each of
       // those commands is rejected, so every event emitted meanwhile surfaced as an unhandled
-      // rejection. The 'error' listener above already reports the outage once; a lost fan-out frame is
-      // only worth a debug line.
+      // rejection. The 'error' listener above already reports the outage once; a fan-out frame without a
+      // confirmed delivery is only worth a debug line. A timed-out command was still written, and a slow
+      // Redis delivers it late; one rejected for lack of a connection was never sent.
       const publish = pubClient.publish.bind(pubClient);
       pubClient.publish = (channel: string, message: string | Buffer) =>
         publish(channel, message).catch((err: Error) => {
-          logger.debug(`Redis publish dropped: ${err.message}`);
+          logger.debug(`Redis publish not confirmed: ${err.message}`);
           return 0;
         });
       this.pubClient = pubClient;
