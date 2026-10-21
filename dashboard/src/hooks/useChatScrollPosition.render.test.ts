@@ -383,3 +383,92 @@ test('a chat left mid-thread comes back where the reader left it', async () => {
     restore();
   }
 });
+
+// ── Which scroll events are the reader's ─────────────────────────────────────
+// A browser reports at most one scroll event per frame, however many writes the frame held, and reports the
+// clamp a content swap causes as one too. None of that is the reader moving the thread.
+
+test('a restore keeps its pending position through the scroll event the content swap raised', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the reader's spot in A
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 4200); // B is left at its bottom
+
+    // Back to A, whose images have not decoded: the cached thread is short, so the browser clamps the offset B
+    // left and reports it. The restore write finds the thread already there and moves nothing.
+    g.height = 2000;
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el);
+
+    g.height = 4600; // the images decode
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'the saved spot was lost to the clamp');
+  } finally {
+    restore();
+  }
+});
+
+test('decodes that share a frame do not turn their one scroll event into the reader scrolling', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000);
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 300);
+
+    g.height = 2000; // A again, its images not decoded
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el);
+
+    // Two images decode in one frame. The first write moves the thread; the second finds it where the first
+    // left it. The browser reports the frame as a single event.
+    g.height = 3200;
+    hook().onMediaLoad();
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 2800);
+    fireEvent.scroll(el);
+
+    g.height = 4600; // the rest decode
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, "the saved spot was lost to the frame's scroll event");
+  } finally {
+    restore();
+  }
+});
+
+test('a reader scrolling back to where a pin left the thread is still the reader', async () => {
+  const { render, screen, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 4200 }; // already at the bottom, so the opening pin moves nothing
+  const restore = installGeometry(g);
+  try {
+    render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    readerScrollsTo(el, 3000);
+    readerScrollsTo(el, 4200); // exactly where the pin left it: the reader's scroll, which pins the thread again
+
+    g.height = 4900; // an image decodes below
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 4500, 'a reader at the bottom was not kept there');
+  } finally {
+    restore();
+  }
+});

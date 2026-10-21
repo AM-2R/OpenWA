@@ -167,9 +167,12 @@ export function useChatScrollPosition(
   // still-short scrollHeight and the thread lands at the top. The saved value lives here and is
   // re-applied on every media decode until the user scrolls (any genuine scroll cancels it).
   const pendingRestoreRef = useRef<number | null>(null);
-  // Marks our own writes so the scroll listener can skip them (a genuine user scroll both updates
-  // the pin state / position map AND cancels pendingRestore; our writes must do neither).
-  const programmaticWriteRef = useRef<boolean>(false);
+  // Where our own last write left the thread, so the scroll listener can skip the event it raised (a genuine
+  // user scroll both updates the pin state / position map AND cancels pendingRestore; our writes must do
+  // neither). That event reports the position by value, and so does the clamp event a content swap queued
+  // before a write that then moved nothing. A browser raises one event per frame however many writes the
+  // frame held, so a flag cleared by a write that moved nothing handed the frame's one event to the reader.
+  const programmaticTopRef = useRef<number | null>(null);
   // See the layout effect below.
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
@@ -181,12 +184,9 @@ export function useChatScrollPosition(
   const mediaHeights = useRef(new WeakMap<Element, number>());
 
   const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
-    const before = el.scrollTop;
-    programmaticWriteRef.current = true;
     el.scrollTop = top;
-    // No scroll event fires when the value doesn't change (or clamps to the same value) — don't
-    // leave the flag set to swallow the next genuine user scroll.
-    if (el.scrollTop === before) programmaticWriteRef.current = false;
+    // The read-back, not `top`: the browser clamps a write to the content.
+    programmaticTopRef.current = el.scrollTop;
   }, []);
 
   const pinToBottom = useCallback(
@@ -218,10 +218,10 @@ export function useChatScrollPosition(
     const el = containerRef.current;
     if (!el) return undefined;
     const onScroll = () => {
-      if (programmaticWriteRef.current) {
-        programmaticWriteRef.current = false;
-        return;
-      }
+      // Any event ends the marker's use: a reader who lands on the same offset later is the reader.
+      const ours = el.scrollTop === programmaticTopRef.current;
+      programmaticTopRef.current = null;
+      if (ours) return;
       // A genuine user scroll: cancels any pending restore, then updates pin + position map.
       pendingRestoreRef.current = null;
       const atBottom = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
