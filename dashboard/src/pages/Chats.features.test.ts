@@ -66,7 +66,8 @@ let listGroup = false;
 let blockedIds: string[] = [];
 // Whether the session's own number administers GROUP.
 let groupAdmin = true;
-// When true, a membership write answers HTTP 200 and reports every participant as refused.
+// When true, a membership write answers HTTP 200 with its participants refused in `results`, as the route does
+// for a batch WhatsApp turns down in part.
 let refuseMember = false;
 
 const CONTACT = { id: '15550002222@c.us', name: 'Bob', number: '15550002222', isMyContact: true, isBlocked: false };
