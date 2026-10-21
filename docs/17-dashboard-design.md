@@ -566,15 +566,19 @@ export function useStopSessionMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => sessionApi.stop(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+    // A failed stop can still have changed the session, so the list is re-read either way.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
+    },
   });
 }
 ```
 
 > **There is no `useSessionQr` hook and no 30 s `refetchInterval`.** The Sessions page fetches the
 > current QR imperatively via `sessionApi.getQR()`, and `useSessionPairing` re-reads it with
-> `GET /sessions/:id/qr` every 5 s for as long as the QR modal is open; fresh codes are also pushed
-> over the WebSocket (`session.qr` events, see §17.6).
+> `GET /sessions/:id/qr` every 5 s while the QR modal is open and the session is `qr_ready`; in any
+> other state the poll sends no request, and the modal stays open through `authenticating`. The first
+> code and fresh ones are pushed over the WebSocket (`session.qr` events, see §17.6).
 
 ## 17.6 WebSocket Integration
 
