@@ -254,8 +254,8 @@ const hookRef: MutableRefObject<ReturnType<typeof useChatScrollPosition> | null>
 const hook = (): ReturnType<typeof useChatScrollPosition> =>
   hookRef.current as ReturnType<typeof useChatScrollPosition>;
 
-function Probe({ chatId }: { chatId: string | null }) {
-  const result = useChatScrollPosition(chatId, chatId !== null, false);
+function Probe({ chatId, loaded = chatId !== null }: { chatId: string | null; loaded?: boolean }) {
+  const result = useChatScrollPosition(chatId, loaded, false);
   useEffect(() => {
     hookRef.current = result;
   });
@@ -468,6 +468,142 @@ test('a reader scrolling back to where a pin left the thread is still the reader
     hook().onMediaLoad();
     await nextFrame();
     assert.equal(el.scrollTop, 4500, 'a reader at the bottom was not kept there');
+  } finally {
+    restore();
+  }
+});
+
+// ── Following a live message ─────────────────────────────────────────────────
+// The Chats page announces a message when it writes it to the cache, and the row reaches the DOM after the cache
+// notifies its observers and React renders, which a frame can overtake.
+
+test('a live message is followed by the commit that adds its row, even when a frame ran first', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+
+    hook().onMessageAppended('incoming');
+    await nextFrame(); // a frame lands before the commit: the thread has not grown yet
+    rerender(createElement(Probe, { chatId: 'A' })); // so does a commit of something else, the sidebar
+    g.height += 300;
+    rerender(createElement(Probe, { chatId: 'A' })); // the row
+    await nextFrame();
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the newest message was left below the fold');
+  } finally {
+    restore();
+  }
+});
+
+test('a reader who scrolled away before the row was committed is not pulled back down', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+
+    hook().onMessageAppended('incoming');
+    readerScrollsTo(el, 3000);
+    await nextFrame();
+    g.height += 300;
+    rerender(createElement(Probe, { chatId: 'A' }));
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'the reader was taken to the bottom');
+  } finally {
+    restore();
+  }
+});
+
+test('a message announced in a chat that was left before its row committed pins nothing in the next chat', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 4140); // the spot the reader left in B, just above its bottom
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el);
+
+    hook().onMessageAppended('incoming');
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader goes back to B before the row lands
+    fireEvent.scroll(el);
+    g.height += 300; // B's thread grows for a reason of its own
+    rerender(createElement(Probe, { chatId: 'B' }));
+    await nextFrame();
+    assert.equal(el.scrollTop, 4140, "the other chat's message moved the reader's spot in B");
+  } finally {
+    restore();
+  }
+});
+
+test('a message the reader is far from the bottom of leaves their position alone', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1000);
+
+    await liveMessage(g, rerender, 'incoming', 300);
+    assert.equal(el.scrollTop, 1000);
+  } finally {
+    restore();
+  }
+});
+
+test('a message the reader sent always scrolls the thread to it', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1000);
+
+    await liveMessage(g, rerender, 'outgoing', 300);
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT);
+  } finally {
+    restore();
+  }
+});
+
+test('a message announced while its chat is still loading does not override where the chat opens', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the spot the reader left in A
+    rerender(createElement(Probe, { chatId: null }));
+
+    // A is opened again from a cold cache: a spinner, then the thread. The message arrives in between.
+    g.height = CLIENT_HEIGHT;
+    rerender(createElement(Probe, { chatId: 'A', loaded: false }));
+    hook().onMessageAppended('incoming');
+    g.height = 4900;
+    rerender(createElement(Probe, { chatId: 'A', loaded: true }));
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'the message took the reader from the spot they left');
   } finally {
     restore();
   }

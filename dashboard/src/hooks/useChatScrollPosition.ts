@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { decideScroll, type ScrollDirection } from '../utils/scrollDecision.ts';
+import { decideScroll, type ScrollDirection, type ScrollGeometry } from '../utils/scrollDecision.ts';
 
 /**
  * Decide the restore target on a chat switch or load-resolve.
@@ -47,8 +47,10 @@ export function decideRestoreTarget(
  *   (spinner first, then data) correctly waits to restore until the messages
  *   list is mounted with non-zero scrollHeight.
  * - On message append: `onMessageAppended(direction)` snapshots the geometry
- *   BEFORE the new message is committed, then defers the scroll-to-bottom (if
- *   any) to the next frame so the new message is already in the DOM.
+ *   BEFORE the new message is committed and decides whether the thread follows
+ *   it; the scroll-to-bottom (if any) is applied by the commit that grows the
+ *   thread, so the new message is already in the DOM. A frame is not that
+ *   commit: it can run between the cache write and the render.
  * - Pinned-to-bottom: media (`<img>`/`<video>`) has no intrinsic size before it
  *   decodes, so the container's scrollHeight GROWS after the initial restore —
  *   silently un-bottoming the view (the thread looks like it "opened at the
@@ -173,6 +175,11 @@ export function useChatScrollPosition(
   // before a write that then moved nothing. A browser raises one event per frame however many writes the
   // frame held, so a flag cleared by a write that moved nothing handed the frame's one event to the reader.
   const programmaticTopRef = useRef<number | null>(null);
+  // A live message the thread is to follow, until the commit that adds its row applies it (see the layout effect
+  // after the older-page landing).
+  const pendingFollowRef = useRef<{ chat: string | null; direction: ScrollDirection; geometry: ScrollGeometry } | null>(
+    null,
+  );
   // See the layout effect below.
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
@@ -309,6 +316,23 @@ export function useChatScrollPosition(
     }
   });
 
+  // Applies a live message's follow on the first commit that grows the thread (see onMessageAppended): the row
+  // is in the DOM, and no frame can have run between the commit and the pin. The reader may have scrolled away
+  // while the row was on its way, so the follow question is asked again, against where they are now.
+  useLayoutEffect(() => {
+    const follow = pendingFollowRef.current;
+    const el = containerRef.current;
+    if (!follow || !el) return;
+    // The chat the message was announced in is not the one on screen any more.
+    if (follow.chat !== prevChatIdRef.current) {
+      pendingFollowRef.current = null;
+      return;
+    }
+    if (el.scrollHeight <= follow.geometry.scrollHeight) return;
+    pendingFollowRef.current = null;
+    if (decideScroll(follow.direction, { ...follow.geometry, scrollTop: el.scrollTop }) === 'bottom') followBottom(el);
+  });
+
   const onOlderMessagesRequested = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -317,23 +341,14 @@ export function useChatScrollPosition(
     awaitingOlderPageRef.current = true;
   }, []);
 
-  const onMessageAppended = useCallback(
-    (direction: ScrollDirection) => {
-      const el = containerRef.current;
-      if (!el) return;
-      const action = decideScroll(direction, {
-        scrollTop: el.scrollTop,
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-      });
-      if (action === 'preserve') return;
-      requestAnimationFrame(() => {
-        const cur = containerRef.current;
-        if (cur) followBottom(cur);
-      });
-    },
-    [followBottom],
-  );
+  const onMessageAppended = useCallback((direction: ScrollDirection) => {
+    const el = containerRef.current;
+    // A chat that has not rendered its thread has nothing to follow: the restore decides where it opens.
+    if (!el || !loadedRef.current) return;
+    const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    if (decideScroll(direction, geometry) === 'preserve') return;
+    pendingFollowRef.current = { chat: prevChatIdRef.current, direction, geometry };
+  }, []);
 
   // Media has no layout box before it decodes. While pinned, each decode re-pins to the bottom;
   // while a 'saved' restore is pending, each decode RE-APPLIES the saved scrollTop (the first write
