@@ -172,7 +172,14 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     // initializer: `config` is a parameter property, which field initializers read before assignment.
     this.host = {
       ensureReady: () => this.ensureReady(),
-      getClient: () => this.client!,
+      // A delegate reads the client after ensureReady() and often after awaits of its own (a recipient
+      // lookup, a media fetch, a chat lookup). A teardown in that gap leaves the client set but closing,
+      // or nulls it, so readiness is checked again here: the retryable 409 instead of a closed-target or
+      // TypeError 500 that a send also counts toward the send breaker.
+      getClient: () => {
+        this.ensureReady();
+        return this.client!;
+      },
       logger: this.logger,
       isPageTransportError: error => this.isPageTransportError(error),
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
