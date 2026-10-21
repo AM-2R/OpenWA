@@ -209,7 +209,13 @@ function installFetchStub(): void {
       ['saveContact', method === 'PUT' && /\/contacts\/[^/]+$/.test(path)],
     ];
     const write = writes.find(([, matches]) => matches);
-    if (write) return gated(write[0], () => jsonResponse({ success: !declineWrites }));
+    if (write) {
+      return gated(write[0], () => {
+        // Nothing is left of Alice's thread once her chat is cleared or deleted.
+        if (!declineWrites && (write[0] === 'clearChat' || write[0] === 'deleteChat')) aliceThread = [];
+        return jsonResponse({ success: !declineWrites });
+      });
+    }
     if (path.startsWith(`${groupPath}/participants`)) {
       const { participants } = body as { participants: string[] };
       if (refuseMember === 'some') {
@@ -1248,6 +1254,373 @@ test('a mark-as-unread the engine declines leaves the row read', async () => {
   pickRowAction('Alice', 'Mark as unread');
   await screen.findByText('Could not mark the chat as unread');
   assert.ok(!screen.queryByLabelText('Marked as unread'), 'the row was badged although the chat was not marked');
+});
+
+// ── A write the engine declines (HTTP 200 with { success: false }) is a failure: nothing changes, and the page
+// says so. Pin and archive are the routes of this set that can decline today; the others always answer success,
+// and the page holds them to the same rule. ──
+
+interface DeclinedCase {
+  title: string;
+  /** What the gateway holds before the page opens. */
+  setup?: () => void;
+  failure: string;
+  /** The success message that must not appear. */
+  success: string;
+  act: () => Promise<void>;
+  unchanged: () => void;
+}
+
+/** Click the confirming button of the dialog that is open. */
+const confirmDialog = async (name: string) => {
+  const { screen, fireEvent, within } = rtl;
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name }));
+};
+
+const DECLINED_CASES: DeclinedCase[] = [
+  {
+    title: 'pin',
+    failure: 'Could not pin the chat. WhatsApp keeps at most three chats pinned.',
+    success: 'Pinned',
+    act: async () => pickRowAction('Alice', 'Pin chat'),
+    unchanged: () => assert.ok(!rtl.screen.queryByRole('img', { name: 'Pinned' }), 'the row was pinned'),
+  },
+  {
+    title: 'archive',
+    failure: 'Could not change the archive',
+    success: 'Chat archived',
+    act: async () => pickRowAction('Alice', 'Archive chat'),
+    unchanged: () => assert.ok(rtl.screen.getByText('Alice'), 'the chat left the main list'),
+  },
+  {
+    title: 'mute',
+    failure: 'Could not change the notifications',
+    success: 'Muted',
+    act: async () => {
+      pickRowAction('Alice', 'Mute notifications');
+      await confirmDialog('Mute notifications');
+    },
+    unchanged: () => {
+      assert.ok(!rtl.screen.queryByRole('img', { name: 'Muted' }), 'the row was muted');
+      assert.ok(rtl.screen.getByRole('dialog'), 'the dialog closed on a declined mute');
+    },
+  },
+  {
+    title: 'contact save',
+    failure: 'Could not save the contact',
+    success: 'Contact saved',
+    act: async () => {
+      await pickRowActionOnceLoaded('Alice', 'Rename contact');
+      const dialog = await rtl.screen.findByRole('dialog');
+      rtl.fireEvent.change(rtl.within(dialog).getByLabelText('First name'), { target: { value: 'Alicia' } });
+      rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+    },
+    unchanged: () => {
+      assert.ok(rtl.screen.getByText('Alice'), 'the row was renamed');
+      assert.ok(rtl.screen.getByRole('dialog'), 'the dialog closed on a declined save');
+    },
+  },
+  {
+    title: 'block',
+    failure: 'Could not change the block',
+    success: 'Alice blocked',
+    act: async () => {
+      pickRowAction('Alice', 'Block contact');
+      await confirmDialog('Block contact');
+    },
+    unchanged: () => assert.ok(rtl.screen.getByRole('dialog'), 'the dialog closed on a declined block'),
+  },
+  {
+    title: 'unblock',
+    setup: () => {
+      blockedIds = [CHAT.id];
+    },
+    failure: 'Could not change the block',
+    success: 'Alice unblocked',
+    act: async () => pickRowAction('Alice', 'Unblock contact'),
+    unchanged: () => undefined,
+  },
+  {
+    title: 'leave',
+    failure: 'Could not leave the group',
+    success: 'Left "Team"',
+    act: async () => {
+      pickRowAction('Team', 'Leave group');
+      await confirmDialog('Leave group');
+    },
+    unchanged: () => assert.ok(rtl.screen.getByRole('dialog'), 'the dialog closed on a declined leave'),
+  },
+];
+
+for (const declined of DECLINED_CASES) {
+  test(`a declined ${declined.title} is reported as a failure and changes nothing`, async () => {
+    const { screen } = rtl;
+    listGroup = true;
+    declineWrites = true;
+    declined.setup?.();
+    renderPage();
+    await screen.findByText('Team');
+    await declined.act();
+    await screen.findByText(declined.failure);
+    assert.ok(screen.getByText('WhatsApp declined the change.'), 'the reason was not shown');
+    assert.ok(!screen.queryByText(declined.success), 'a declined change was announced as done');
+    declined.unchanged();
+  });
+}
+
+// ── A request that answers after the session was switched changes nothing on the session now selected, which
+// can list a chat under the same id. ──
+
+test("a contact save that answers after a switch renames nothing on the other session's row", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listSecond = true;
+  const release = hold('saveContact');
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  await pickRowActionOnceLoaded('Alice', 'Rename contact');
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByLabelText('First name'), { target: { value: 'Alicia' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PUT' && c.path.includes('/contacts/'))));
+
+  switchSession(container, SECOND_SESSION.id);
+  await waitFor(() =>
+    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+  );
+  await screen.findByText('Alice');
+  release();
+  await settle();
+  await settle();
+  assert.ok(screen.getByText('Alice'), "the other session's row lost its name");
+  assert.ok(!screen.queryByText('Alicia'), "A's save renamed B's row");
+});
+
+test("a mute that answers after a switch mutes nothing on the other session's row", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const release = hold('mute');
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  pickRowAction('Alice', 'Mute notifications');
+  await confirmDialog('Mute notifications');
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.path.endsWith('/chats/mute'))));
+
+  switchSession(container, SECOND_SESSION.id);
+  await waitFor(() =>
+    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+  );
+  await screen.findByText('Alice');
+  release();
+  await settle();
+  await settle();
+  assert.ok(!screen.queryByRole('img', { name: 'Muted' }), "B's row was muted by A's late answer");
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  assert.ok(screen.getByRole('button', { name: 'Mute notifications' }), "B's menu offers Unmute");
+});
+
+for (const kind of ['clear', 'delete'] as const) {
+  test(`a ${kind} that answers after a switch leaves the other session's chat of the same id as it was`, async () => {
+    const { screen, waitFor } = rtl;
+    window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+    listSecond = true;
+    const release = hold(kind === 'clear' ? 'clearChat' : 'deleteChat');
+    const { container } = renderPage();
+    await screen.findByText('Alice');
+    pickRowAction('Alice', kind === 'clear' ? 'Clear chat' : 'Delete chat');
+    await confirmDialog(kind === 'clear' ? 'Clear chat' : 'Delete chat');
+    await waitFor(() =>
+      assert.ok(fetchCalls.some(c => c.path.endsWith(kind === 'clear' ? '/messages' : '/chats/delete'))),
+    );
+
+    switchSession(container, SECOND_SESSION.id);
+    await waitFor(() =>
+      assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+    );
+    await screen.findByText('Alice');
+    release();
+    await settle();
+    await settle();
+    assert.ok(screen.getByText('Alice'), "A's answer removed B's chat");
+    assert.ok(screen.getAllByText('hello from alice').length > 0, "A's answer emptied B's preview");
+  });
+}
+
+// ── What clearing and deleting a chat leave behind on the page. ──
+
+test('clearing a chat empties its preview and refreshes the thread that is open', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  aliceThread = [threadRow(1)];
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText('message 1');
+
+  pickRowAction('Alice', 'Clear chat');
+  await confirmDialog('Clear chat');
+  await waitFor(() =>
+    assert.ok(!screen.queryByText('message 1'), 'the open thread kept the messages that were cleared'),
+  );
+  assert.ok(!screen.queryByText('hello from alice'), 'the row kept the preview of a cleared chat');
+  const sidebar = container.querySelector('.chats-sidebar') as HTMLElement;
+  assert.ok(within(sidebar).getByText('Alice'), 'clearing removed the chat from the list');
+});
+
+test('deleting a chat drops its cached thread along with the row', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  aliceThread = [threadRow(1)];
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await screen.findByText('message 1');
+  // The room is closed first: removing a query an open room still observes leaves a gc timer on the removed
+  // query that nothing can clear, which holds the test process open for minutes.
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await waitFor(() => assert.ok(!container.querySelector('.room-header'), 'the room did not close'));
+  const thread = () => queryClients[0].getQueryData(['messages', SESSION.id, CHAT.id]);
+  assert.ok(thread(), 'the thread was not cached');
+
+  pickRowAction('Alice', 'Delete chat');
+  await confirmDialog('Delete chat');
+  await waitFor(() => assert.ok(!screen.queryByText('Alice'), 'the deleted chat stayed in the list'));
+  assert.equal(thread(), undefined, 'the deleted chat kept its thread in the cache');
+});
+
+// ── Switching session leaves nothing of the session that was left open: the dialogs and the archive view belong
+// to it (the new chat panel too, which hides the session selector: see Chats.test.ts). ──
+
+const LEFT_OPEN: Array<{ title: string; open: () => Promise<void>; gone: (container: HTMLElement) => boolean }> = [
+  {
+    title: 'group info dialog',
+    open: async () => {
+      pickRowAction('Team', 'Group info');
+      await rtl.screen.findByRole('dialog');
+    },
+    gone: () => !rtl.screen.queryByRole('dialog'),
+  },
+  {
+    title: 'confirmation dialog',
+    open: async () => {
+      pickRowAction('Alice', 'Block contact');
+      await rtl.screen.findByRole('dialog');
+    },
+    gone: () => !rtl.screen.queryByRole('dialog'),
+  },
+  {
+    title: 'mute dialog',
+    open: async () => {
+      pickRowAction('Alice', 'Mute notifications');
+      await rtl.screen.findByRole('dialog');
+    },
+    gone: () => !rtl.screen.queryByRole('dialog'),
+  },
+  {
+    title: 'contact dialog',
+    open: async () => {
+      await pickRowActionOnceLoaded('Alice', 'Rename contact');
+      await rtl.screen.findByRole('dialog');
+    },
+    gone: () => !rtl.screen.queryByRole('dialog'),
+  },
+  {
+    title: 'archive view',
+    open: async () => {
+      pickRowAction('Alice', 'Archive chat');
+      await rtl.waitFor(() => assert.ok(!rtl.screen.queryByText('Alice')));
+      rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /^Archived/ }));
+      await rtl.screen.findByText('Alice');
+    },
+    // The other session holds no archived chat, so its list is the main one, with Alice in it.
+    gone: () => !rtl.screen.queryByText('Archived chats') && Boolean(rtl.screen.queryByText('Alice')),
+  },
+];
+
+for (const left of LEFT_OPEN) {
+  test(`switching session closes the ${left.title} of the session that was left`, async () => {
+    const { screen, waitFor } = rtl;
+    listSecond = true;
+    listGroup = true;
+    const { container } = renderPage();
+    await screen.findByText('Team');
+    await left.open();
+
+    switchSession(container, SECOND_SESSION.id);
+    await waitFor(() =>
+      assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+    );
+    await screen.findByText('Alice');
+    await waitFor(() => assert.ok(left.gone(container), `the ${left.title} stayed open on the other session`));
+  });
+}
+
+test('opening a chat from the new chat panel clears the filter and the search, so the chat is listed', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Groups' }));
+  fireEvent.change(screen.getByPlaceholderText('Search chats...'), { target: { value: 'zzz' } });
+  assert.ok(!screen.queryByText('Alice'), 'the filter and the search hid nothing');
+
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  fireEvent.click(await screen.findByRole('button', { name: /Bob/ }));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  const list = container.querySelector('.chats-list') as HTMLElement;
+  await waitFor(() => assert.ok(list.textContent?.includes('Bob'), 'the opened chat is not in the list'));
+  assert.equal(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed'), 'true');
+  assert.equal((screen.getByPlaceholderText('Search chats...') as HTMLInputElement).value, '');
+});
+
+test('a search finds an archived chat, which the list itself keeps in the archive view', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  pickRowAction('Alice', 'Archive chat');
+  await waitFor(() => assert.ok(!screen.queryByText('Alice'), 'the archived chat stayed in the main list'));
+
+  fireEvent.change(screen.getByPlaceholderText('Search chats...'), { target: { value: 'Alice' } });
+  await screen.findByText('Alice');
+});
+
+// ── Menus close on a press outside them and on Escape; Escape leaves the open chat alone. ──
+
+test("a row's menu closes on a press outside it and stays open for a press inside it", async () => {
+  const { screen, fireEvent } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  fireEvent.mouseDown(container.querySelector('.chat-row-menu-popover') as HTMLElement);
+  assert.ok(container.querySelector('.chat-row-menu-popover'), 'a press inside closed the menu');
+  fireEvent.mouseDown(document.body);
+  assert.ok(!container.querySelector('.chat-row-menu-popover'), 'a press outside left the menu open');
+});
+
+test("the room's menu closes on a press outside it and on Escape, and Escape leaves the room open", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const trigger = container.querySelector('.room-menu-trigger') as HTMLElement;
+  const menuOpen = () => Boolean(container.querySelector('.room-menu-popover'));
+
+  fireEvent.click(trigger);
+  fireEvent.mouseDown(container.querySelector('.room-menu-popover') as HTMLElement);
+  assert.ok(menuOpen(), 'a press inside closed the menu');
+  fireEvent.mouseDown(document.body);
+  assert.ok(!menuOpen(), 'a press outside left the menu open');
+
+  fireEvent.click(trigger);
+  assert.ok(menuOpen());
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.ok(!menuOpen(), 'Escape left the menu open');
+  assert.ok(container.querySelector('.room-header'), 'Escape closed the room along with the menu');
+});
+
+test('a read-only key does not read the blocklist, which only an operator can act on', async () => {
+  const { screen } = rtl;
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  renderPage();
+  await screen.findByText('Alice');
+  await settle();
+  assert.ok(!fetchCalls.some(c => c.path.endsWith('/contacts/blocked')), 'a viewer key read the blocklist');
 });
 
 test('a contact Baileys knows by push name only is unsaved: Unknown lists it, and its menu offers Save', async () => {

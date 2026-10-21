@@ -2196,6 +2196,28 @@ async function clickSearchHit(container: HTMLElement): Promise<void> {
   fireEvent.click(hit);
 }
 
+test('a search hit in another session closes the new chat panel of the session that was left', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION_2.id }];
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Alice');
+    // The panel replaces the sidebar lists, session selector included, so a hit is the way to another session.
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    assert.ok(container.querySelector('.new-chat-panel'), 'the panel did not open');
+
+    await clickSearchHit(container);
+    await waitFor(() =>
+      assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open on the other session'),
+    );
+    const select = container.querySelector('select.session-selector') as HTMLSelectElement;
+    assert.equal(select.value, SESSION_2.id);
+  } finally {
+    twoSessions = false;
+  }
+});
+
 test('a search hit in a session that is not connected stays on the selected session', async () => {
   const { screen, waitFor } = rtl;
   thirdSessionStatus = 'disconnected';
