@@ -947,6 +947,22 @@ test('NumberChecker: a lookup that gets no answer at all stops the batch before 
   assert.equal(rtl.screen.queryByText(/Completed checking/), null);
 });
 
+// Only a fetch that gets no answer ends the run. A 200 whose body cannot be read is that lookup's failure.
+test('NumberChecker: an answer that is not JSON fails that number and the run goes on', async () => {
+  const lookups = stubLookups(number =>
+    number === '911111111111' ? new Response('<html>sign in</html>', { status: 200 }) : registered(number),
+  );
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  startBatch();
+
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['911111111111', '912222222222']);
+  assert.equal(statValue('Failed'), '1');
+  assert.equal(container.querySelector('.nc-batch-stopped'), null);
+});
+
 test('NumberChecker: a refusal on the last number says so instead of counting numbers left unsent', async () => {
   const lookups = stubLookups(number =>
     number === '912222222222' ? jsonResponse({ message: 'Rate limit exceeded (HTTP 429)' }, 429) : registered(number),

@@ -51,14 +51,6 @@ const STOP_REASON_KEYS: Record<number, string> = {
   503: 'numberChecker.stopped.reason503',
 };
 
-// The status of a lookup that fails every number after it alike, or undefined when only that number failed.
-// A rejected fetch carries no status: the gateway never answered.
-function lookupStopStatus(err: unknown): number | undefined {
-  const status = (err as { status?: unknown } | null)?.status;
-  if (typeof status !== 'number') return 0;
-  return status === 400 || isGatewayRefusal(err) ? status : undefined;
-}
-
 // `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
 function batchStopMessage(t: TFunction, { status, attempted, total }: BatchStop): string {
   if (status === 0) return t('numberChecker.stopped.noAnswer', { attempted, total });
@@ -332,9 +324,9 @@ export function NumberChecker() {
         // The gateway keeps refusing this route for the rest of its window, a stopped session or an unreachable
         // gateway fails every later number too, so each would only become a false "Failed" row (and spend more
         // of the limit).
-        const stopStatus = lookupStopStatus(err);
-        if (stopStatus !== undefined) {
-          refusedWith = stopStatus;
+        if (isGatewayRefusal(err)) {
+          // A rejected fetch carries no status: the gateway never answered.
+          refusedWith = (err as { status?: number }).status ?? 0;
           setBatchProgress({ current: i + 1, total: numbers.length });
           break;
         }
