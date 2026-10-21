@@ -659,6 +659,36 @@ describe('ScopeBindingService.applyScopeBinding retracts a secret an instance no
     expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { baseUrl: 'https://crm', apiToken: 'C-TOKEN' });
   });
 
+  // instances.list() is a find() with no ORDER BY, so SQLite and PostgreSQL return the rows in different orders.
+  // Boot reconciliation replays the wildcard instances by id, so the base ends up with the value of the last
+  // one; the value handed back has to be the same whichever order the database lists them in.
+  it.each([
+    ['c', 'a', 'b'],
+    ['b', 'c', 'a'],
+    ['a', 'b', 'c'],
+  ])('hands back the value of the greatest instance id when the siblings are listed as %s, %s, %s', async (...ids) => {
+    const { svc, list, updatePluginConfig } = build();
+    list.mockResolvedValue(ids.map(id => sibling(id, { apiToken: `${id}-token` })));
+
+    await svc.applyScopeBinding('chatwoot', null, {}, false, { previousConfig: { apiToken: 'LEAKED' } });
+
+    expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot', { apiToken: 'c-token' });
+  });
+
+  // A secret that was never set is nothing to take back: an empty or null value is not a credential the plugin
+  // holds, and writing null over the base's own empty value would be a change nobody asked for.
+  it.each([
+    ['an empty string', ''],
+    ['null', null],
+  ])('takes nothing back for a previous secret that was %s', async (_label, held) => {
+    const { svc, list, updatePluginConfig } = build({ ...projected, apiToken: held });
+
+    await svc.applyScopeBinding('chatwoot', null, {}, false, { previousConfig: { apiToken: held } });
+
+    expect(updatePluginConfig).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(1); // only the '*' retirement check reads the siblings
+  });
+
   it('retracts every secret the instance held when it is torn down, and ends the "*" activation as before', async () => {
     const { svc, updatePluginConfig, setPluginSessions } = build();
 
