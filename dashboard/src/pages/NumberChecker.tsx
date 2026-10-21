@@ -561,7 +561,7 @@ export function NumberChecker() {
 
               {isCheckingSingle ? (
                 <div className="nc-result-placeholder">
-                  <Loader2 size={36} className="animate-spin" style={{ color: 'var(--primary)' }} />
+                  <Loader2 size={36} className="animate-spin" style={{ color: 'var(--primary-text)' }} />
                   <span>{t('numberChecker.single.querying')}</span>
                 </div>
               ) : singleResult ? (

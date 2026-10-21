@@ -107,7 +107,7 @@
 
 .message-tester .toggle-group button.active {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 .message-tester .send-btn {
@@ -119,7 +119,7 @@
   padding: 0.875rem 1.5rem;
   font-size: 1rem;
   font-weight: 600;
-  color: white;
+  color: #0f172a;
   background: var(--primary);
   border: none;
   border-radius: var(--radius);

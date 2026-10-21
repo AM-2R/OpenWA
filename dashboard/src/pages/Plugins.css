@@ -132,7 +132,9 @@
   margin-inline-start: 6px;
   font-size: 0.6875rem;
   font-weight: 700;
-  color: var(--primary-text, #17813e);
+  /* On the brand green Install button in both themes: dark text, as on .btn-primary. The brand-coloured text
+     this had was 2.49:1 on it in light and the same colour as the button in dark (invisible). */
+  color: #0f172a;
   background: color-mix(in srgb, var(--primary, #25d366) 18%, transparent);
   border-radius: 999px;
 }
@@ -265,7 +267,7 @@
 .plugins-page .btn-toggle.enable {
   background: var(--primary, #25d366);
   border: 1px solid var(--primary, #25d366);
-  color: #fff;
+  color: #0f172a;
 }
 
 .plugins-page .btn-toggle.enable:hover {
@@ -592,7 +594,7 @@
 .plugins-page .btn-update {
   padding: 0.75rem 1.5rem;
   background: #f59e0b;
-  color: white;
+  color: #0f172a;
   border: none;
   border-radius: 8px;
   font-size: 0.9375rem;
@@ -929,7 +931,7 @@
 .plugins-page .install-tab.active,
 .plugins-page .config-modal .modal-tab.active {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 /* Keep the inactive tabs legible against the pill's light track and give them a hover affordance so

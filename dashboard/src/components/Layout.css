@@ -113,7 +113,7 @@
 .collapse-toggle:hover {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: #0f172a;
   box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
 }
 

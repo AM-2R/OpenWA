@@ -263,7 +263,7 @@
 
 .webhooks-page .modal-body .event-tag.selected {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
   border-color: var(--primary);
 }
 
@@ -289,7 +289,7 @@
 [data-theme='dark'] .webhooks-page .modal-body .event-tag.selected,
 :root:not([data-theme='light']) .webhooks-page .modal-body .event-tag.selected {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
   border-color: var(--primary);
 }
 

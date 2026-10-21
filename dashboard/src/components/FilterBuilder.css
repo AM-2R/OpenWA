@@ -191,7 +191,7 @@
 .enum-tag.selected {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 /* Chips input with autocomplete */

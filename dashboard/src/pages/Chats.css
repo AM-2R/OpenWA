@@ -277,7 +277,7 @@
   min-width: 20px;
   padding: 0 6px;
   background: var(--primary);
-  color: white;
+  color: #0f172a;
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
@@ -818,7 +818,7 @@
   background: var(--primary);
   border: none;
   border-radius: 50%;
-  color: white;
+  color: #0f172a;
   cursor: pointer;
   transition:
     background 0.2s,
@@ -836,7 +836,7 @@
   /* Keep the brand silhouette readable while clearly inactive — a bare gray-on-gray glyph
      reads as "no button here" rather than "send, disabled". */
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
@@ -1463,7 +1463,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-white);
-  color: var(--primary);
+  color: var(--primary-text);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
@@ -1744,7 +1744,7 @@
 
 .chats-page .status-compose-modal .compose-type-toggle button.active {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 .chats-page .status-compose-modal .compose-field {
@@ -2240,7 +2240,7 @@
 .chats-page .chat-avatar.action-avatar {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 .chats-page .select-check {
@@ -2339,7 +2339,7 @@
   border: none;
   border-radius: var(--radius, 8px);
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   font-weight: 600;
   cursor: pointer;
 }
@@ -2365,7 +2365,7 @@
   height: 44px;
   border-radius: 12px;
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   display: flex;
   align-items: center;
   justify-content: center;

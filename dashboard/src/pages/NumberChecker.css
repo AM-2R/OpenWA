@@ -52,7 +52,7 @@
   padding: 0.5rem 1rem;
   border-radius: 6px;
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   border: none;
   font-size: 0.875rem;
   font-weight: 600;
@@ -226,7 +226,7 @@
 
 .number-checker .nc-btn-primary {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 .number-checker .nc-btn-primary:hover:not(:disabled) {
@@ -537,7 +537,7 @@
 
 .number-checker .nc-filter-btn.active {
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   border-color: var(--primary);
 }
 

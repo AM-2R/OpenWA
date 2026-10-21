@@ -207,7 +207,7 @@
 .logs-page .page-numbers button.active {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 /* Empty Table State */
