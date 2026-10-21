@@ -16,6 +16,7 @@ import { TemplateService } from '../template/template.service';
 import { Template } from '../template/entities/template.entity';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { SendPacingService } from './send-pacing.service';
+import { PendingMessageReaperService, type PendingMessageReaperStats } from './pending-message-reaper.service';
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import type { MessageProjector } from '../session/message-projector.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -295,9 +296,29 @@ describe('MessageSendService', () => {
       );
       expect(repository.save).toHaveBeenCalledTimes(1);
       expect(repository.update).toHaveBeenCalledWith(
-        { id: 'msg-uuid-1', sessionId: 'sess-1' },
+        { id: 'msg-uuid-1', sessionId: 'sess-1', status: MessageStatus.PENDING },
         expect.objectContaining({ status: MessageStatus.SENT }),
       );
+    });
+
+    // The pending reaper fails and strips a row whose send is still in the engine. That row is no longer
+    // PENDING, so the first write matches nothing and the second puts the stored metadata back.
+    it('writes the metadata again, unguarded, when the row is no longer PENDING', async () => {
+      (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+
+      await service.sendImage('sess-1', { chatId: '628123456789@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      const update = repository.update as jest.Mock<unknown, [Record<string, unknown>, Record<string, unknown>]>;
+      expect(update).toHaveBeenCalledTimes(2);
+      const [[guardedWhere, guarded], [restoreWhere, restore]] = update.mock.calls;
+      expect(guardedWhere).toEqual({ id: 'msg-uuid-1', sessionId: 'sess-1', status: MessageStatus.PENDING });
+      expect(guarded).not.toHaveProperty('metadata');
+      expect(restoreWhere).toEqual({ id: 'msg-uuid-1', sessionId: 'sess-1' });
+      expect(restore).toMatchObject({
+        status: MessageStatus.SENT,
+        waMessageId: 'wa-msg-1',
+        metadata: { media: { mimetype: 'image/png', data: 'QUJD' } },
+      });
     });
 
     it('returns success (not FAILED) when persisting the SENT state fails after a successful send', async () => {
@@ -378,7 +399,8 @@ describe('MessageSendService', () => {
         },
       ],
     ])('does not re-emit message:persisted with %s when the update matched no row', async (_state, run) => {
-      (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+      // Every write matches nothing, the SENT one twice over (guarded on PENDING, then not).
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 0 });
 
       await run();
 
@@ -1413,7 +1435,7 @@ describe('MessageSendService', () => {
       // The only write after the send is this UPDATE; the in-memory entity handed to save() earlier is
       // mutated afterwards, so asserting on save() would pass without the label ever being written.
       expect(repository.update).toHaveBeenLastCalledWith(
-        { id: 'msg-uuid-1', sessionId: 'sess-1' },
+        { id: 'msg-uuid-1', sessionId: 'sess-1', status: MessageStatus.PENDING },
         expect.objectContaining({
           body: 'Sim',
           status: MessageStatus.SENT,
@@ -1970,6 +1992,68 @@ describe('MessageSendService', () => {
     });
   });
 
+  // The pending reaper fails and strips an outgoing PENDING row once it is older than its grace window,
+  // whether or not the engine has answered yet. A send that outlives the window still ends SENT, and the
+  // write that says so has to put back what the reaper removed.
+  describe('a send that outlives the pending reaper grace window (real database)', () => {
+    let ds: DataSource;
+    let rows: Repository<Message>;
+    let real: MessageSendService;
+    let reaper: PendingMessageReaperService;
+    // A clock a minute ahead makes the row old enough at once, however fast the test runs.
+    const sweep = () => reaper.sweep({ intervalMs: 0, graceMs: 0, batchSize: 50 }, new Date(Date.now() + 60_000));
+
+    beforeEach(async () => {
+      ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Message], synchronize: true });
+      await ds.initialize();
+      rows = ds.getRepository(Message);
+      reaper = new PendingMessageReaperService(rows, hookManager as HookManager);
+      real = new MessageSendService(
+        rows,
+        sessionService as unknown as SessionService,
+        engines,
+        hookManager as HookManager,
+        templateService as unknown as TemplateService,
+        inertPacing(),
+      );
+    });
+
+    afterEach(async () => {
+      await ds.destroy();
+    });
+
+    it('stores the media payload of an image the reaper had already failed', async () => {
+      let swept: PendingMessageReaperStats | undefined;
+      mockEngine.sendImageMessage.mockImplementationOnce(async () => {
+        swept = await sweep();
+        return mockEngineResult;
+      });
+
+      await real.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      expect(swept).toMatchObject({ reaped: 1 });
+      const stored = await rows.find();
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({ status: MessageStatus.SENT, waMessageId: 'wa-msg-1' });
+      expect(stored[0].metadata).toEqual({ media: { mimetype: 'image/png', data: 'QUJD' } });
+    });
+
+    it('leaves no reaper marker on a text message that was delivered', async () => {
+      let swept: PendingMessageReaperStats | undefined;
+      mockEngine.sendTextMessage.mockImplementationOnce(async () => {
+        swept = await sweep();
+        return mockEngineResult;
+      });
+
+      await real.sendText('sess-1', { chatId: '621@c.us', text: 'hi' });
+
+      expect(swept).toMatchObject({ reaped: 1 });
+      const [row] = await rows.find();
+      expect(row.status).toBe(MessageStatus.SENT);
+      expect(row.metadata ?? {}).not.toHaveProperty('reapedAt');
+    });
+  });
+
   // ── outbound archiving (CHAT_MEDIA_ARCHIVE_OUTBOUND) ─────────────
 
   describe('archiving media this account sent', () => {
@@ -2020,7 +2104,7 @@ describe('MessageSendService', () => {
     it('archives nothing for a SENT update that matched no row, whose row went with its session', async () => {
       const archive = { archive: jest.fn() };
       const svc = withFlag(true, archive);
-      (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 0 });
 
       await svc.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
 

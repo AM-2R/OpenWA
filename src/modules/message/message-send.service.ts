@@ -880,15 +880,26 @@ export class MessageSendService {
     message.timestamp = result.timestamp;
     try {
       // No transaction of its own, for the reason given at the first save of this message.
-      const updated = await this.messageRepository.update(
-        { id: message.id, sessionId: message.sessionId },
-        {
-          ...changed,
-          waMessageId: message.waMessageId,
-          status: message.status,
-          timestamp: message.timestamp,
-        },
+      const sent: QueryDeepPartialEntity<Message> = {
+        ...changed,
+        waMessageId: message.waMessageId,
+        status: message.status,
+        timestamp: message.timestamp,
+      };
+      // Guarded on the row still being PENDING, so the common write carries no metadata. A row the pending
+      // reaper failed while the engine was still answering has lost its media payload and gained a marker:
+      // it is written again, unguarded, with the metadata the insert stored. No row at all means the
+      // session was deleted under this send.
+      let updated = await this.messageRepository.update(
+        { id: message.id, sessionId: message.sessionId, status: MessageStatus.PENDING },
+        sent,
       );
+      if (!updated.affected) {
+        updated = await this.messageRepository.update(
+          { id: message.id, sessionId: message.sessionId },
+          { ...sent, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> },
+        );
+      }
       if (!updated.affected) return { messageId: result.id, timestamp: result.timestamp };
       // Reconcile the earlier PENDING emission with the finalized row (#906).
       this.emitPersisted(message.sessionId, message);
