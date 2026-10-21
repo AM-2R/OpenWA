@@ -1,4 +1,6 @@
+import { POLL_MAX_OPTIONS, POLL_TEXT_MAX_LENGTH } from './message-mapper';
 import {
+  BaileysBodyContent,
   BaileysContextContent,
   BaileysIncomingFields,
   baileysChatJid,
@@ -1195,4 +1197,35 @@ describe('native poll choice metadata', () => {
     expect(extractBaileysPoll({})).toBeUndefined();
     expect(extractBaileysPoll({ pollCreationMessage: {} })).toBeUndefined();
   });
+
+  describe.each(['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3'] as const)(
+    'bounds on %s',
+    key => {
+      const content = (name: string, optionNames: string[]) => ({
+        [key]: { name, options: optionNames.map(optionName => ({ optionName })), selectableOptionsCount: 1 },
+      });
+
+      it('keeps a poll WhatsApp itself could send exactly as it is', () => {
+        const question = 'q'.repeat(255);
+        const options = Array.from({ length: 12 }, (_, i) => `${i}`.padEnd(100, 'o'));
+        expect(extractBaileysPoll(content(question, options))).toEqual({
+          name: question,
+          options,
+          allowMultipleAnswers: false,
+        });
+        expect(extractBaileysBody(content(question, options) as BaileysBodyContent)).toBe(question);
+      });
+
+      it('truncates an oversized poll, in the poll and in the body, and keeps it a poll', () => {
+        const long = 'x'.repeat(POLL_TEXT_MAX_LENGTH * 3);
+        const optionNames = Array.from({ length: POLL_MAX_OPTIONS * 50 }, (_, i) => `${i}${long}`);
+        const poll = extractBaileysPoll(content(long, optionNames))!;
+        expect(poll.options).toHaveLength(POLL_MAX_OPTIONS);
+        expect(poll.options.every(option => option.length === POLL_TEXT_MAX_LENGTH)).toBe(true);
+        expect(poll.options[1].startsWith('1xxx')).toBe(true);
+        expect(poll.name).toHaveLength(POLL_TEXT_MAX_LENGTH);
+        expect(extractBaileysBody(content(long, optionNames) as BaileysBodyContent)).toHaveLength(POLL_TEXT_MAX_LENGTH);
+      });
+    },
+  );
 });

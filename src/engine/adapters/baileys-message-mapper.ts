@@ -6,6 +6,7 @@ import {
   MessageType,
 } from '../interfaces/whatsapp-engine.interface';
 import { chatKind } from '../identity/wa-id';
+import { boundPollOptions, boundPollText } from './message-mapper';
 
 /**
  * Content types that change or annotate another message and carry nothing of their own: a poll vote,
@@ -165,6 +166,10 @@ export interface BaileysBodyContent {
   } | null;
 }
 
+/** A poll's question as it reaches the body, bounded like the poll's own copy of it. */
+const pollQuestion = (name: string | null | undefined): string | undefined =>
+  name == null ? undefined : boundPollText(name);
+
 /**
  * Extract the display text of an inbound Baileys message: plain text first, then a media caption,
  * then the WhatsApp Business interactive shapes (interactive / buttons / template / interactive-
@@ -191,9 +196,9 @@ export function extractBaileysBody(content: BaileysBodyContent): string {
     content.interactiveResponseMessage?.body?.text ??
     content.listMessage?.description ??
     content.listMessage?.title ??
-    content.pollCreationMessage?.name ??
-    content.pollCreationMessageV2?.name ??
-    content.pollCreationMessageV3?.name ??
+    pollQuestion(content.pollCreationMessage?.name) ??
+    pollQuestion(content.pollCreationMessageV2?.name) ??
+    pollQuestion(content.pollCreationMessageV3?.name) ??
     content.eventMessage?.name ??
     content.buttonsResponseMessage?.selectedDisplayText ??
     content.templateButtonReplyMessage?.selectedDisplayText ??
@@ -945,7 +950,11 @@ export function extractBaileysPoll(content: proto.IMessage): IncomingMessage['po
     .map(option => option.optionName)
     .filter((option): option is string => typeof option === 'string');
   if (!options.length) return undefined;
-  return { name: poll.name ?? '', options, allowMultipleAnswers: poll.selectableOptionsCount !== 1 };
+  return {
+    name: boundPollText(poll.name ?? ''),
+    options: boundPollOptions(options),
+    allowMultipleAnswers: poll.selectableOptionsCount !== 1,
+  };
 }
 
 /**

@@ -2,6 +2,8 @@ import {
   buildIncomingMessageBase,
   mapContactFields,
   mapWwebjsMessageType,
+  POLL_MAX_OPTIONS,
+  POLL_TEXT_MAX_LENGTH,
   RawContactFields,
   RawMessageFields,
 } from './message-mapper';
@@ -299,5 +301,41 @@ describe('poll choice metadata', () => {
       allowMultipleAnswers: true,
     });
     expect(mapped.poll).toEqual({ name: 'Where?', options: [' Park ', 'Beach'], allowMultipleAnswers: true });
+  });
+
+  describe('bounds', () => {
+    const poll = (over: Partial<RawMessageFields>): RawMessageFields => ({
+      id: { _serialized: 'P2' },
+      from: 'a@c.us',
+      to: 'me',
+      body: 'Where?',
+      type: 'poll_creation',
+      timestamp: 100,
+      fromMe: false,
+      pollName: 'Where?',
+      pollOptions: ['Park', 'Beach'],
+      allowMultipleAnswers: false,
+      ...over,
+    });
+
+    it('keeps a poll WhatsApp itself could send exactly as it is', () => {
+      const question = 'q'.repeat(255);
+      const options = Array.from({ length: 12 }, (_, i) => `${i}`.padEnd(100, 'o'));
+      const mapped = buildIncomingMessageBase(poll({ body: question, pollName: question, pollOptions: options }));
+      expect(mapped.poll).toEqual({ name: question, options, allowMultipleAnswers: false });
+      expect(mapped.body).toBe(question);
+    });
+
+    it('truncates an oversized poll, in the poll and in the body, and keeps it a poll', () => {
+      const long = 'x'.repeat(POLL_TEXT_MAX_LENGTH * 3);
+      const pollOptions = Array.from({ length: POLL_MAX_OPTIONS * 50 }, (_, i) => ({ name: `${i}${long}` }));
+      const mapped = buildIncomingMessageBase(poll({ body: long, pollName: long, pollOptions }));
+      expect(mapped.type).toBe('poll');
+      expect(mapped.poll?.options).toHaveLength(POLL_MAX_OPTIONS);
+      expect(mapped.poll?.options.every(option => option.length === POLL_TEXT_MAX_LENGTH)).toBe(true);
+      expect(mapped.poll?.options[1].startsWith('1xxx')).toBe(true);
+      expect(mapped.poll?.name).toHaveLength(POLL_TEXT_MAX_LENGTH);
+      expect(mapped.body).toHaveLength(POLL_TEXT_MAX_LENGTH);
+    });
   });
 });
