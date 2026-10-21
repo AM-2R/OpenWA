@@ -13,7 +13,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsMentionWidConstraint } from './is-mention-wid.validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../media-cap.util';
 
@@ -84,6 +84,7 @@ export class CustomLinkPreviewDto {
     example: 'https://example.com/launch',
     maxLength: CUSTOM_PREVIEW_URL_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CUSTOM_PREVIEW_URL_MAX_LENGTH)
@@ -94,6 +95,7 @@ export class CustomLinkPreviewDto {
     example: 'We just launched',
     maxLength: 256,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CUSTOM_PREVIEW_TITLE_MAX_LENGTH)
@@ -101,6 +103,7 @@ export class CustomLinkPreviewDto {
 
   @ApiPropertyOptional({ description: 'Preview description', example: 'Read the announcement.', maxLength: 1024 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(CUSTOM_PREVIEW_DESCRIPTION_MAX_LENGTH)
   description?: string;
@@ -112,6 +115,7 @@ export class SendTextMessageDto {
     example: '628123456789@c.us',
     maxLength: CHAT_ID_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
@@ -122,6 +126,7 @@ export class SendTextMessageDto {
     example: 'Hello from OpenWA!',
     maxLength: MESSAGE_TEXT_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
@@ -176,6 +181,7 @@ export class SendTextMessageDto {
     example: QUOTED_MESSAGE_ID_EXAMPLE,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   quotedMessageId?: string;
@@ -214,6 +220,7 @@ export class SendMediaMessageDto {
     example: '628123456789@c.us',
     maxLength: CHAT_ID_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
@@ -233,6 +240,7 @@ export class SendMediaMessageDto {
     description: 'Base64 encoded media data',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   base64?: string;
 
@@ -241,6 +249,7 @@ export class SendMediaMessageDto {
     example: 'image/jpeg',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   mimetype?: string;
 
@@ -251,6 +260,7 @@ export class SendMediaMessageDto {
     maxLength: 255,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(255)
   filename?: string;
@@ -261,6 +271,7 @@ export class SendMediaMessageDto {
     maxLength: 1024,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(1024)
   caption?: string;
@@ -285,6 +296,7 @@ export class SendMediaMessageDto {
     example: QUOTED_MESSAGE_ID_EXAMPLE,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   quotedMessageId?: string;

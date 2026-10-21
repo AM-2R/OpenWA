@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsNotEmpty, IsString, Matches, Max, Min, ValidateIf, MaxLength } from 'class-validator';
 import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * The last instant a JavaScript Date can hold. whatsapp-web.js converts `muteUntil` through Date, which is
@@ -15,6 +16,7 @@ export class MuteChatDto {
     description: "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
     example: '1234567890-123@g.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)

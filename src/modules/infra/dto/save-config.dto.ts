@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * Body for PUT /infra/config (saveConfig). Every section is optional: an absent section leaves the
@@ -28,31 +28,37 @@ export class DatabaseConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   host?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   port?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   username?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   password?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   database?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   schema?: string;
 
@@ -90,16 +96,19 @@ export class RedisConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   host?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   port?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   password?: string;
 }
@@ -125,31 +134,37 @@ export class StorageConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   localPath?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Bucket?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Region?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3AccessKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3SecretKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   s3Endpoint?: string;
 }
@@ -157,6 +172,7 @@ export class StorageConfigDto {
 export class EngineConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   type?: string;
 
@@ -168,11 +184,13 @@ export class EngineConfigDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   sessionDataPath?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictString()
   @IsString()
   browserArgs?: string;
 }

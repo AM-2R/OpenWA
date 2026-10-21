@@ -14,7 +14,7 @@ import {
   Matches,
   ValidateIf,
 } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import type { GroupMemberAddMode } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../../message/media-cap.util';
@@ -35,6 +35,7 @@ export const GROUP_PARTICIPANTS_MAX = 256;
 
 export class CreateGroupDto {
   @ApiProperty({ description: 'Group subject/name', maxLength: GROUP_NAME_MAX_LENGTH })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(GROUP_NAME_MAX_LENGTH)
@@ -87,6 +88,7 @@ export class MembershipRequestActionDto {
 
 export class GroupSubjectDto {
   @ApiProperty({ description: 'New group subject/name', maxLength: GROUP_NAME_MAX_LENGTH })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(GROUP_NAME_MAX_LENGTH)
@@ -98,6 +100,7 @@ export class GroupDescriptionDto {
     description: 'New group description (may be empty to clear it)',
     maxLength: GROUP_DESCRIPTION_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @MaxLength(GROUP_DESCRIPTION_MAX_LENGTH)
   description!: string;
@@ -108,6 +111,7 @@ export class JoinGroupDto {
     description: 'Group invite code (the token from a https://chat.whatsapp.com/<code> link)',
     maxLength: 128,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(128)
@@ -128,11 +132,13 @@ export class SetGroupPictureDto {
 
   @ApiPropertyOptional({ description: 'Base64 encoded image data' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   base64?: string;
 
   @ApiPropertyOptional({ description: 'Image MIME type (required when using base64)', example: 'image/jpeg' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   // A group picture is an image by definition — reject non-image mimetypes fast (400) rather than
   // letting the engine accept an arbitrary payload.

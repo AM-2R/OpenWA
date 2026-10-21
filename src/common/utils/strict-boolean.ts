@@ -54,3 +54,22 @@ export function coerceStrictNumber({ obj, key }: Pick<TransformFnParams, 'obj' |
 
 /** Property decorator form of {@link coerceStrictNumber}. Pair it with `@IsInt()` / `@IsNumber()`. */
 export const ToStrictNumber = (): PropertyDecorator => Transform(coerceStrictNumber);
+
+/**
+ * The string counterpart, for the same reason and with the same `obj[key]` trick.
+ *
+ * Implicit conversion applies `String(value)` to a `string`-typed property, so a number, a boolean or
+ * an object is rewritten into its string form (`5`, `true`, `[object Object]`) before `@IsString()` runs,
+ * and the route accepts it. An integration whose expression yields an object then sent the customer
+ * the literal text `[object Object]`. An array is the one value left alone, so the same field already
+ * answered 400 for it.
+ *
+ * The caller's value is kept as it is, so `@IsString()` and the other string validators refuse anything
+ * that is not already a string. A string is never altered, so a form-encoded body is unaffected.
+ */
+export function coerceStrictString({ obj, key }: Pick<TransformFnParams, 'obj' | 'key'>): unknown {
+  return (obj as Record<string, unknown> | undefined)?.[key];
+}
+
+/** Property decorator form of {@link coerceStrictString}. Pair it with `@IsString()`. */
+export const ToStrictString = (): PropertyDecorator => Transform(coerceStrictString);

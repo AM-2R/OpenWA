@@ -10,31 +10,39 @@ import { join } from 'path';
  * The global ValidationPipe runs with `transformOptions.enableImplicitConversion: true`
  * (`src/config/app-validation.ts`). That is deliberate — it lets a client send `"5"` for a numeric
  * field, which form-encoded bodies and several HTTP clients do by default. But it also means
- * class-transformer rewrites the value BEFORE any `@Is*` validator sees it, and two of its
+ * class-transformer rewrites the value BEFORE any `@Is*` validator sees it, and three of its
  * conversions destroy information rather than preserving it:
  *
  *   Boolean  — every non-empty string becomes `true`, so `"false"`, `"no"` and `"0"` all arrive as
  *              `true` and `@IsBoolean()` can never reject them.
  *   Number   — `Number('')` and `Number('   ')` are `0`, so a blank field arrives as a real zero
  *              and `@IsInt()`/`@IsNumber()` accept it.
+ *   String   - a number, boolean or object becomes its string form (`5`, `true`, `[object Object]`), so
+ *              `@IsString()` accepts it and the route sends text the caller never wrote.
  *
- * Both fail toward the more permissive value, which is how a `forEveryone=false` delete became a
- * delete-for-everyone. `ToStrictBoolean`/`ToStrictNumber` (`./strict-boolean`) restore the
- * rejection while keeping the useful half of the conversion.
+ * The first two fail toward the more permissive value, which is how a `forEveryone=false` delete became
+ * a delete-for-everyone. `ToStrictBoolean`/`ToStrictNumber`/`ToStrictString` (`./strict-boolean`)
+ * restore the rejection while keeping the useful half of the conversion.
  *
  * This spec asserts the BEHAVIOUR rather than the presence of a decorator, so any future mechanism
  * that produces the same guarantee also satisfies it. Every boolean and numeric property that
  * carries validation metadata is covered — including classes that are never exported, because
- * discovery walks class-validator's own registry rather than module exports.
+ * discovery walks class-validator's own registry rather than module exports. So is every string one.
  */
 
 const PIPE_TRANSFORM_OPTS = { enableImplicitConversion: true };
 const PIPE_VALIDATOR_OPTS = { whitelist: true, forbidNonWhitelisted: true };
 
-/** The value each type is probed with, and why it must be refused. */
-const PROBES: Record<string, { value: string; reason: string }> = {
-  Boolean: { value: 'yes', reason: 'implicit conversion turns any non-empty string into true' },
-  Number: { value: '', reason: 'Number("") is 0, so a blank field becomes a real zero' },
+/** The values each type is probed with, and why each must be refused. */
+const PROBES: Record<string, { values: unknown[]; reason: string }> = {
+  Boolean: { values: ['yes'], reason: 'implicit conversion turns any non-empty string into true' },
+  Number: { values: [''], reason: 'Number("") is 0, so a blank field becomes a real zero' },
+  // Three probes, because their string forms differ: "628123456789" and "true" pass a digit pattern or a
+  // name rule that "[object Object]" fails, so one probe alone would let such a field skip the decorator.
+  String: {
+    values: [628123456789, true, { order: 42 }],
+    reason: 'implicit conversion rewrites a number, boolean or object into its string form, which @IsString accepts',
+  },
 };
 
 function dtoFiles(dir: string, out: string[] = []): string[] {
@@ -92,16 +100,19 @@ describe('DTO input-coercion drift gate', () => {
     expect(names.length).toBeGreaterThanOrEqual(40);
   });
 
-  it('finds both a boolean and a numeric property to check', () => {
+  it('finds a boolean, a numeric and a string property to check', () => {
     expect(targets.some(t => t.type === 'Boolean')).toBe(true);
     expect(targets.some(t => t.type === 'Number')).toBe(true);
+    expect(targets.some(t => t.type === 'String')).toBe(true);
     expect(targets.length).toBeGreaterThanOrEqual(15);
+    // Most request fields are text, so a scan that came up with none of them would report a clean result.
+    expect(targets.filter(t => t.type === 'String').length).toBeGreaterThanOrEqual(100);
   });
 
-  it.each(targets.map(t => [`${t.cls.name}.${t.prop}`, t] as const))(
-    '%s refuses a value the pipe would otherwise coerce',
-    async (_label, target) => {
-      const { value, reason } = PROBES[target.type];
+  it.each(targets.flatMap(t => PROBES[t.type].values.map(value => [`${t.cls.name}.${t.prop}`, value, t] as const)))(
+    '%s refuses %j, which the pipe would otherwise coerce',
+    async (_label, value, target) => {
+      const { reason } = PROBES[target.type];
       const instance = plainToInstance(target.cls, { [target.prop]: value }, PIPE_TRANSFORM_OPTS);
       const errors = await validate(instance, PIPE_VALIDATOR_OPTS);
 

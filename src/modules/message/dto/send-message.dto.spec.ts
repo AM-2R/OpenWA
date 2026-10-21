@@ -315,6 +315,43 @@ describe('SendTextMessageDto customLinkPreview', () => {
   });
 });
 
+// Implicit conversion rewrote a number, a boolean or an object into its string form before @IsString ran, so
+// {"text":{"order":42}} was sent as the literal text "[object Object]". Every field below is documented as a
+// string, in docs/06 and in the request types of all five SDKs.
+describe('string fields refuse a value that is not a string', () => {
+  const invalid: Array<[unknown]> = [[{ order: 42 }], [628123456789], [true]];
+
+  it.each(invalid)('SendTextMessageDto refuses text %j', async text => {
+    const errors = await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text });
+    expect(errors.map(e => e.property)).toEqual(['text']);
+  });
+
+  it.each(invalid)('SendTextMessageDto refuses chatId %j', async chatId => {
+    const errors = await validateDto(SendTextMessageDto, { chatId, text: 'hi' });
+    expect(errors.map(e => e.property)).toEqual(['chatId']);
+  });
+
+  it.each(invalid)('SendMediaMessageDto refuses caption %j', async caption => {
+    const errors = await validateDto(SendMediaMessageDto, {
+      chatId: 'g@g.us',
+      url: 'https://example.com/a.jpg',
+      caption,
+    });
+    expect(errors.map(e => e.property)).toEqual(['caption']);
+  });
+
+  it.each(invalid)('SendContactDto refuses contactNumber %j', async contactNumber => {
+    const errors = await validateDto(SendContactDto, { chatId: 'g@g.us', contactName: 'Alice', contactNumber });
+    expect(errors.map(e => e.property)).toEqual(['contactNumber']);
+  });
+
+  it('still takes the same values spelled as strings', async () => {
+    expect(await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text: '{"order":42}' })).toHaveLength(0);
+    expect(await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text: '628123456789' })).toHaveLength(0);
+    expect(await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text: 'true' })).toHaveLength(0);
+  });
+});
+
 describe('published schema bounds', () => {
   const published = (cls: new () => object, key: string): Record<string, unknown> | undefined =>
     Reflect.getMetadata(DECORATORS.API_MODEL_PROPERTIES, cls.prototype as object, key) as

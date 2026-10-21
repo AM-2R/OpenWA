@@ -28,11 +28,10 @@ describe('SendBulkMessageDto nested media validation', () => {
     await rejects(imageItem({ base64: 'AAAA', evil: 'x' }));
   });
 
-  // Implicit conversion turns a number into its string form before @IsString runs, so the service
-  // receives a string either way.
-  it('converts a numeric base64 inside a media object to a string', async () => {
-    const dto = await validateBulk(imageItem({ base64: 12345 }));
-    expect(dto.messages[0].content.image?.base64).toBe('12345');
+  // A number is not text: implicit conversion used to rewrite it into its string form before @IsString
+  // ran, so the service decoded '12345' as base64 instead of the request being refused.
+  it('refuses a numeric base64 inside a media object', async () => {
+    await rejects(imageItem({ base64: 12345 }));
   });
 });
 
@@ -68,10 +67,9 @@ describe('SendBulkMessageDto media url', () => {
     await accepts(imageItem({ url: 'https://{{host}}/a.jpg' }));
   });
 
-  // Converted like any string field; the per-item check then refuses '123' as not an http(s) URL.
-  it('converts a numeric url next to base64 to a string', async () => {
-    const dto = await validateBulk(imageItem({ base64: 'AAAA', url: 123 }));
-    expect(dto.messages[0].content.image?.url).toBe('123');
+  // Refused like any other non-string field, even next to base64 (which wins when the item is sent).
+  it('refuses a numeric url next to base64', async () => {
+    await rejects(imageItem({ base64: 'AAAA', url: 123 }));
   });
 });
 

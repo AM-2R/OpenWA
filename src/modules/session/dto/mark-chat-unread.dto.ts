@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
 import { CHAT_ID_MAX_LENGTH, CHAT_JID_MESSAGE, CHAT_JID_PATTERN } from '../../message/dto/send-message.dto';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
  * Deliberately separate from {@link MarkChatReadDto}, which the unread route used to share. The read
@@ -13,6 +14,7 @@ export class MarkChatUnreadDto {
     description: "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
     example: '1234567890@c.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)

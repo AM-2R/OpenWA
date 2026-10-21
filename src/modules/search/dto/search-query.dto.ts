@@ -3,7 +3,7 @@ import { IsString, IsNotEmpty, IsOptional, IsEnum, IsInt, IsNumber, Max, MaxLeng
 import { Type } from 'class-transformer';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
-import { ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import { SEARCH_OFFSET_MAX, SEARCH_QUERY_MAX_LENGTH, SEARCH_TERMS_MAX } from '../search.constants';
 
 /**
@@ -23,6 +23,7 @@ export class SearchQueryDto {
     description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} words)`,
     maxLength: SEARCH_QUERY_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(SEARCH_QUERY_MAX_LENGTH)
@@ -30,6 +31,7 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({ description: 'Restrict to a single session' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   sessionId?: string;
 
@@ -38,6 +40,7 @@ export class SearchQueryDto {
       "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   chatId?: string;
 
@@ -46,6 +49,7 @@ export class SearchQueryDto {
       "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   from?: string;
 

@@ -16,7 +16,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Validate } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import {
   BATCH_ID_MAX_LENGTH,
   CHAT_ID_MAX_LENGTH,
@@ -31,21 +31,25 @@ import { BatchMessageStatus, BatchStatus } from '../entities/message-batch.entit
 class BulkMediaDto {
   @ApiPropertyOptional({ description: 'Media URL (http/https)' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   url?: string;
 
   @ApiPropertyOptional({ description: 'Base64-encoded media data' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   base64?: string;
 
   @ApiPropertyOptional({ description: 'Media MIME type' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   mimetype?: string;
 
   @ApiPropertyOptional({ description: 'Filename (documents only)' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   filename?: string;
 
@@ -59,6 +63,7 @@ class BulkMediaDto {
 export class BulkMessageContentDto {
   @ApiPropertyOptional({ description: 'Text content for text messages', maxLength: MESSAGE_TEXT_MAX_LENGTH })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
   text?: string;
@@ -96,6 +101,7 @@ export class BulkMessageContentDto {
 
   @ApiPropertyOptional({ description: 'Caption for media messages', maxLength: 1024 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(1024)
   caption?: string;
@@ -121,6 +127,7 @@ export class BulkMessageContentDto {
 
 class BulkMessageItemDto {
   @ApiProperty({ description: 'Recipient chat ID', example: '628123456789@c.us', maxLength: CHAT_ID_MAX_LENGTH })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
@@ -177,6 +184,7 @@ export class SendBulkMessageDto {
     maxLength: BATCH_ID_MAX_LENGTH,
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(BATCH_ID_MAX_LENGTH)
   batchId?: string;

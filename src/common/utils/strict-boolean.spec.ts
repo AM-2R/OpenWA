@@ -2,8 +2,8 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { IsBoolean, ValidateIf } from 'class-validator';
-import { IsInt } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber } from './strict-boolean';
+import { IsInt, IsString } from 'class-validator';
+import { ToStrictBoolean, ToStrictNumber, ToStrictString } from './strict-boolean';
 
 // Mirrors the real pipe: whitelist + forbidNonWhitelisted from src/main.ts, and the
 // enableImplicitConversion transform option from src/config/app-validation.ts. Leaving the
@@ -119,5 +119,59 @@ describe('ToStrictNumber', () => {
     const { instance, errors } = await run(UnguardedNumber, { count: '' });
     expect(instance.count).toBe(0);
     expect(errors).toHaveLength(0);
+  });
+});
+
+class StringSubject {
+  @ToStrictString()
+  @ValidateIf((o: StringSubject) => o.text !== undefined)
+  @IsString()
+  text?: string;
+}
+
+class UnguardedString {
+  @ValidateIf((o: UnguardedString) => o.text !== undefined)
+  @IsString()
+  text?: string;
+}
+
+describe('ToStrictString', () => {
+  it('keeps a string exactly as sent', async () => {
+    for (const value of ['hello', '', '  padded  ', '628123456789', 'true']) {
+      const { instance, errors } = await run(StringSubject, { text: value });
+      expect(instance.text).toBe(value);
+      expect(errors).toHaveLength(0);
+    }
+  });
+
+  it.each([[628123456789], [true], [false], [0], [{ order: 42 }], [['a']]])(
+    'rejects %j instead of reading it as text',
+    async value => {
+      const { instance, errors } = await run(StringSubject, { text: value });
+      expect(instance.text).toEqual(value);
+      expect(errors.map(e => e.property)).toEqual(['text']);
+    },
+  );
+
+  it('leaves an absent property absent and a null one null', async () => {
+    const absent = await run(StringSubject, {});
+    expect(absent.instance.text).toBeUndefined();
+    expect(absent.errors).toHaveLength(0);
+
+    const nulled = await run(StringSubject, { text: null });
+    expect(nulled.instance.text).toBeNull();
+  });
+
+  // The behaviour the decorator exists to prevent: the customer receiving the literal "[object Object]".
+  it('documents the unguarded behaviour it replaces: a number, boolean or object becomes a string', async () => {
+    for (const [value, expected] of [
+      [628123456789, '628123456789'],
+      [true, 'true'],
+      [{ order: 42 }, '[object Object]'],
+    ] as const) {
+      const { instance, errors } = await run(UnguardedString, { text: value });
+      expect(instance.text).toBe(expected);
+      expect(errors).toHaveLength(0);
+    }
   });
 });

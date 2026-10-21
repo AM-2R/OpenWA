@@ -10,6 +10,7 @@ import {
   Validate,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
@@ -31,6 +32,7 @@ export class CreateApiKeyDto {
     minLength: 3,
     maxLength: 100,
   })
+  @ToStrictString()
   @IsString()
   @MinLength(3)
   @MaxCodePoints(100)
@@ -169,6 +171,7 @@ export class ValidateApiKeyResponseDto {
 export class UpdateApiKeyDto {
   @ApiPropertyOptional({ minLength: 3, maxLength: 100 })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MinLength(3)
   @MaxCodePoints(100)
