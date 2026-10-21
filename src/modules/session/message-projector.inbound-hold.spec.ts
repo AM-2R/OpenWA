@@ -745,13 +745,24 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       expect(dispatched('message.sent')).toHaveLength(1);
     };
 
-    it('writes the edit recorded for the echo onto the row', async () => {
+    it('writes the edit recorded for the echo onto the row, marked edited', async () => {
       await lose(
         () => edit('v1'),
         () => undefined,
       );
 
       expect(rows[0].body).toBe('v1');
+      expect((rows[0].metadata as Row).edited).toBe(true);
+    });
+
+    it('writes the REST edit recorded for the echo onto the row, marked edited', async () => {
+      await lose(
+        () => void projector.recordOutboundMessageEdit('s1', 'A', 'v1', { kind: 'edit', chatId: CHAT, fromMe: true }),
+        () => undefined,
+      );
+
+      expect(rows[0].body).toBe('v1');
+      expect((rows[0].metadata as Row).edited).toBe(true);
     });
 
     it('writes the reaction recorded for the echo onto the row', async () => {
@@ -770,6 +781,7 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       );
 
       expect(rows[0].body).toBe('v2');
+      expect((rows[0].metadata as Row).edited).toBe(true);
       expect(
         (eventsGateway.emitMessageEdited.mock.calls as Array<[string, { body: string }]>).map(c => c[1].body),
       ).toEqual(['v1', 'v2']);
