@@ -7,7 +7,7 @@
 #   (c) backup -> restore roundtrip via sqlite3 .backup (skipped with a notice when the host
 #       has no sqlite3 — everything else still runs)
 #   (d) the cp fallback writes a CONSISTENCY-WARNING marker into the archive, restore warns
-#       but continues, and restore --strict refuses
+#       but continues, and restore --strict refuses it before writing anything
 #   (e) the archive min-content check rejects (and deletes) an archive missing a required DB
 #   (f) data/.env.generated supplies paths the environment does not, and restore reads the archive's copy
 #   (g) PLUGIN_STATE_DIR plugin state is archived and restored at the configured root
@@ -73,6 +73,10 @@
 #   (an) restore refuses to empty a state dir that is ., the working directory, the data dir, the home
 #       directory or a directory around the workspace or the data dir, before anything is written
 #   (ao) restore refuses an archive member named ../x, a/../x or /x before it extracts anything
+#   (ap) a restore over files other users can read leaves the databases, the admin key and
+#       .env.generated at mode 600
+#   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, and an external
+#       database's are kept in its snapshot
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -262,17 +266,23 @@ fi
 if [ "$(cat "$D/dst/data/main.sqlite")" != "d-main" ]; then
   fail "(d) fallback archive did not restore the main DB"
 fi
+# Into a target of its own: over $D/dst, which the restore above filled, the live-target guard would
+# refuse this run as well, and a --strict that did nothing would still pass.
+mkdir -p "$D/strict"
 set +e
-OUT_DS="$(cd "$D/dst" && "$RESTORE" "$ARCHIVE_D" --strict 2>&1)"
+OUT_DS="$(cd "$D/strict" && "$RESTORE" "$ARCHIVE_D" --strict 2>&1)"
 RC_DS=$?
 set -e
 if [ "$RC_DS" -eq 0 ]; then
   fail "(d) restore --strict exited 0 on a marked archive"
 fi
-if ! printf '%s' "$OUT_DS" | grep -q -- '--strict'; then
-  fail "(d) --strict refusal message is not explicit"
+if ! printf '%s' "$OUT_DS" | grep -q -- 'ERROR: --strict given'; then
+  fail "(d) --strict refusal message is not explicit: $OUT_DS"
 fi
-pass "(d) fallback marker written, restore warns and continues, --strict refuses"
+if [ -n "$(ls -A "$D/strict")" ]; then
+  fail "(d) the --strict refusal left files in the target: $(ls -A "$D/strict")"
+fi
+pass "(d) fallback marker written, restore warns and continues, --strict refuses before writing anything"
 
 echo ""
 echo "==> (e) archive min-content check rejects an incomplete archive"
@@ -2384,6 +2394,93 @@ refused_restore "$AO" "ao: ../x" 'unsafe path in backup archive: ../escape.txt' 
 refused_restore "$AO" "ao: a/../x" 'unsafe path in backup archive: a/../b.txt' "$AO/work" "$AO/inner.tar.gz"
 refused_restore "$AO" "ao: /x" "unsafe path in backup archive: $AO/abs/member.txt" "$AO/work" "$AO/abs.tar.gz"
 pass "(ao) an archive member named ../x, a/../x or /x is refused from the listing"
+
+echo ""
+echo "==> (ap) a restore over files other users can read leaves them at mode 600"
+# cp onto an existing file keeps the mode that file had, so a restore over an install whose files were
+# made 644 (a copy, a chmod -R, a foreign umask) would leave the plaintext admin key and the databases
+# readable by every local user unless it tightens them itself. A fresh target cannot show it: the files
+# arrive at 600 there anyway.
+AP="$WORK/ap"
+mkdir -p "$AP/src/data" "$AP/live/data"
+make_fixture "$AP/src/data/main.sqlite" "ap-archive-main"
+make_fixture "$AP/src/data/openwa.sqlite" "ap-archive-data"
+printf 'ap-archive-key\n' >"$AP/src/data/.api-key"
+printf 'LOG_LEVEL=info\n' >"$AP/src/data/.env.generated"
+(
+  cd "$AP/src"
+  BACKUP_DIR="$AP/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AP="$(ls "$AP"/out/openwa-backup-*.tar.gz)"
+make_fixture "$AP/live/data/main.sqlite" "ap-live-main"
+make_fixture "$AP/live/data/openwa.sqlite" "ap-live-data"
+printf 'ap-live-key\n' >"$AP/live/data/.api-key"
+printf 'LOG_LEVEL=debug\n' >"$AP/live/data/.env.generated"
+chmod 644 "$AP/live/data/main.sqlite" "$AP/live/data/openwa.sqlite" "$AP/live/data/.api-key" "$AP/live/data/.env.generated"
+(
+  cd "$AP/live"
+  "$RESTORE" "$ARCHIVE_AP" --force >/dev/null
+)
+if [ "$(db_fingerprint "$AP/live/data/main.sqlite")" != "ap-archive-main" ] ||
+  [ "$(cat "$AP/live/data/.api-key")" != "ap-archive-key" ] ||
+  [ "$(cat "$AP/live/data/.env.generated")" != "LOG_LEVEL=info" ]; then
+  fail "(ap) the restore did not replace the files it was meant to tighten"
+fi
+for f in main.sqlite openwa.sqlite .api-key .env.generated; do
+  if [ -z "$(find "$AP/live/data/$f" -maxdepth 0 -perm 600)" ]; then
+    fail "(ap) the restored $f is not mode 600"
+  fi
+done
+pass "(ap) the databases, the admin key and .env.generated come back at mode 600 over looser files"
+
+echo ""
+echo "==> (aq) every sidecar of a replaced database goes, and an external database's are snapshotted"
+# SQLite replays a -journal, and reads a -shm, beside whatever main file it finds, so the old install's
+# must not outlive the restore: a hot journal would roll the restored file back to the old rows. (q) holds
+# a real -wal; these are plain files, which is all the clean-up looks at. The snapshot has to keep them
+# for the same reason, or restoring it back would lose the rollback they carry. The external database
+# is a link, so its sidecars sit beside the file it points at, where SQLite names them.
+AQ="$WORK/aq"
+mkdir -p "$AQ/src/data" "$AQ/live/data" "$AQ/ext" "$AQ/real"
+make_fixture "$AQ/src/data/main.sqlite" "aq-archive-main"
+make_fixture "$AQ/src/data/openwa.sqlite" "aq-archive-data"
+(
+  cd "$AQ/src"
+  BACKUP_DIR="$AQ/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AQ="$(ls "$AQ"/out/openwa-backup-*.tar.gz)"
+make_fixture "$AQ/real/auth.sqlite" "aq-live-main"
+ln -s "$AQ/real/auth.sqlite" "$AQ/ext/auth.sqlite"
+make_fixture "$AQ/live/data/openwa.sqlite" "aq-live-data"
+for db in "$AQ/real/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
+  for sfx in -wal -shm -journal; do
+    printf 'aq-stale%s\n' "$sfx" >"$db$sfx"
+  done
+done
+(
+  cd "$AQ/live"
+  MAIN_DATABASE_NAME="$AQ/ext/auth.sqlite" "$RESTORE" "$ARCHIVE_AQ" --force >/dev/null
+)
+for db in "$AQ/real/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
+  for sfx in -wal -shm -journal; do
+    if [ -e "$db$sfx" ]; then
+      fail "(aq) the old install's $(basename "$db")$sfx survived the restore"
+    fi
+  done
+done
+if [ "$(db_fingerprint "$AQ/ext/auth.sqlite")" != "aq-archive-main" ] ||
+  [ "$(db_fingerprint "$AQ/live/data/openwa.sqlite")" != "aq-archive-data" ]; then
+  fail "(aq) the databases were not restored"
+fi
+for sfx in -wal -shm -journal; do
+  if [ "$(cat "$AQ"/ext/auth.sqlite.pre-restore-*"$sfx" 2>/dev/null || true)" != "aq-stale$sfx" ]; then
+    fail "(aq) the snapshot of the external database lost its $sfx"
+  fi
+  if [ "$(cat "$AQ"/live/data.pre-restore-*/openwa.sqlite"$sfx" 2>/dev/null || true)" != "aq-stale$sfx" ]; then
+    fail "(aq) the data-dir snapshot lost the data store's $sfx"
+  fi
+done
+pass "(aq) -wal, -shm and -journal are cleared from both databases and kept in their snapshots"
 
 echo ""
 echo "All smoke tests passed!"
