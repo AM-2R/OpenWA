@@ -809,7 +809,9 @@
   word-break: break-all;
 }
 
-@media (max-width: 860px) {
+/* Beside the 280px rail the card grid keeps its 320px minimum track, which needs 948px of viewport with
+   the sidebar open; below that the rail stacks above the cards. */
+@media (max-width: 950px) {
   .plugins-page .plugins-layout {
     flex-direction: column;
   }

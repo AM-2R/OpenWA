@@ -22,3 +22,15 @@ test('below that the install tabs wrap to a row of their own', () => {
   assert.equal(decl(base.body, 'width'), '100%');
   assert.equal(decl(base.body, 'order'), '3');
 });
+
+// Beside the 280px status rail the card grid keeps a 320px minimum track. With the sidebar open that needs 948px
+// of viewport; from 861px up to there the cards were wider than their column and lost their right edge and their
+// action buttons. Below that the rail stacks above the cards.
+test('the status rail stacks above the cards before the card column gets too narrow', () => {
+  const stacked = rules.filter(
+    r => r.selectors.includes('.plugins-page .plugins-layout') && decl(r.body, 'flex-direction') === 'column',
+  );
+  assert.equal(stacked.length, 1, 'expected one rule that stacks the rail');
+  const width = Number(/max-width: (\d+)px/.exec(stacked[0].media)?.[1]);
+  assert.ok(width >= 950, `the rail stacks at ${stacked[0].media || 'every width'}`);
+});
