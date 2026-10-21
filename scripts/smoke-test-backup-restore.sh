@@ -73,7 +73,8 @@
 #       where a user can write /)
 #   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to /, the working
 #       directory, the data dir, the home directory or a directory around the workspace or the data
-#       dir, before anything is written (the / cases are skipped where a user can write /)
+#       dir, before it replaces anything (the data-dir safety snapshot is taken first; the / cases are
+#       skipped where a user can write /)
 #   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
@@ -2295,7 +2296,8 @@ fi
 pass "(al) a failed tar exits non-zero and leaves nothing in BACKUP_DIR"
 
 # tree_digest <dir>: every path and file checksum below <dir>, apart from the restore's own safety
-# snapshots (<name>.pre-restore-<time>), which a refusal may follow.
+# snapshots (<name>.pre-restore-<time>). The data-dir snapshot is taken before the state dirs are checked,
+# so a refusal of one can leave a copy of the data dir behind.
 tree_digest() {
   (
     cd "$1"
@@ -2377,11 +2379,12 @@ else
 fi
 
 echo ""
-echo "==> (an) restore refuses to empty a broad state directory, before anything is written"
+echo "==> (an) restore refuses to empty a broad state directory, before it replaces anything"
 # A state dir is emptied before it is refilled. One setting that names the working directory, the data
 # dir, the home directory or a directory around the workspace or the data dir would take unrelated
-# files with it, so the snapshot pass refuses each. The checks overlap, so each case pins the message of
-# its own check: a check that was deleted would otherwise be covered by its neighbour.
+# files with it, so the snapshot pass refuses each. That pass starts once the data-dir safety snapshot
+# is taken and ./data exists, and ends before anything is replaced. The checks overlap, so each case pins
+# the message of its own check: a check that was deleted would otherwise be covered by its neighbour.
 AN="$WORK/an"
 mkdir -p "$AN/work/data" "$AN/home" "$AN/vol/data"
 for keep in "$AN/work" "$AN/work/data" "$AN/home" "$AN/vol/data"; do
