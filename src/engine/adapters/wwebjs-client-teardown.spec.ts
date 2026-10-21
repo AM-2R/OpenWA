@@ -159,6 +159,18 @@ const CASES: Case[] = [
     run: adapter => adapter.muteChat(CHAT, Date.now() + 60_000),
   },
   {
+    // The phone behind the lid is read after the lookup; contacts has no other read after an await.
+    name: 'a number check of a migrated contact',
+    build: parked => {
+      const getContactLidAndPhone = jest.fn();
+      return {
+        client: { getNumberId: () => parked.park().then(() => found(LID)), getContactLidAndPhone },
+        unreached: getContactLidAndPhone,
+      };
+    },
+    run: adapter => adapter.getNumberId('5511987654321'),
+  },
+  {
     // The client is read again after the lookup, inside a catch that answers a missing group with null.
     name: 'a group info read',
     build: parked => {

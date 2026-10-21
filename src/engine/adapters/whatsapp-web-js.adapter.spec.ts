@@ -9353,11 +9353,60 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     ['a number with a plus', '+628111'],
   ])('getNumberId answers %s of a migrated contact with the phone id, not its lid', async (_label, input) => {
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
-    const adapter = readyAdapter({ getNumberId });
+    const getContactLidAndPhone = jest.fn().mockResolvedValue([{ lid: '159442138038327@lid', pn: '628111@c.us' }]);
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
 
     await expect(adapter.getNumberId(input)).resolves.toBe('628111@c.us');
     await expect(adapter.checkNumberExists(input)).resolves.toBe(true);
     expect(getNumberId).toHaveBeenCalledWith(input);
+    expect(getContactLidAndPhone).toHaveBeenCalledWith(['159442138038327@lid']);
+  });
+
+  // Brazil, Mexico and Argentina numbers exist on WhatsApp under another digit string than the one typed (the
+  // ninth digit). The number check reports the id WhatsApp knows, as the Baileys engine does.
+  it('getNumberId answers the phone WhatsApp holds for a migrated contact, not the digits typed', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const getContactLidAndPhone = jest
+      .fn()
+      .mockResolvedValue([{ lid: '159442138038327@lid', pn: '551187654321@c.us' }]);
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
+
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('551187654321@c.us');
+  });
+
+  it.each([
+    ['no mapping', []],
+    ['an empty phone', [{ lid: '159442138038327@lid', pn: '' }]],
+    ['no phone', [{ lid: '159442138038327@lid' }]],
+  ])('getNumberId keeps the typed number for a migrated contact WhatsApp Web has %s for', async (_label, mapping) => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone: jest.fn().mockResolvedValue(mapping) });
+
+    await expect(adapter.getNumberId('+5511987654321')).resolves.toBe('5511987654321@c.us');
+  });
+
+  it('getNumberId does not read a phone for a contact that is not migrated', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '551187654321@c.us' });
+    const getContactLidAndPhone = jest.fn();
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
+
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('551187654321@c.us');
+    expect(getContactLidAndPhone).not.toHaveBeenCalled();
+  });
+
+  it('getNumberId fails with the phone read instead of answering a number that may be wrong', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const failing = (error: Error): WhatsAppWebJsAdapter =>
+      readyAdapter({ getNumberId, getContactLidAndPhone: jest.fn().mockRejectedValue(error) });
+
+    await expect(failing(new Error('Evaluation failed')).getNumberId('5511987654321')).rejects.toThrow(
+      'Evaluation failed',
+    );
+    await expect(
+      failing(new Error('Protocol error: Target closed')).getNumberId('5511987654321'),
+    ).rejects.toBeInstanceOf(EngineTransportError);
+    // Existence is all checkNumberExists asks, so the phone read never reaches it.
+    await expect(failing(new Error('Evaluation failed')).checkNumberExists('5511987654321')).resolves.toBe(true);
   });
 
   it('getSubscribedChannels reads $1 on a renamed build, never the literal "undefined"', async () => {

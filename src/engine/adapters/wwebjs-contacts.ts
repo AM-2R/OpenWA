@@ -255,10 +255,14 @@ export class WwebjsContacts {
 
   async getNumberId(number: string): Promise<string | null> {
     const wid = await this.lookupNumberId(number);
-    // The contract is the neutral `<phone>@c.us`, which is what the Baileys engine answers. A migrated
-    // contact's lookup names its `@lid`, the engine's own scheme; the phone the caller supplied is the
-    // stable neutral id, and a send to it re-resolves to the lid.
-    return wid?.endsWith('@lid') ? `${userPart(number).replace(/\D/g, '')}@c.us` : wid;
+    if (!wid?.endsWith('@lid')) return wid;
+    // The contract is the neutral `<phone>@c.us` WhatsApp holds for the account, which is what the Baileys
+    // engine answers. It can differ from the digits typed (a Brazilian, Mexican or Argentine number with or
+    // without its extra digit). A migrated contact's lookup names its `@lid`, the engine's own scheme, so the
+    // phone is read back through it. When WhatsApp Web knows none, the typed number stands in, and a send to
+    // it re-resolves to the lid. A failed read propagates, as the lookup above does.
+    const phone = await withPage(this.host, 'getNumberId', () => this.resolveContactPhone(wid));
+    return `${phone ?? userPart(number).replace(/\D/g, '')}@c.us`;
   }
 
   async checkNumberExists(number: string): Promise<boolean> {
