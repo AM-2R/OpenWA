@@ -50,6 +50,15 @@ export const MESSAGE_TEXT_MAX_LENGTH = 4096;
 export const CHAT_ID_MAX_LENGTH = 255;
 export const BATCH_ID_MAX_LENGTH = 255;
 
+/**
+ * The structural check on a chat id for the chat routes that also verify its form: localpart@host with
+ * no whitespace, engine-neutral so another engine's JID scheme (Baileys' `@s.whatsapp.net`) passes and
+ * the adapter normalises further. Exported so the MCP tools that reach the same operations hold the
+ * rule too: they call the service directly, and a restated pattern is how the two drift apart.
+ */
+export const CHAT_JID_PATTERN = /^[^\s@]+@[^\s@]+$/;
+export const CHAT_JID_MESSAGE = 'chatId must be a valid chat JID in the form localpart@host';
+
 // The cap on a prompt choice's id. It must equal BUTTON_TEXT_MAX_LENGTH in the Baileys message
 // mapper, which refuses to offer any inbound choice whose id is longer, so an id past this bound
 // can never name a choice that exists. Validating it against the text cap instead accepted such a

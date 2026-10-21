@@ -9,7 +9,7 @@ import {
   ValidateIf,
   MaxLength,
 } from 'class-validator';
-import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
+import { CHAT_ID_MAX_LENGTH, CHAT_JID_MESSAGE, CHAT_JID_PATTERN } from '../../message/dto/send-message.dto';
 
 /**
  * Ceiling on one request's receipt batch, so a single call cannot hand the engine an unbounded key
@@ -40,9 +40,7 @@ export class MarkChatReadDto {
   // Engine-neutral structural check (localpart@host, no whitespace) so a different engine's JID
   // scheme (e.g. Baileys 1234@s.whatsapp.net) is accepted too; the adapter validates/normalises
   // further for its own engine. Keeps the early-400 on obvious garbage without coupling to wwebjs.
-  @Matches(/^[^\s@]+@[^\s@]+$/, {
-    message: 'chatId must be a valid chat JID in the form localpart@host',
-  })
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiPropertyOptional({
