@@ -1059,6 +1059,25 @@ describe('WebhookDeliveryService', () => {
         expect(mockFetch).toHaveBeenCalledTimes(1);
       });
 
+      // With another webhook naming the event the gate lets it through, so only the per-webhook match
+      // keeps a catch-all subscriber out of it. The later deliverability re-check would stop the POST,
+      // but not the outbox row opened for it first.
+      it('leaves a catch-all webhook out when another webhook of the session names it', async () => {
+        const catchAll = createMockWebhook({ id: 'wh-all', url: 'https://all.example/hook', events: ['*'] });
+        const named = createMockWebhook({
+          id: 'wh-named',
+          url: 'https://named.example/hook',
+          events: ['message.receipt'],
+        });
+        (repository.find as jest.Mock).mockResolvedValue([catchAll, named]);
+
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+
+        expect(outboxService.open).toHaveBeenCalledTimes(1);
+        expect(outboxService.open).toHaveBeenCalledWith(expect.objectContaining({ webhookId: 'wh-named' }));
+        expect((mockFetch.mock.calls as Array<[string]>).map(([url]) => url)).toEqual(['https://named.example/hook']);
+      });
+
       it('does not gate events a wildcard covers', async () => {
         (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
 
@@ -1742,6 +1761,23 @@ describe('WebhookDeliveryService', () => {
         sizeBytes: 2048,
       });
       expect(JSON.stringify(jobData).length).toBeLessThan(2048);
+    });
+
+    it('enqueues an opt-in event only for the webhook that names it, not for a catch-all one', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      const catchAll = createMockWebhook({ id: 'wh-all', events: ['*'] });
+      const named = createMockWebhook({ id: 'wh-named', events: ['message.receipt'] });
+      (repository.find as jest.Mock).mockResolvedValue([catchAll, named]);
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+
+      await queueService.dispatch('sess-1', 'message.receipt', { id: 'OUT1', participant: '628222@c.us' });
+
+      expect(outboxService.open).toHaveBeenCalledTimes(1);
+      expect(outboxService.open).toHaveBeenCalledWith(expect.objectContaining({ webhookId: 'wh-named' }));
+      expect(webhookQueue.add).toHaveBeenCalledTimes(1);
+      expect(webhookQueue.add).toHaveBeenCalledWith('webhook-wh-named', expect.anything(), expect.anything());
     });
 
     it('uses one direct POST for operator redrive even with the queue enabled', async () => {
