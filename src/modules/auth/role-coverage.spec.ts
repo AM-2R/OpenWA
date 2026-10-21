@@ -11,6 +11,8 @@ import { ChannelController } from '../channel/channel.controller';
 import { LabelController } from '../label/label.controller';
 import { ProfileController } from '../profile/profile.controller';
 import { CatalogController } from '../catalog/catalog.controller';
+import { MessageController } from '../message/message.controller';
+import { SessionController } from '../session/session.controller';
 import { allAgentTools } from '../../core/agent-tools/tools';
 
 // The dashboard's client-side role (seeded from localStorage) is cosmetic UX only — the ACTUAL
@@ -105,6 +107,101 @@ describe('write routes of the channel, group, contact, label, profile and catalo
       id => !writeRoutes.some(route => route.id === id && !atLeastOperator(route.role)),
     );
     expect(stale).toEqual([]);
+  });
+});
+
+// The message and session controllers drive the linked WhatsApp account: they send, delete, start, stop,
+// log out, hand out the QR code and pair a number. The walk above only asks that a write route is gated at
+// all, so it would not see the QR read slipping below OPERATOR, the proxy write sliding from ADMIN to
+// OPERATOR, or the presence read losing its explicit VIEWER. These tables state every route's role, so
+// removing or changing one mark fails here, and a new route fails until its role is decided.
+describe('role of every message and session route', () => {
+  const OPEN = 'open'; // no @RequireRole: any valid key may call it
+  type Role = ApiKeyRole | typeof OPEN;
+
+  const MESSAGE_ROLES: Record<string, Role> = {
+    getMessages: OPEN,
+    sendText: ApiKeyRole.OPERATOR,
+    sendTemplate: ApiKeyRole.OPERATOR,
+    sendImage: ApiKeyRole.OPERATOR,
+    sendVideo: ApiKeyRole.OPERATOR,
+    sendAudio: ApiKeyRole.OPERATOR,
+    sendDocument: ApiKeyRole.OPERATOR,
+    sendLocation: ApiKeyRole.OPERATOR,
+    sendContact: ApiKeyRole.OPERATOR,
+    sendSticker: ApiKeyRole.OPERATOR,
+    sendPoll: ApiKeyRole.OPERATOR,
+    reply: ApiKeyRole.OPERATOR,
+    clickButton: ApiKeyRole.OPERATOR,
+    forward: ApiKeyRole.OPERATOR,
+    react: ApiKeyRole.OPERATOR,
+    getBatchStatus: OPEN,
+    cancelBatch: ApiKeyRole.OPERATOR,
+    getChatHistory: OPEN,
+    getReactions: OPEN,
+    getChatMedia: OPEN,
+    deleteMessage: ApiKeyRole.OPERATOR,
+    votePoll: ApiKeyRole.OPERATOR,
+    pinMessage: ApiKeyRole.OPERATOR,
+    unpinMessage: ApiKeyRole.OPERATOR,
+    starMessage: ApiKeyRole.OPERATOR,
+    edit: ApiKeyRole.OPERATOR,
+    sendBulk: ApiKeyRole.OPERATOR,
+  };
+
+  const SESSION_ROLES: Record<string, Role> = {
+    create: ApiKeyRole.OPERATOR,
+    findAll: OPEN,
+    findOne: OPEN,
+    getConfig: OPEN,
+    updateConfig: ApiKeyRole.OPERATOR,
+    getProxy: OPEN,
+    updateProxy: ApiKeyRole.ADMIN,
+    delete: ApiKeyRole.OPERATOR,
+    start: ApiKeyRole.OPERATOR,
+    stop: ApiKeyRole.OPERATOR,
+    logout: ApiKeyRole.OPERATOR,
+    forceKill: ApiKeyRole.OPERATOR,
+    // A GET, but the QR code links a device to the account, like the invite codes above.
+    getQRCode: ApiKeyRole.OPERATOR,
+    requestPairingCode: ApiKeyRole.OPERATOR,
+    getGroups: OPEN,
+    getChats: OPEN,
+    markChatRead: ApiKeyRole.OPERATOR,
+    subscribeToPresence: ApiKeyRole.OPERATOR,
+    setOnlinePresence: ApiKeyRole.OPERATOR,
+    getPresence: ApiKeyRole.VIEWER,
+    markChatUnread: ApiKeyRole.OPERATOR,
+    clearChatMessages: ApiKeyRole.OPERATOR,
+    archiveChat: ApiKeyRole.OPERATOR,
+    muteChat: ApiKeyRole.OPERATOR,
+    pinChat: ApiKeyRole.OPERATOR,
+    deleteChat: ApiKeyRole.OPERATOR,
+    sendChatState: ApiKeyRole.OPERATOR,
+    getStats: OPEN,
+  };
+
+  // The role the guard resolves: the handler's own mark, else the class's.
+  const rolesOf = (controller: { prototype: object }): Record<string, Role> => {
+    const prototype = controller.prototype as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.getOwnPropertyNames(prototype).flatMap(name => {
+        const handler = prototype[name];
+        if (typeof handler !== 'function') return [];
+        // RequestMethod.GET is 0, so "is a route" is an undefined check, not a truthiness check.
+        if (Reflect.getMetadata(METHOD_METADATA, handler) === undefined) return [];
+        const role = (Reflect.getMetadata(REQUIRED_ROLE_KEY, handler) ??
+          Reflect.getMetadata(REQUIRED_ROLE_KEY, controller)) as ApiKeyRole | undefined;
+        return [[name, role ?? OPEN]];
+      }),
+    );
+  };
+
+  it.each([
+    ['MessageController', MessageController, MESSAGE_ROLES],
+    ['SessionController', SessionController, SESSION_ROLES],
+  ])('%s carries exactly the roles in its table', (_name, controller, table) => {
+    expect(rolesOf(controller)).toEqual(table);
   });
 });
 
