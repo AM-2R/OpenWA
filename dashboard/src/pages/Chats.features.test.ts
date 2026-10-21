@@ -111,6 +111,8 @@ let listExtra = false;
 const lidPhones: Record<string, string> = {};
 // When true, resolving a privacy id fails as it does while the engine is busy.
 let failLidPhones = false;
+// When true, it answers a phone that is no string, which nothing in the page expects.
+let garbleLidPhones = false;
 // How many more privacy-id chats the list holds, none of which resolves to a phone.
 let extraLidChats = 0;
 const extraLidChat = (n: number): Chat => ({
@@ -286,6 +288,7 @@ function installFetchStub(): void {
     if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
       const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
       if (failLidPhones) return Promise.resolve(jsonResponse({ message: 'busy' }, 503));
+      if (garbleLidPhones) return Promise.resolve(jsonResponse({ contactId: id, phone: 15550009999 }));
       return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts/check/`)) {
@@ -354,6 +357,7 @@ afterEach(async () => {
   listDuplicateContact = false;
   failContacts = false;
   failLidPhones = false;
+  garbleLidPhones = false;
   extraLidChats = 0;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
@@ -497,6 +501,19 @@ test('a privacy id the engine cannot resolve right now does not stop a chat from
   const { screen, waitFor, within } = rtl;
   listExtra = true;
   failLidPhones = true;
+  const { container } = renderPage();
+  await screen.findByText('Lia');
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
+});
+
+test('an answer about a privacy id that the page cannot read does not stop a chat from opening', async () => {
+  const { screen, waitFor, within } = rtl;
+  listExtra = true;
+  garbleLidPhones = true;
   const { container } = renderPage();
   await screen.findByText('Lia');
   await startChatWithTypedNumber();
