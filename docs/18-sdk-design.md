@@ -10,7 +10,7 @@ OpenWA ships five official, hand-written client libraries for the REST API. They
 | ----------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------- |
 | JavaScript / TypeScript | [`@rmyndharis/openwa`](https://www.npmjs.com/package/@rmyndharis/openwa)               | `npm install @rmyndharis/openwa`     | Dual ESM + CJS, bundled `.d.ts` types, Node 18+                                  |
 | Python                  | [`rmyndharis-openwa`](https://pypi.org/project/rmyndharis-openwa/)                     | `pip install rmyndharis-openwa`      | Synchronous (httpx), PEP 561 typed, Python 3.9+                                  |
-| PHP                     | [`rmyndharis/openwa`](https://packagist.org/packages/rmyndharis/openwa)                | `composer require rmyndharis/openwa` | Synchronous (Guzzle 7), PSR-4, PHP 8.1+                                          |
+| PHP                     | [`rmyndharis/openwa`](https://packagist.org/packages/rmyndharis/openwa)                | `composer require rmyndharis/openwa` | Synchronous (Guzzle 7.9+ or 8), PSR-4, PHP 8.1+                                  |
 | Java                    | [`com.rmyndharis:openwa`](https://central.sonatype.com/artifact/com.rmyndharis/openwa) | Maven Central                        | Sync, `java.net.http`. See [`sdk/java/README.md`](../sdk/java/README.md).        |
 | Go                      | [`github.com/rmyndharis/OpenWA/sdk/go`](../sdk/go)                                     | `go get`                             | Stdlib-only, no third-party deps. See [`sdk/go/README.md`](../sdk/go/README.md). |
 
@@ -794,7 +794,7 @@ except OpenWAApiError as e:
 
 ## 18.4 PHP SDK
 
-The PHP SDK is a hand-written, synchronous client built on Guzzle 7. It mirrors the full user-facing API surface: every resource method maps to one REST endpoint, request/response payloads are plain associative arrays, and non-2xx responses are translated into a typed `OpenWA*Exception` hierarchy.
+The PHP SDK is a hand-written, synchronous client built on Guzzle 7.9+ or 8. It mirrors the full user-facing API surface: every resource method maps to one REST endpoint, request/response payloads are plain associative arrays, and non-2xx responses are translated into a typed `OpenWA*Exception` hierarchy.
 
 ### Installation
 
@@ -805,7 +805,7 @@ composer require rmyndharis/openwa
 Requirements:
 
 - **PHP 8.1+** (`declare(strict_types=1)` throughout; typed properties, `match`).
-- **Guzzle 7** (`guzzlehttp/guzzle: ^7.9`).
+- **Guzzle 7.9+ or 8** (`guzzlehttp/guzzle: ^7.9 || ^8.0`).
 - PSR-4 autoloaded under the `OpenWA\` namespace (`"OpenWA\\": "src/"`).
 
 ### Quick Start
@@ -855,10 +855,10 @@ The constructor takes a single associative `$config` array:
 | `apiKey`            | `string`                       | — (**required**) | Sent as the `X-API-Key` header on every request. Surrounding whitespace is trimmed; a control or non-ASCII character is refused.                                                                                                                           |
 | `timeout`           | `float`                        | `30.0`           | Per-request timeout in seconds, applied to an injected `httpClient` too. On Guzzle 8 it is also sent as `read_timeout` (the stream handler's idle bound, `0` for none), replacing the injected client's own. The SDK has no separate idle setting.         |
 | `httpClient`        | `?\GuzzleHttp\ClientInterface` | `null`           | Inject a Guzzle client (e.g. one built on a `MockHandler`) for testing or middleware. When `null`, a default Guzzle client is created with the configured timeout. On Guzzle 8 the SDK `timeout` replaces this client's `read_timeout` (see `timeout`).    |
-| `defaultHeaders`    | `array<string,string>`         | `[]`             | Extra headers applied on every request, **under** the SDK's auth/JSON headers (which always win). A name must be an HTTP token; a value is text (a number is sent as its text) without a control or non-ASCII character, or an exception names the header. |
+| `defaultHeaders`    | `array<string,scalar\|list>`   | `[]`             | Extra headers applied on every request, **under** the SDK's auth/JSON headers (which always win). A name must be an HTTP token; a value is text, a scalar or `null` (sent as text) or a non-empty list of those, without a control or non-ASCII character. |
 | `allowInsecureHttp` | `bool`                         | `false`          | Skip the `error_log()` warning written for an `http://` `baseUrl` whose host is not localhost (e.g. a private Docker network or a TLS-terminating proxy).                                                                                                  |
 
-Missing `baseUrl` or `apiKey`, a key or default header value with a control or non-ASCII character, or a default header name that is not an HTTP token throws `OpenWA\Exceptions\OpenWAException` from the constructor.
+Missing `baseUrl` or `apiKey`, a key or default header value with a control or non-ASCII character, or a default header name that is not an HTTP token throws `OpenWA\Exceptions\OpenWAException` from the constructor. So does an empty list as a header value, by header name, because Guzzle 8 cannot represent a header with zero values; use `''` for an empty value.
 
 ### Resources & Methods
 
@@ -1090,7 +1090,7 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 
 ### Error Handling
 
-All exceptions the SDK raises itself live in `OpenWA\Exceptions` and descend from `OpenWAException` (which extends PHP's `\Exception`). A transport failure that is not a timeout (a refused connection, a reset, a TLS verification failure) surfaces as one of Guzzle's own `GuzzleHttp\Exception\TransferException` subclasses (`ConnectException`, `RequestException`) and an invalid argument as `InvalidArgumentException`, so a catch-all names those as well. Any non-2xx response is raised as an `OpenWAApiException`; the static `classify()` factory picks the most specific subclass by status code. An `OpenWAApiException` carries the HTTP status (`getStatus(): int`), the parsed error body (`getBody(): mixed`), and the NestJS `error` kind when present (`getErrorKind(): ?string`), plus the body's `code` (`getErrorCode(): ?string`), the retry delay in seconds from the body's `retryAfterSeconds` or the `Retry-After` header (`getRetryAfterSeconds(): ?int`) and the response headers (`getHeaders(): array`).
+All exceptions the SDK raises itself live in `OpenWA\Exceptions` and descend from `OpenWAException` (which extends PHP's `\Exception`). A transport failure that is not a timeout (a refused connection, a reset, a TLS verification failure) surfaces as one of Guzzle's own `GuzzleHttp\Exception\TransferException` subclasses and an invalid argument as `InvalidArgumentException`, so a catch-all names those as well. The subclass depends on the Guzzle major (a reset is a `RequestException` on Guzzle 7 and a `NetworkException`, which is not a `RequestException`, on Guzzle 8), so catch `TransferException` rather than a subclass. Any non-2xx response is raised as an `OpenWAApiException`; the static `classify()` factory picks the most specific subclass by status code. An `OpenWAApiException` carries the HTTP status (`getStatus(): int`), the parsed error body (`getBody(): mixed`), and the NestJS `error` kind when present (`getErrorKind(): ?string`), plus the body's `code` (`getErrorCode(): ?string`), the retry delay in seconds from the body's `retryAfterSeconds` or the `Retry-After` header (`getRetryAfterSeconds(): ?int`) and the response headers (`getHeaders(): array`).
 
 | Exception                           | Extends              | Trigger                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

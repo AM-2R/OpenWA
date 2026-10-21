@@ -167,7 +167,7 @@ $result = $client->messages->sendText($session['id'], [
 echo $result['messageId'];
 ```
 
-Requires PHP 8.1+ and Guzzle 7. For testing, inject a Guzzle client whose
+Requires PHP 8.1+ and Guzzle 7.9+ or 8.x. For testing, inject a Guzzle client whose
 handler is a `MockHandler` — no global state, no network.
 
 ## Java
