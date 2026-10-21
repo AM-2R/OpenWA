@@ -1,5 +1,5 @@
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -517,6 +517,44 @@ test('NumberChecker: the CSV carries each check as an ISO instant while the tabl
   assert.equal(Number.isNaN(Date.parse(checkedAt)), false);
   const shown = container.querySelector('.nc-history-table tbody td:last-child')?.textContent;
   assert.equal(shown, new Date(checkedAt).toLocaleTimeString());
+});
+
+// Opened in a spreadsheet, a bare 919612345678 becomes a number: 9.19612E+11 in a narrow column, and a leading
+// zero is lost. A leading apostrophe makes the cell text, the same prefix that neutralizes a formula.
+async function exportedFirstCells(numbers: string, answer: (number: string) => Response, t: TestContext) {
+  const downloads: Blob[] = [];
+  t.mock.method(URL, 'createObjectURL', (blob: Blob) => {
+    downloads.push(blob);
+    return 'blob:number-checker-csv';
+  });
+  t.mock.method(URL, 'revokeObjectURL');
+  t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
+  stubLookups(answer);
+  renderComponent();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: numbers } });
+  startBatch();
+  await rtl.waitFor(() => rtl.screen.getByRole('button', { name: /Export Results/i }), { timeout: 5000 });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Export Results/i }));
+  const [, ...rows] = (await downloads[0].text()).split('\n');
+  return rows.map(row => row.split(',')[0]);
+}
+
+test('NumberChecker: the CSV marks each phone number as text, so a spreadsheet keeps its digits', async t => {
+  const cells = await exportedFirstCells(
+    '919612345678\n08123456789',
+    number => jsonResponse({ number, exists: false, whatsappId: null }),
+    t,
+  );
+  assert.deepEqual(cells, ["'919612345678", "'08123456789"]);
+});
+
+test('NumberChecker: a number the gateway echoes as a formula is still neutralized once, not twice', async t => {
+  const cells = await exportedFirstCells(
+    '919612345678',
+    () => jsonResponse({ number: '=1+1', exists: false, whatsappId: null }),
+    t,
+  );
+  assert.deepEqual(cells, ["'=1+1"]);
 });
 
 test('NumberChecker: a rejected lookup is recorded as failed with error status, not as unregistered', async t => {

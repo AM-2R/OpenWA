@@ -386,7 +386,10 @@ export function NumberChecker() {
     const rows = batchResults
       .map(r => {
         const hasWa = r.status === 'failed' ? 'Error' : r.exists ? 'Yes' : 'No';
-        return [r.number, hasWa, r.whatsappId, r.error, r.timestamp].map(escapeCsvCell).join(',');
+        // A leading apostrophe keeps a spreadsheet from turning the digits into a number (9.19612E+11, lost
+        // leading zero). It is the prefix escapeCsvCell adds to neutralize a formula, so a number that is not
+        // digits comes out with the one apostrophe, not two.
+        return [`'${r.number}`, hasWa, r.whatsappId, r.error, r.timestamp].map(escapeCsvCell).join(',');
       })
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
