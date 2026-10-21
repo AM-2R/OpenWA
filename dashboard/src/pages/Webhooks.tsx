@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -65,12 +65,26 @@ function conditionSummary(c: WebhookFilterCondition, t: TFn): string {
 // fixed-positioned from the badge's rect so the card's `overflow: hidden` doesn't clip it.
 function FilterBadge({ filters }: { filters: WebhookFilters }) {
   const { t } = useTranslation();
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
-  const openAt = (el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    setCoords({ top: r.bottom + 6, left: r.left });
-  };
-  const close = () => setCoords(null);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const openAt = (el: HTMLElement) => setAnchor(el.getBoundingClientRect());
+  const close = () => setAnchor(null);
+
+  // Below the badge at its left edge when that fits; otherwise above it, and pulled back from the screen edges.
+  useLayoutEffect(() => {
+    const popover = popoverRef.current;
+    if (!anchor || !popover) return;
+    const gap = 6;
+    const margin = 8;
+    // Measured with all the room the viewport allows, because the box shrinks to the space left of its edge.
+    popover.style.left = `${margin}px`;
+    const { offsetWidth: width, offsetHeight: height } = popover;
+    const fitsBelow = anchor.bottom + gap + height <= window.innerHeight - margin;
+    Object.assign(popover.style, {
+      top: `${fitsBelow ? anchor.bottom + gap : Math.max(margin, anchor.top - gap - height)}px`,
+      left: `${Math.min(Math.max(margin, anchor.left), window.innerWidth - width - margin)}px`,
+    });
+  }, [anchor]);
 
   return (
     <span
@@ -83,8 +97,13 @@ function FilterBadge({ filters }: { filters: WebhookFilters }) {
     >
       <Filter size={12} />
       {t('webhooks.filters.badge', { count: filters.conditions.length })}
-      {coords && (
-        <div className="filter-popover" style={{ top: coords.top, left: coords.left }} role="tooltip">
+      {anchor && (
+        <div
+          className="filter-popover"
+          ref={popoverRef}
+          style={{ top: anchor.bottom + 6, left: anchor.left }}
+          role="tooltip"
+        >
           <div className="filter-popover-title">{t('webhooks.filters.title')}</div>
           {filters.conditions.map((condition, i) => (
             <div key={i} className="filter-popover-row">

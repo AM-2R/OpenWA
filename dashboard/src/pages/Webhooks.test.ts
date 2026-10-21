@@ -197,6 +197,65 @@ test('the filter badge popover names enum values in words, like the filter build
   ]);
 });
 
+// The popover is fixed against the viewport and was placed at the badge's left edge and below its bottom edge, so a
+// badge near the right edge of a phone, or near the bottom of a short window, pushed it past the screen.
+test('the filter badge popover stays inside the viewport', async () => {
+  webhooksStatus = 200;
+  webhookList = [
+    {
+      id: 'w1',
+      sessionId: 'sess-1',
+      url: 'https://example.test/hook',
+      events: ['message.received'],
+      active: true,
+      filters: { conditions: [{ field: 'sender', operator: 'is', value: ['628123@c.us'] }] },
+    },
+  ];
+  const sizes = Object.getOwnPropertyDescriptors(window.HTMLElement.prototype);
+  const innerWidth = window.innerWidth;
+  const innerHeight = window.innerHeight;
+  // jsdom lays nothing out: the popover is 240 by 80 px, the window 390 by 700.
+  const size = (name: 'offsetWidth' | 'offsetHeight', value: number) =>
+    Object.defineProperty(window.HTMLElement.prototype, name, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains('filter-popover') ? value : 0;
+      },
+    });
+  size('offsetWidth', 240);
+  size('offsetHeight', 80);
+  window.innerWidth = 390;
+  window.innerHeight = 700;
+  try {
+    renderWebhooks();
+    const badge = (await rtl.screen.findByText('1 filter')).closest('.filter-badge') as HTMLElement;
+    const placeBadge = (left: number, top: number) => {
+      badge.getBoundingClientRect = () =>
+        ({ left, right: left + 70, top, bottom: top + 20, width: 70, height: 20, x: left, y: top }) as DOMRect;
+      rtl.fireEvent.blur(badge);
+      rtl.fireEvent.focus(badge);
+      const popover = document.querySelector<HTMLElement>('.filter-popover')!;
+      return { left: popover.style.left, top: popover.style.top };
+    };
+    // Room on both sides: below the badge, at its left edge.
+    assert.deepEqual(placeBadge(100, 200), { left: '100px', top: '226px' });
+    // Near the right edge: moved left until it ends 8px short of the edge.
+    assert.deepEqual(placeBadge(350, 200), { left: '142px', top: '226px' });
+    // Near the left edge: kept 8px off it.
+    assert.deepEqual(placeBadge(2, 200), { left: '8px', top: '226px' });
+    // Near the bottom: above the badge, whose top is at 650.
+    assert.deepEqual(placeBadge(100, 650), { left: '100px', top: '564px' });
+  } finally {
+    window.innerWidth = innerWidth;
+    window.innerHeight = innerHeight;
+    for (const name of ['offsetWidth', 'offsetHeight'] as const) {
+      const original = sizes[name];
+      if (original) Object.defineProperty(window.HTMLElement.prototype, name, original);
+      else delete (window.HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+  }
+});
+
 test('a second click on Create while the first create is in flight sends nothing', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   webhooksStatus = 200;
