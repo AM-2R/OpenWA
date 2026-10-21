@@ -293,7 +293,7 @@ reconciler dispatches it after the restore, on its first pass past `INGRESS_RECO
 about two minutes after the delivery with the defaults. The reconciler leaves the rows of a restoring plugin
 out of its batch, so they do not hold back another plugin's. With the reconciler disabled
 (`INGRESS_RECONCILE_INTERVAL_MS=0`) nothing would replay a held row, so the delivery is dispatched at once
-and, finding no worker, files a dead letter that an operator can redrive.
+and, with no worker to run it, files a dead letter that an operator can redrive.
 
 Table growth is bounded by construction rather than by operator hygiene: the per-instance ingress
 throttle caps the row-creation rate, dispatched rows slim to a marker + hash, and the two retention
