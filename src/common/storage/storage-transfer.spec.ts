@@ -192,6 +192,61 @@ describe('createExportStream streams one file at a time', () => {
   });
 });
 
+describe('createExportStream releases the archive streams', () => {
+  // The tar and gzip streams hold whatever the consumer had not read yet, and zlib a native handle. Destroying
+  // the output has to release them at once, not leave them to the garbage collector. Nothing else fails when it
+  // does not: the export stops opening files either way, so only the two streams themselves can show it.
+  it('destroys the tar and gzip streams when the consumer destroys the output mid-entry', async () => {
+    const realZlib = jest.requireActual<typeof import('zlib')>('zlib');
+    const realCreateGzip = realZlib.createGzip;
+    const readOnlyExport = { configurable: true, enumerable: true, writable: false };
+    const gzips: Array<{ destroyed: boolean }> = [];
+    // createGzip is a read-only export. jest.spyOn cannot wrap it, and the failed attempt makes the suite fail
+    // when the mocks are restored, so the export is replaced by hand for the length of the test.
+    Object.defineProperty(realZlib, 'createGzip', {
+      ...readOnlyExport,
+      value: (...args: Parameters<typeof realCreateGzip>) => {
+        const gzip = realCreateGzip(...args);
+        gzips.push(gzip);
+        return gzip;
+      },
+    });
+    const pack = jest.spyOn(jest.requireActual<typeof tar>('tar-stream'), 'pack');
+    try {
+      let reading = false;
+      // An entry that never ends, so the export is parked inside it when the consumer goes away.
+      const stuck = new Readable({
+        read() {
+          reading = true;
+        },
+      });
+      const output = await createExportStream(
+        () => Promise.resolve(['media/stuck.bin']),
+        () => Promise.resolve({ stream: stuck, size: FILE_BYTES }),
+        makeLogger() as never,
+      );
+      for (let waited = 0; !reading && waited < 1000; waited += 10) await settle(10);
+      expect(reading).toBe(true);
+      expect(pack).toHaveBeenCalledTimes(1);
+      expect(gzips).toHaveLength(1);
+      const tarPack = pack.mock.results[0].value as { destroyed: boolean };
+      const gzip = gzips[0];
+      expect(tarPack.destroyed).toBe(false);
+      expect(gzip.destroyed).toBe(false);
+
+      output.destroy();
+      // Destroying a stream finishes on a later tick; a missing teardown shows here as a stream still open.
+      for (let waited = 0; !(tarPack.destroyed && gzip.destroyed) && waited < 1000; waited += 10) await settle(10);
+
+      expect(tarPack.destroyed).toBe(true);
+      expect(gzip.destroyed).toBe(true);
+    } finally {
+      pack.mockRestore();
+      Object.defineProperty(realZlib, 'createGzip', { ...readOnlyExport, value: realCreateGzip });
+    }
+  });
+});
+
 describe('importFromStream reports refused writes', () => {
   it('counts every entry putFile rejects as failed, and none as imported', async () => {
     const { openFile } = trackingOpener();
