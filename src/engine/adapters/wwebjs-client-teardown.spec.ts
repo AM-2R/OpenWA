@@ -141,6 +141,26 @@ const CASES: Case[] = [
     run: adapter => adapter.revokeGroupInviteCode('120363@g.us'),
   },
   {
+    // requireGroupChat is the preamble of every group write, and the write goes out right after it. A
+    // non-idempotent one (an add) would otherwise reach the closing page and fail as a plain 500.
+    name: 'a participant add parked in the group lookup',
+    build: parked => {
+      const addParticipants = jest.fn();
+      const chat = { isGroup: true, addParticipants };
+      return { client: { getChatById: () => parked.park().then(() => chat) }, unreached: addParticipants };
+    },
+    run: adapter => adapter.addParticipants('120363@g.us', ['628111@c.us']),
+  },
+  {
+    name: 'a group subject change parked in the group lookup',
+    build: parked => {
+      const setSubject = jest.fn();
+      const chat = { isGroup: true, setSubject };
+      return { client: { getChatById: () => parked.park().then(() => chat) }, unreached: setSubject };
+    },
+    run: adapter => adapter.setGroupSubject('120363@g.us', 'New subject'),
+  },
+  {
     name: 'a chat label change',
     build: parked => {
       const addOrRemoveLabels = jest.fn();

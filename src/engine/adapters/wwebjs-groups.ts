@@ -503,7 +503,8 @@ export class WwebjsGroups {
   /**
    * Resolve a group chat or throw: the shared preamble of the group settings writes. The lookup is a
    * read that runs before any write, so a dead page answers 503 with the death signal even for the
-   * non-idempotent callers: nothing has been applied yet. `context` names the caller's operation.
+   * non-idempotent callers: nothing has been applied yet. A session that went away during the lookup
+   * answers the not-ready 409 for the same reason. `context` names the caller's operation.
    */
   private async requireGroupChat(groupId: string, context: string): Promise<GroupChat> {
     this.host.ensureReady();
@@ -513,6 +514,9 @@ export class WwebjsGroups {
     if (!chat?.isGroup) {
       throw new GroupNotFoundError(groupId);
     }
+    // The write goes out on the chat's own client right after this, which the host's getClient never
+    // sees, so a teardown that landed in the lookup must be caught here.
+    this.host.ensureReady();
     return chat as unknown as GroupChat;
   }
 
