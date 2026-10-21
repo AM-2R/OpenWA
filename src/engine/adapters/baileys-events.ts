@@ -346,7 +346,22 @@ export class BaileysEvents {
    */
   private readonly outcomesPending = new Map<string, { count: number; ended: Promise<void>; free: () => void }>();
 
-  /** How many changes wait for a delivery or its outcome (see parkUntil); the rest are judged at once. */
+  /**
+   * Reactions, edits and deletes that reached a message still being processed where nothing is admitted before
+   * the emit (SQLite), by its id, in the order they arrived, with the timer that lets them go if the message is
+   * never handed on. The session holds no entry for such a message until it is emitted, so a reaction announced
+   * earlier is stored nowhere and an edit leaves no marker: they are announced right after the emit instead (see
+   * announceWhenHandedOn).
+   */
+  private readonly changesAwaitingEmit = new Map<
+    string,
+    { announce: Array<() => void>; timer: ReturnType<typeof setTimeout> }
+  >();
+
+  /**
+   * How many changes wait for a delivery, its outcome (see parkUntil) or its emit (see changesAwaitingEmit); the
+   * rest are judged, or announced, at once.
+   */
   private changesParked = 0;
 
   private static readonly CHANGES_PARKED_LIMIT = 64;
@@ -511,6 +526,8 @@ export class BaileysEvents {
           this.inboundInFlight.delete(id);
           // The edit's store write was chained behind this, so the store carries it (or a newer one) now.
           this.editedWhileInFlight.delete(id);
+          // A change that came in after the message was handed on, while it still counted as in flight.
+          this.handOverChanges(id);
         });
       }
     }
@@ -673,7 +690,14 @@ export class BaileysEvents {
           this.changeStoredMessage(pm.key?.id, stored =>
             this.mayChange(stored.key, msg.key, true) ? { ...stored, message: null } : null,
           );
-          this.host.getOnMessageRevoked()?.(revoked, { fromMe: msg.key.fromMe === true });
+          // Behind the reactions and edits of the message that wait for its emit, never for the message itself:
+          // the delete keeps it from being emitted, and they were made before it.
+          this.announceWhenHandedOn(
+            revoked.id,
+            opts.ticket,
+            () => this.host.getOnMessageRevoked()?.(revoked, { fromMe: msg.key.fromMe === true }),
+            true,
+          );
           return;
         }
         if (pm?.type === b.proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
@@ -731,7 +755,7 @@ export class BaileysEvents {
               : undefined;
             return content && setBaileysText(content, edited.body) ? stored : null;
           });
-          this.host.getOnMessageEdited()?.(edited);
+          this.announceWhenHandedOn(edited.messageId, opts.ticket, () => this.host.getOnMessageEdited()?.(edited));
           return;
         }
         // Other protocol messages (ephemeral, history sync, etc.) — skip silently.
@@ -753,7 +777,7 @@ export class BaileysEvents {
             keyParticipant(msg.key) ?? (msg.key.fromMe === true ? this.host.normalizedSelfJid() : remoteJid),
           ),
         };
-        this.host.getOnMessageReaction()?.(event);
+        this.announceWhenHandedOn(rm?.key?.id, opts.ticket, () => this.host.getOnMessageReaction()?.(event));
         return;
       }
 
@@ -864,6 +888,60 @@ export class BaileysEvents {
         `Unhandled error processing inbound message (id=${msg.key?.id ?? 'unknown'}); dropping`,
         err instanceof Error ? err.message : String(err),
       );
+    } finally {
+      // Emitted by now, or never to be: what waited for this message goes to the session in the same turn, so
+      // it reaches the message before its row is written.
+      this.handOverChanges(msg.key?.id);
+    }
+  }
+
+  /**
+   * Announce a reaction, an edit or a delete of message `id`. With a ticket the session holds the message from
+   * its arrival and keeps the change for its row, so it is announced at once. Without one the session knows
+   * nothing of a message before its emit, so a change that reaches a message still being processed is announced
+   * right after the emit instead, in the order the changes arrived, when the session holds the message. A delete
+   * (`behindChangesOnly`) never waits for the message: it waits only behind the changes already waiting, so they
+   * are announced in the order they arrived. A change waits at most the three media deadlines a change aimed at a
+   * delivery in flight waits (see targetsForeignMessage), and no more than CHANGES_PARKED_LIMIT wait at once.
+   */
+  private announceWhenHandedOn(
+    messageId: string | null | undefined,
+    ticket: InboundTicket | undefined,
+    announce: () => void,
+    behindChangesOnly = false,
+  ): void {
+    const waiting = messageId && !ticket ? this.changesAwaitingEmit.get(messageId) : undefined;
+    const waits = !!waiting || (!behindChangesOnly && !ticket && !!messageId && this.inboundInFlight.has(messageId));
+    if (!messageId || !waits || this.changesParked >= BaileysEvents.CHANGES_PARKED_LIMIT) {
+      announce();
+      return;
+    }
+    this.changesParked++;
+    if (waiting) {
+      waiting.announce.push(announce);
+      return;
+    }
+    const timer = setTimeout(() => this.handOverChanges(messageId), 3 * inboundMediaTimeoutMs());
+    timer.unref();
+    this.changesAwaitingEmit.set(messageId, { announce: [announce], timer });
+  }
+
+  /** Announce, in order, what waited for message `id` to be handed on (see announceWhenHandedOn). */
+  private handOverChanges(messageId: string | null | undefined): void {
+    const waiting = messageId ? this.changesAwaitingEmit.get(messageId) : undefined;
+    if (!messageId || !waiting) return;
+    this.changesAwaitingEmit.delete(messageId);
+    clearTimeout(waiting.timer);
+    this.changesParked -= waiting.announce.length;
+    for (const announce of waiting.announce) {
+      try {
+        announce();
+      } catch (err) {
+        this.host.logger.warn('Failed to announce a change that waited for its message', {
+          msgId: messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 

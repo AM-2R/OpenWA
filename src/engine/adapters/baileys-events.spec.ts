@@ -1379,10 +1379,13 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     await flush();
     events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
     await flush();
+    // The edit was read, but it is announced once the session holds the message it changes.
+    expect(onMessageEdited).not.toHaveBeenCalled();
 
-    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
     release(null);
     await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
   });
 
   it('reads the edit of an original that finishes while the edit is still reading the store', async () => {
@@ -1684,5 +1687,112 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     await flush();
 
     expect(onMessageReaction).not.toHaveBeenCalled();
+  });
+});
+
+// Where nothing is admitted before the emit (SQLite) a reaction of a message still being processed waits for its
+// emit; the wait ends at the latest after three media deadlines, and its timer is neither kept nor left running.
+describe('BaileysEvents changes waiting for the message they change', () => {
+  const chat = '6281111111111@s.whatsapp.net';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const original: WAMessage = {
+    key: { id: 'M', remoteJid: chat, fromMe: false },
+    messageTimestamp: 1_700_000_000,
+    message: { conversation: 'hi' },
+  };
+  const reaction: WAMessage = {
+    key: { id: 'R', remoteJid: chat, fromMe: false },
+    messageTimestamp: 1_700_000_001,
+    message: { reactionMessage: { key: { id: 'M', remoteJid: chat, fromMe: false }, text: 'ok' } },
+  };
+  const saved = process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+
+  beforeEach(() => {
+    process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '1000';
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    if (saved === undefined) delete process.env.MEDIA_DOWNLOAD_TIMEOUT_MS;
+    else process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = saved;
+  });
+
+  /** The original never finishes: its check for a repeat delivery is not answered. */
+  const withMessageStuck = () => {
+    let checked = false;
+    const onMessageReaction = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: (id: string) => {
+          if (id !== 'M' || checked) return Promise.resolve(null);
+          checked = true;
+          return new Promise<WAMessage | null>(() => undefined);
+        },
+        getOnMessageReaction: () => onMessageReaction,
+      }),
+    );
+    events.handleMessagesUpsert({ type: 'notify', messages: [original] });
+    return { events, onMessageReaction };
+  };
+
+  it('lets a change go three media deadlines after it began to wait, and leaves no timer behind', async () => {
+    const { events, onMessageReaction } = withMessageStuck();
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+    expect(onMessageReaction).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(1);
+
+    jest.advanceTimersByTime(2_999);
+    expect(onMessageReaction).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1);
+
+    expect(onMessageReaction).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('does not keep the process alive while a change waits', async () => {
+    const waits: Array<{ unref: jest.SpyInstance }> = [];
+    const fake = global.setTimeout;
+    jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const handle = fake(fn, ms) as unknown as { unref: () => unknown };
+      if (ms === 3_000) waits.push({ unref: jest.spyOn(handle, 'unref') });
+      return handle;
+    }) as never);
+    const { events } = withMessageStuck();
+    await flush();
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+
+    expect(waits).toHaveLength(1);
+    expect(waits[0].unref).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the timer once the message has been handed on', async () => {
+    let release!: (stored: WAMessage | null) => void;
+    let checked = false;
+    const onMessageReaction = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: (id: string) => {
+          if (id !== 'M' || checked) return Promise.resolve(null);
+          checked = true;
+          return new Promise<WAMessage | null>(resolve => (release = resolve));
+        },
+        getOnMessageReaction: () => onMessageReaction,
+      }),
+    );
+    events.handleMessagesUpsert({ type: 'notify', messages: [original] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [reaction] });
+    await flush();
+    expect(jest.getTimerCount()).toBe(1);
+
+    release(null);
+    await flush();
+
+    expect(onMessageReaction).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
   });
 });

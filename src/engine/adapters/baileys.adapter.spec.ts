@@ -9787,10 +9787,10 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
       });
 
-      it('does not hold an edit from the chat the delivery arrived in', async () => {
+      it('does not hold an edit from the chat the delivery arrived in for the answer', async () => {
         const callbacks = sessionCallbacks();
         await startWith({ onMessage: jest.fn(() => ({ settled: answer().promise })), ...callbacks });
-        holdReads([1]);
+        const open = holdReads([1]);
         deliverReuse();
         await settleAll();
 
@@ -9798,6 +9798,10 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
           { id: 'OWN_EDIT_ENV', remoteJid: OTHER, fromMe: false },
           { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: 'late, edited' } },
         );
+        await settleAll();
+        // It follows the delivery's emit, which the answer of the session does not hold up.
+        expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+        open(1);
         await settleAll();
 
         expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(1);
@@ -10335,8 +10339,9 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
 
       answered.resolve({ conflict });
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledTimes(conflict ? 1 : 0);
       expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(conflict ? 0 : 1);
+      // The real edit is judged, but follows the delivery that is still being processed.
+      expect(onMessageEdited).not.toHaveBeenCalled();
 
       openFirst();
       await settleAll();

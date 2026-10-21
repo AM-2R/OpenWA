@@ -161,6 +161,7 @@ describe('Baileys inbound messages held for storage', () => {
       Object.keys(content ?? {}).find(k => k === 'conversation' || k.endsWith('Message')),
     downloadMediaMessage,
     proto: { Message: { ProtocolMessage: { Type: { REVOKE: 0, MESSAGE_EDIT: 14 } } } },
+    BufferJSON: { replacer: (_k: string, v: unknown) => v, reviver: (_k: string, v: unknown) => v },
   } as unknown as Awaited<ReturnType<BaileysEventsHost['loadLib']>>;
 
   const stream = (bytes = 3) => ({
@@ -1141,6 +1142,326 @@ describe('Baileys inbound messages held for storage', () => {
         },
       );
     });
+  });
+
+  // A reaction, an edit or a delete of a message that is still being processed. PostgreSQL holds the message from
+  // its arrival, so the session keeps the change for the row whenever it comes. SQLite holds nothing before the
+  // emit, so the adapter announces the change right after it, when the session holds the message.
+  describe.each([
+    ['PostgreSQL', false],
+    ['SQLite', true],
+  ])('a reaction, an edit or a delete of media still downloading, on %s', (_, sqlite) => {
+    const CHAT = '628111@s.whatsapp.net';
+    const target = (id: string) => ({ id, remoteJid: CHAT, fromMe: false });
+    const change = (id: string, content: Row): WAMessage => ({
+      key: { id, remoteJid: CHAT, fromMe: false },
+      messageTimestamp: 1_700_000_001,
+      message: content,
+    });
+    const react = (id: string, of: string, reaction: string): WAMessage =>
+      change(id, { reactionMessage: { key: target(of), text: reaction } });
+    const edit = (id: string, of: string, body: string): WAMessage =>
+      change(id, {
+        protocolMessage: {
+          type: 14,
+          key: target(of),
+          editedMessage: { conversation: body },
+          timestampMs: 1_700_000_002_000,
+        },
+      });
+    const revoke = (id: string, of: string): WAMessage => change(id, { protocolMessage: { type: 0, key: target(of) } });
+    /** The next download goes on until the returned function is called. */
+    const download = (): (() => void) => {
+      const pending = deferred<ReturnType<typeof stream>>();
+      downloadMediaMessage.mockImplementationOnce(() => pending.promise);
+      return () => pending.resolve(stream());
+    };
+    /** The callbacks the session is handed, noted in the order the adapter calls them. */
+    const traced = (h: ReturnType<typeof heldProjector>) => {
+      const log: string[] = [];
+      const to = h.callbacks;
+      const callbacks: EngineEventCallbacks = {
+        ...to,
+        onMessage: (m, t) => (log.push(`message ${m.id}`), to.onMessage!(m, t)),
+        onMessageReaction: r => (log.push(`reaction ${r.messageId} ${r.reaction}`), to.onMessageReaction!(r)),
+        onMessageEdited: e => (log.push(`edited ${e.messageId} ${e.body}`), to.onMessageEdited!(e)),
+        onMessageRevoked: (m, actor) => (log.push(`revoked ${m.id}`), to.onMessageRevoked!(m, actor)),
+      };
+      return { log, callbacks };
+    };
+    const changesOnly = (log: string[]): string[] => log.filter(entry => !entry.startsWith('message '));
+
+    it('keeps a reaction for the row of the message', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      const { events } = build(4, h.callbacks);
+      const release = download();
+      upsert(events, media('M', CHAT));
+      await flush();
+      upsert(events, react('R', 'M', 'THUMB'));
+      await flush();
+      release();
+      await flush();
+
+      expect(h.rows.map(r => [r.waMessageId, (r.metadata as Row | null)?.reactions])).toEqual([
+        ['M', { [CHAT]: 'THUMB' }],
+      ]);
+      expect(h.announcedAs('message.reaction')).toEqual([
+        expect.objectContaining({ messageId: 'M', reaction: 'THUMB' }),
+      ]);
+    });
+
+    it('has the session hold the message when an edit reaches it, and the row takes the text', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      const heldWhenEdited: boolean[] = [];
+      const rowsWhenEdited: number[] = [];
+      const onMessageEdited: EngineEventCallbacks['onMessageEdited'] = e => {
+        heldWhenEdited.push(h.projector.inFlightInbound('s1', e.messageId) !== undefined);
+        rowsWhenEdited.push(h.rows.length);
+        h.callbacks.onMessageEdited!(e);
+      };
+      const { events } = build(4, { ...h.callbacks, onMessageEdited });
+      const release = download();
+      upsert(events, media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, edit('E', 'M', 'fixed caption'));
+      await flush();
+      release();
+      await flush();
+
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: 'fixed caption' })]);
+      expect(h.announcedAs('message.edited')).toEqual([
+        expect.objectContaining({ messageId: 'M', body: 'fixed caption' }),
+      ]);
+      // PostgreSQL holds it from the arrival, before the emit, which inFlightInbound does not report yet.
+      expect(heldWhenEdited).toEqual([sqlite]);
+      // Either way the edit reaches it before its row is written, and an edit that meets the row with the same
+      // text is no edit to the session.
+      expect(rowsWhenEdited).toEqual([0]);
+    });
+
+    it(
+      sqlite
+        ? 'announces them once the message has been handed on'
+        : 'announces them at once, the session holds the message already',
+      async () => {
+        const h = heldProjector({ unique: true, sqlite });
+        const { events } = build(4, h.callbacks);
+        const release = download();
+        upsert(events, media('M', CHAT));
+        await flush();
+        upsert(events, react('R', 'M', 'ok'), edit('E', 'M', 'fixed'));
+        await flush();
+        const early = [h.announcedAs('message.reaction').length, h.announcedAs('message.edited').length];
+        release();
+        await flush();
+
+        expect(early).toEqual(sqlite ? [0, 0] : [1, 1]);
+        expect([h.announcedAs('message.reaction').length, h.announcedAs('message.edited').length]).toEqual([1, 1]);
+      },
+    );
+
+    it('announces a delete at once, and neither emits nor announces the message after it', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      const { events } = build(4, h.callbacks);
+      const release = download();
+      upsert(events, media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, revoke('V', 'M'));
+      await flush();
+      expect(h.announcedAs('message.revoked')).toHaveLength(1);
+      release();
+      await flush();
+
+      expect(h.announced()).toEqual([]);
+      // As on whatsapp-web.js a held message is stored cleared; where nothing holds it (SQLite) it is not stored.
+      expect(h.rows).toEqual(sqlite ? [] : [expect.objectContaining({ waMessageId: 'M', body: '', type: 'revoked' })]);
+    });
+
+    it.each([
+      ['a reaction', (): WAMessage => react('R', 'M', 'ok'), 'reaction M ok'],
+      ['an edit', (): WAMessage => edit('E', 'M', 'fixed'), 'edited M fixed'],
+    ])(
+      'announces %s before the delete that follows it, and no content after the delete',
+      async (_kind, first, seen) => {
+        const h = heldProjector({ unique: true, sqlite });
+        const { log, callbacks } = traced(h);
+        const { events } = build(4, callbacks);
+        const release = download();
+        upsert(events, media('M', CHAT, { caption: 'caption' }));
+        await flush();
+        upsert(events, first(), revoke('V', 'M'));
+        await flush();
+        release();
+        await flush();
+
+        expect(changesOnly(log)).toEqual([seen, 'revoked M']);
+        expect(h.announced()).toEqual([]);
+        expect(h.rows.map(r => r.body)).toEqual(sqlite ? [] : ['']);
+      },
+    );
+  });
+
+  // Where nothing is admitted before the emit (SQLite), a change waits for its message, and the wait is bounded.
+  describe('a change of a message still being processed, where nothing is admitted before the emit', () => {
+    const CHAT = '628111@s.whatsapp.net';
+    const target = (id: string) => ({ id, remoteJid: CHAT, fromMe: false });
+    const reaction = (id: string, of: string, text: string): WAMessage => ({
+      key: { id, remoteJid: CHAT, fromMe: false },
+      messageTimestamp: 1_700_000_001,
+      message: { reactionMessage: { key: target(of), text } },
+    });
+    const edit = (id: string, of: string, body: string): WAMessage => ({
+      key: { id, remoteJid: CHAT, fromMe: false },
+      messageTimestamp: 1_700_000_002,
+      message: {
+        protocolMessage: {
+          type: 14,
+          key: target(of),
+          editedMessage: { conversation: body },
+          timestampMs: 1_700_000_002_000,
+        },
+      },
+    });
+    const download = (): (() => void) => {
+      const pending = deferred<ReturnType<typeof stream>>();
+      downloadMediaMessage.mockImplementationOnce(() => pending.promise);
+      return () => pending.resolve(stream());
+    };
+
+    it.each([1, 4])(
+      'hands the session the message, then its reactions and edits in the order they arrived (limiter of %i)',
+      async k => {
+        const h = heldProjector({ unique: true, sqlite: true });
+        const log: string[] = [];
+        const to = h.callbacks;
+        const { events } = build(k, {
+          ...to,
+          onMessage: (m, t) => (log.push(`message ${m.id}`), to.onMessage!(m, t)),
+          onMessageReaction: r => (log.push(`reaction ${r.messageId} ${r.reaction}`), to.onMessageReaction!(r)),
+          onMessageEdited: e => (log.push(`edited ${e.messageId} ${e.body}`), to.onMessageEdited!(e)),
+        });
+        const release = download();
+        upsert(events, media('M', CHAT, { caption: 'caption' }));
+        await flush();
+        upsert(events, reaction('R1', 'M', 'ok'), edit('E1', 'M', 'fixed'), reaction('R2', 'M', 'ok2'));
+        await flush();
+        expect(log).toEqual([]);
+        release();
+        await flush();
+
+        expect(log).toEqual(['message M', 'reaction M ok', 'edited M fixed', 'reaction M ok2']);
+      },
+    );
+
+    // In the turn of the emit, so they reach the message before the session has written its row: an edit that
+    // meets the row with the text it already has is no edit to the session, and takes no marker.
+    it('announces what waited in the turn of the emit', async () => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const log: string[] = [];
+      const to = h.callbacks;
+      const { events } = build(4, {
+        ...to,
+        onMessage: (m, t) => {
+          log.push(`message ${m.id}`);
+          queueMicrotask(() => log.push('end of the turn'));
+          return to.onMessage!(m, t);
+        },
+        onMessageReaction: r => (log.push(`reaction ${r.messageId}`), to.onMessageReaction!(r)),
+        onMessageEdited: e => (log.push(`edited ${e.messageId}`), to.onMessageEdited!(e)),
+      });
+      const release = download();
+      upsert(events, media('M', CHAT));
+      await flush();
+      upsert(events, reaction('R', 'M', 'ok'), edit('E', 'M', 'fixed'));
+      await flush();
+      release();
+      await flush();
+
+      expect(log).toEqual(['message M', 'reaction M', 'edited M', 'end of the turn']);
+    });
+
+    it('lets a change go three media deadlines after it began to wait, when the message is never handed on', async () => {
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '30';
+      const h = heldProjector({ unique: true, sqlite: true });
+      const store = memoryStore();
+      const read = store.getStoredMessage;
+      let checked = false;
+      // The message's own check for a repeat delivery never answers, which keeps it in flight for good.
+      store.getStoredMessage = (id: string) => {
+        if (id !== 'M' || checked) return read(id);
+        checked = true;
+        return new Promise<WAMessage | null>(() => undefined);
+      };
+      const { events } = build(4, h.callbacks, store);
+      upsert(events, text('M', CHAT));
+      await flush();
+      upsert(events, reaction('R', 'M', 'ok'));
+      await sleep(40);
+      expect(h.announcedAs('message.reaction')).toEqual([]);
+
+      await sleep(120);
+      expect(h.announcedAs('message.reaction')).toHaveLength(1);
+      expect(internals(events)).toEqual({ waiting: 0, queued: 0 });
+    });
+
+    it('holds at most 64 changes at a time, and nothing once the message is handed on', async () => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const { events } = build(4, h.callbacks);
+      const release = download();
+      upsert(events, media('M', CHAT));
+      await flush();
+      upsert(events, ...Array.from({ length: 70 }, (_, i) => reaction(`R${i}`, 'M', `r${i}`)));
+      await flush();
+      // The six past the limit go out at once, as they did before.
+      expect(h.announcedAs('message.reaction')).toHaveLength(6);
+      expect(internals(events)).toEqual({ waiting: 64, queued: 1 });
+
+      release();
+      await flush();
+      expect(h.announcedAs('message.reaction')).toHaveLength(70);
+      expect(internals(events)).toEqual({ waiting: 0, queued: 0 });
+    });
+
+    it('announces the other changes, and does not process the message again, when a consumer throws', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const h = heldProjector({ unique: true, sqlite: true });
+      let thrown = false;
+      const onMessageReaction: EngineEventCallbacks['onMessageReaction'] = r => {
+        if (!thrown) {
+          thrown = true;
+          throw new Error('consumer failed');
+        }
+        h.callbacks.onMessageReaction!(r);
+      };
+      const { events, emitted } = build(4, { ...h.callbacks, onMessageReaction });
+      const release = download();
+      upsert(events, media('M', CHAT));
+      await flush();
+      upsert(events, reaction('R1', 'M', 'a'), reaction('R2', 'M', 'b'));
+      await flush();
+      release();
+      await flush();
+
+      expect(emitted).toEqual(['M']);
+      expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+      expect(h.announcedAs('message.reaction')).toEqual([expect.objectContaining({ reaction: 'b' })]);
+    });
+
+    it('does not make a reaction wait for itself, nor two reactions for each other', async () => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const { events } = build(4, h.callbacks);
+      upsert(events, reaction('SELF', 'SELF', 'a'), reaction('A', 'B', 'b'), reaction('B', 'A', 'c'));
+      await flush();
+
+      expect(h.announcedAs('message.reaction')).toHaveLength(3);
+      expect(internals(events)).toEqual({ waiting: 0, queued: 0 });
+    });
+
+    /** How many changes wait, and for how many messages. */
+    const internals = (events: BaileysEvents) => {
+      const state = events as unknown as { changesParked: number; changesAwaitingEmit: Map<string, unknown> };
+      return { waiting: state.changesParked, queued: state.changesAwaitingEmit?.size ?? 0 };
+    };
   });
 });
 
