@@ -256,7 +256,7 @@ type SessionStatsOverview struct {
 	Active       int            `json:"active"`
 	Ready        int            `json:"ready"`
 	Disconnected int            `json:"disconnected"`
-	ByStatus     map[string]int `json:"byStatus,omitempty"`
+	ByStatus     map[string]int `json:"byStatus"`
 	MemoryUsage  MemoryUsage    `json:"memoryUsage"`
 }
 

@@ -49,7 +49,9 @@ export interface ParticipantResult {
  * The group membership writes. A partial refusal does NOT fail the batch — the request answers 200
  * and reports the per-participant outcome here, so `success` alone hides a member that was rejected.
  */
-export interface ParticipantsResult extends SuccessResult {
+export interface ParticipantsResult {
+  success: boolean;
+  message: string;
   results: ParticipantResult[];
 }
 
@@ -234,7 +236,7 @@ export interface SessionStatsOverview {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
+  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 // ── Message ───────────────────────────────────────────────────────
@@ -755,29 +757,33 @@ export type BatchLifecycleStatus = 'pending' | 'processing' | 'completed' | 'fai
 
 export interface ContactRecord {
   id: Jid;
-  name?: string | null;
-  number?: string | null;
+  /** The name from the account's own addressbook. Absent for a contact that was never saved. */
+  name?: string;
+  /** MSISDN digits, without a leading + or any separators. */
+  number: string;
   /** The name the contact set on their own account. Both engines emit this as `pushName`. */
-  pushName?: string | null;
-  isMyContact?: boolean;
+  pushName?: string;
+  /** Whether the entry exists in the account's addressbook. */
+  isMyContact: boolean;
   /**
    * Whether the account has blocked this contact. Reflects the account's real blocklist on both
    * engines. When the blocklist query fails the field stays at its default rather than reporting
    * "nobody is blocked", and the gateway logs a warning — so a `false` is not proof the contact is
    * unblocked if the link is unhealthy.
    */
-  isBlocked?: boolean;
+  isBlocked: boolean;
   /**
    * A cached picture URL. Only Baileys can fill it (whatsapp-web.js never sets it) and it is often
    * absent there too, so its absence does not say whether the contact has a picture.
    */
-  profilePicUrl?: string | null;
+  profilePicUrl?: string;
 }
 
 export interface CheckNumberResponse {
   number: string;
   exists: boolean;
-  whatsappId?: string | null;
+  /** The canonical chat id in the engine's native format, or `null` when the number is not registered. */
+  whatsappId: string | null;
 }
 
 export interface ProfilePictureResponse {
@@ -1276,7 +1282,7 @@ export interface SendVoiceStatusRequest {
 
 export interface HealthResponse {
   status: string;
-  timestamp?: string;
+  timestamp: string;
   version?: string;
 }
 
@@ -1387,7 +1393,7 @@ export interface SubscribeChannelRequest {
 export interface CatalogInfo {
   id: string;
   name: string;
-  description?: string | null;
+  description?: string;
   /** Counts at most the first 51 products on Baileys. */
   productCount: number;
   url: string;
@@ -1403,13 +1409,13 @@ export interface CatalogProductsQuery {
 export interface CatalogProduct {
   id: string;
   name: string;
-  description?: string | null;
+  description?: string;
   /** Absent when the product has no price. */
   price?: number;
   currency?: string;
   /** Absent when `price` is. */
   priceFormatted?: string;
-  imageUrl?: string | null;
+  imageUrl?: string;
   url: string;
   isAvailable: boolean;
   retailerId?: string;

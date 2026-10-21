@@ -13,7 +13,7 @@ type StatusContact struct {
 type StatusRecord struct {
 	ID              string        `json:"id"`
 	Contact         StatusContact `json:"contact"`
-	Type            string        `json:"type,omitempty"`
+	Type            string        `json:"type"`
 	Caption         string        `json:"caption,omitempty"`
 	MediaURL        string        `json:"mediaUrl,omitempty"`
 	BackgroundColor string        `json:"backgroundColor,omitempty"`

@@ -15,8 +15,8 @@ type ContactRecord struct {
 	Name          *string `json:"name,omitempty"`
 	Number        *string `json:"number,omitempty"`
 	PushName      *string `json:"pushName,omitempty"`
-	IsMyContact   bool    `json:"isMyContact,omitempty"`
-	IsBlocked     bool    `json:"isBlocked,omitempty"`
+	IsMyContact   bool    `json:"isMyContact"`
+	IsBlocked     bool    `json:"isBlocked"`
 	ProfilePicURL *string `json:"profilePicUrl,omitempty"`
 }
 
@@ -24,7 +24,7 @@ type ContactRecord struct {
 type CheckNumberResponse struct {
 	Number     string  `json:"number"`
 	Exists     bool    `json:"exists"`
-	WhatsappID *string `json:"whatsappId,omitempty"`
+	WhatsappID *string `json:"whatsappId"`
 }
 
 // ProfilePictureResponse carries a contact's profile picture URL.
@@ -41,7 +41,7 @@ type ProfilePicturesResponse struct {
 // ContactPhoneResponse resolves a contact's phone number.
 type ContactPhoneResponse struct {
 	ContactID string  `json:"contactId"`
-	Phone     *string `json:"phone,omitempty"`
+	Phone     *string `json:"phone"`
 }
 
 // ListContactsQuery paginates the contact list.

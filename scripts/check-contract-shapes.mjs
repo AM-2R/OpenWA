@@ -43,6 +43,12 @@
  * allowlist culture of check-audit: an exclusion is a recorded decision, not a silent skip, and
  * the goal is to shrink it to zero (usually by tightening the hand type; where the CONTRACT
  * under-describes reality, fix the backend DTO decorator, regenerate, and un-exclude).
+ *
+ * A mapping only gates the types somebody remembered to list, so a new DTO used to ship ungated by
+ * default. The coverage check closes that: every schema an exposed operation sends or returns
+ * (request bodies and 2xx responses, nested schemas included, the resources sdk/README.md declares
+ * unexposed left out) must be compared by at least one of the JavaScript, Python, Go and Java
+ * clients, or be recorded in UNMAPPED_SCHEMAS with a reason. The dashboard does not count towards it.
  */
 
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -143,6 +149,37 @@ const MAPPINGS = {
     WebhookFilterCondition: 'WebhookFilterConditionDto',
     WebhookRedriveResult: 'WebhookRedriveResultDto',
     WebhookResponse: 'WebhookResponseDto',
+    // Payloads that sat outside every mapping until the coverage check required one.
+    CatalogInfo: 'CatalogDto',
+    CatalogProduct: 'ProductDto',
+    ChannelMessageRecord: 'ChannelMessageDto',
+    ChannelRecord: 'ChannelDto',
+    ChatPresence: 'ChatPresenceResponseDto',
+    CheckNumberResponse: 'NumberCheckResponseDto',
+    ClickButtonRequest: 'ClickButtonDto',
+    ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+    ContactRecord: 'ContactDto',
+    ConvertMediaInput: 'ConvertMediaDto',
+    ConvertedMedia: 'ConvertedMediaResponseDto',
+    GroupSettingsResponse: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+    HealthResponse: 'HealthCheckResponseDto',
+    JoinGroupResponse: 'GroupJoinedResponseDto',
+    LabelRecord: 'LabelDto',
+    MediaConversionAvailability: 'ConversionStatusResponseDto',
+    PaginatedProducts: 'PaginatedProductsDto',
+    ParticipantResult: 'ParticipantOperationResultDto',
+    ParticipantsResult: 'ParticipantsOperationResponseDto',
+    ProductMessageResponse: 'ProductMessageResponseDto',
+    QrCodeResponse: 'QRCodeResponseDto',
+    ReactionRecord: 'MessageReactionDto',
+    ReactionSender: 'MessageReactionSenderDto',
+    SearchResults: 'SearchResultsResponseDto',
+    SessionConfig: 'SessionConfigResponseDto',
+    SessionStatsOverview: 'SessionsOverviewResponseDto',
+    StatusMediaInput: 'StatusMediaInput',
+    StatusRecord: 'StatusDto',
+    TemplateRecord: 'TemplateResponseDto',
+    WebhookTestResult: 'WebhookTestResponseDto',
   },
   'dashboard/src/services/api.ts': {
     AccountRestriction: 'AccountRestrictionDto',
@@ -177,11 +214,11 @@ const MAPPINGS = {
  * added makes the shrink loud.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 85,
+  'sdk/javascript/src/types.ts': 117,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 84,
-  'sdk/go': 81,
-  'sdk/java': 85,
+  'sdk/python/openwa/types.py': 129,
+  'sdk/go': 130,
+  'sdk/java': 134,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -197,10 +234,24 @@ const EXCLUDED = {
       'BY DESIGN: every component is `json:"-"` and MarshalJSON writes the body by hand, because the three fields need an explicit null to reset and Go cannot express "null" and "absent" through one pointer, so the harvester sees no wire fields at all',
     UpdateSessionProxyRequest:
       'BY DESIGN, same shape as UpdateSessionConfigRequest above: clearing a proxy needs an explicit null and `omitempty` on a nil pointer omits the key instead, so ProxyURL is `json:"-"` with a ClearProxyURL flag and MarshalJSON writes the body, leaving no wire fields for the harvester to see',
+    ContactRecord:
+      'Number is a *string although the contract requires it and the server always sends it; making it a string is a source break for callers that dereference it, so it waits for a breaking release. The other fields conform',
+    GroupPictureResponse:
+      'URL is a plain string although the contract types it string|null (null when the group has no picture); a JSON null decodes to the empty string, which is how callers read "no picture", and a *string would be a source break',
+    GroupSettings:
+      'memberAddMode is a plain string because this struct is also the PUT body; the defined MemberAddMode type that GroupInfo uses would be a source break for callers that assign a string. The other fields conform',
+    MembershipRequestActionRequest:
+      'BY DESIGN: `participants` carries no omitempty so that a non-nil slice always sends the key, empty included, and naming nobody stays a 400 instead of collapsing into the absent key that means every pending request',
+    StatusRecord:
+      'Type is a plain string holding text, image, video or voice; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
   },
   'sdk/java': {
     UpdateSessionConfigRequest:
       'BY DESIGN: the three clear* components are client-side control flags consumed by UpdateSessionConfigRequestSerializer, which is what emits the explicit null; they never reach the wire',
+    GroupSettings:
+      'memberAddMode is a String because this record is also the PUT body; the MemberAddMode enum that GroupInfo uses would break callers that pass a string. The other components conform',
+    StatusRecord:
+      'type is a String holding text, image, video or voice; an enum would break callers that compare it as a string. The other components conform',
   },
   'dashboard/src/services/api.ts': {
     Webhook:
@@ -208,6 +259,34 @@ const EXCLUDED = {
     Session:
       'BY DESIGN, not drift: the wire always carries engineLoaded, but this client clears it to "unknown" after a websocket status event so the action helpers fall back to the status set — the type models client state, not the wire',
   },
+};
+
+const ACK_SHAPE =
+  'every client answers it as the shared SuccessResult {success, message?}, which spans the success-only and the success-plus-message acks, so no single schema fits it';
+const INVITE_CODE_SHAPE =
+  'both invite routes are answered as InviteCodeResponse, whose message exists on the revoke route only, so it cannot conform to either schema';
+
+/**
+ * Schemas that an exposed operation sends or returns and that no client compares, each with the
+ * reason. The coverage check fails on a schema in neither place, and on an entry here that a client
+ * now compares (or that no exposed operation uses any more), so the list cannot rot.
+ */
+const UNMAPPED_SCHEMAS = {
+  CallAckResponseDto: ACK_SHAPE,
+  ChannelAckResponseDto: ACK_SHAPE,
+  ContactAckResponseDto: ACK_SHAPE,
+  GroupAckResponseDto: ACK_SHAPE,
+  GroupInviteCodeResponseDto: INVITE_CODE_SHAPE,
+  GroupInviteCodeRevokedResponseDto: INVITE_CODE_SHAPE,
+  LabelAckResponseDto: ACK_SHAPE,
+  LivenessResponseDto:
+    'GET /health/live answers {status}, which JavaScript, Python and Go read as an inline map and Java as the HealthResponse of GET /health',
+  MessageActionResponseDto: ACK_SHAPE,
+  ProfileAckResponseDto: ACK_SHAPE,
+  SessionActionResponseDto: ACK_SHAPE,
+  SessionGroupSummaryDto:
+    'GET /groups is read as GroupSummary, the shape the create route answers, which also carries a participantsCount and an isAdmin that a listing never sends',
+  StatusDeletedResponseDto: 'every client discards the {message} body of DELETE status and returns nothing',
 };
 
 // UpdateWebhookRequest is mapped on the three clients that declare it as a named type. The
@@ -303,6 +382,50 @@ const PYTHON_MAPPING = {
   WebhookFilters: 'WebhookFiltersDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  BatchError: 'BatchMessageErrorDto',
+  BulkOptions: 'BulkMessageOptionsDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatHistoryMedia: 'ChatHistoryMediaDto',
+  ChatHistoryPoll: 'ChatHistoryPollDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  MessageCall: 'ChatHistoryCallDto',
+  MessageContact: 'ChatHistoryContactDto',
+  MessageLocation: 'ChatHistoryLocationDto',
+  MessageOrder: 'ChatHistoryOrderDto',
+  MessageProduct: 'ChatHistoryProductDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  ProductPagination: 'ProductPaginationDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 /** Go client pairs (wire structs across types_*.go). */
@@ -390,6 +513,54 @@ const GO_MAPPING = {
   WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  BatchError: 'BatchMessageErrorDto',
+  BulkOptions: 'BulkMessageOptionsDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatHistoryMedia: 'ChatHistoryMediaDto',
+  ChatHistoryPoll: 'ChatHistoryPollDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertMediaInput: 'ConvertMediaDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupPictureResponse: 'GroupPictureResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MembershipRequestActionRequest: 'MembershipRequestActionDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  MessageCall: 'ChatHistoryCallDto',
+  MessageContact: 'ChatHistoryContactDto',
+  MessageLocation: 'ChatHistoryLocationDto',
+  MessageOrder: 'ChatHistoryOrderDto',
+  MessageProduct: 'ChatHistoryProductDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  ProductPagination: 'ProductPaginationDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusListResponse: 'StatusListResponseDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 /** Java client pairs (record components in model/*.java). */
@@ -481,6 +652,54 @@ const JAVA_MAPPING = {
   WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
+  // Payloads that sat outside every mapping until the coverage check required one.
+  BatchError: 'BatchMessageErrorDto',
+  Call: 'ChatHistoryCallDto',
+  CatalogInfo: 'CatalogDto',
+  CatalogProduct: 'ProductDto',
+  ChannelMessageRecord: 'ChannelMessageDto',
+  ChannelRecord: 'ChannelDto',
+  ChatPresence: 'ChatPresenceResponseDto',
+  CheckNumberResponse: 'NumberCheckResponseDto',
+  ClickButtonRequest: 'ClickButtonDto',
+  Contact: 'ChatHistoryContactDto',
+  ContactPhoneResponse: 'ResolvedPhoneResponseDto',
+  ContactRecord: 'ContactDto',
+  ConvertMediaRequest: 'ConvertMediaDto',
+  ConvertedMedia: 'ConvertedMediaResponseDto',
+  GroupPictureResponse: 'GroupPictureResponseDto',
+  GroupSettings: ['GroupSettingsResponseDto', 'GroupSettingsDto'],
+  HealthResponse: 'HealthCheckResponseDto',
+  JoinGroupResponse: 'GroupJoinedResponseDto',
+  LabelRecord: 'LabelDto',
+  Location: 'ChatHistoryLocationDto',
+  Media: 'ChatHistoryMediaDto',
+  MediaConversionAvailability: 'ConversionStatusResponseDto',
+  MembershipRequestActionRequest: 'MembershipRequestActionDto',
+  MemoryUsage: 'SessionMemoryUsageDto',
+  Options: 'BulkMessageOptionsDto',
+  Order: 'ChatHistoryOrderDto',
+  PaginatedProducts: 'PaginatedProductsDto',
+  Pagination: 'ProductPaginationDto',
+  ParticipantResult: 'ParticipantOperationResultDto',
+  ParticipantsResult: 'ParticipantsOperationResponseDto',
+  Poll: 'ChatHistoryPollDto',
+  Product: 'ChatHistoryProductDto',
+  ProductMessageResponse: 'ProductMessageResponseDto',
+  QrCodeResponse: 'QRCodeResponseDto',
+  QuotedMessage: 'ChatHistoryQuotedMessageDto',
+  ReactionRecord: 'MessageReactionDto',
+  ReactionSender: 'MessageReactionSenderDto',
+  SearchResults: 'SearchResultsResponseDto',
+  SessionConfig: 'SessionConfigResponseDto',
+  SessionStatsOverview: 'SessionsOverviewResponseDto',
+  StatusContact: 'StatusContactDto',
+  StatusListResult: 'StatusListResponseDto',
+  StatusMediaInput: 'StatusMediaInput',
+  StatusRecord: 'StatusDto',
+  TemplateRecord: 'TemplateResponseDto',
+  UpdateTemplateRequest: 'UpdateTemplateDto',
+  WebhookTestResult: 'WebhookTestResponseDto',
 };
 
 // ── hand-type parsing (declarations follow the regular formatting of the two files) ──
@@ -1103,6 +1322,81 @@ export function parseJavaTypes(sources) {
   return records;
 }
 
+// ── schema coverage: nothing an exposed operation sends or returns goes unmapped by default ──
+
+/**
+ * The resources sdk/README.md declares deliberately unexposed, read from the README rather than
+ * restated here, the way check-sdk-coverage.mjs reads it: a hand-copied second list is what drifts.
+ */
+export function unexposedResources(readme) {
+  const start = readme.indexOf('Deliberately **not** exposed');
+  const end = readme.indexOf('Everything else the gateway publishes', start);
+  if (start < 0 || end < 0) {
+    throw new Error(
+      'sdk/README.md: could not find the "Deliberately not exposed" paragraph, so the schema coverage check cannot derive its scope.',
+    );
+  }
+  const names = [...readme.slice(start, end).matchAll(/`([^`]+)`/g)].map(m => m[1].split('/')[0].trim());
+  if (names.length < 8) {
+    throw new Error(`sdk/README.md: parsed only ${names.length} unexposed resources, expected the full list.`);
+  }
+  return new Set(names);
+}
+
+/**
+ * Every schema an exposed operation sends or returns, nested ones included: request bodies and 2xx
+ * responses only, so the shared error envelope is not asked for. A nested schema counts because a
+ * parent's complex field is compared by presence only, which leaves the nested shape ungated.
+ */
+export function exposedSchemas(openapi, unexposed) {
+  const seen = new Set();
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.$ref === 'string') {
+      const name = /^#\/components\/schemas\/(.+)$/.exec(node.$ref)?.[1];
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      visit(openapi.components.schemas[name]);
+      return;
+    }
+    Object.values(node).forEach(visit);
+  };
+  for (const [path, item] of Object.entries(openapi.paths)) {
+    const shape = path.replace(/\{[^}]*\}/g, '*');
+    const resource = /^\/api\/sessions\/\*\/([^/]+)/.exec(shape)?.[1] ?? /^\/api\/([^/*]+)/.exec(shape)?.[1] ?? '';
+    if (unexposed.has(resource) || unexposed.has(resource.replace(/-rules$/, ''))) continue;
+    for (const operation of Object.values(item)) {
+      if (!operation || typeof operation !== 'object') continue;
+      visit(operation.requestBody);
+      for (const [status, response] of Object.entries(operation.responses ?? {})) {
+        if (status.startsWith('2')) visit(response);
+      }
+    }
+  }
+  return seen;
+}
+
+/**
+ * What stands between the exposed schemas and a green run: a schema no client compares and
+ * UNMAPPED_SCHEMAS does not record, and a record that no longer describes anything.
+ */
+export function schemaCoverageProblems(exposed, compared, unmapped) {
+  const problems = [];
+  for (const name of [...exposed].sort()) {
+    if (!compared.has(name) && !(name in unmapped)) {
+      problems.push(
+        `${name} is sent or returned by the SDKs but no client compares it and UNMAPPED_SCHEMAS does not record it`,
+      );
+    }
+  }
+  for (const name of Object.keys(unmapped)) {
+    if (!exposed.has(name)) problems.push(`UNMAPPED_SCHEMAS lists ${name}, which no exposed operation uses: remove it`);
+    else if (compared.has(name))
+      problems.push(`UNMAPPED_SCHEMAS lists ${name}, which a client now compares: remove it`);
+  }
+  return problems;
+}
+
 // ── CLI driver ──
 
 // Resolved-path comparison, not a basename match: splitting on `/` finds no separator in a Windows
@@ -1140,6 +1434,7 @@ if (isDirectRun) {
       excluded: EXCLUDED[file] ?? {},
       floor: MINIMUM_MAPPED[file],
       compareOptionality: true,
+      sdk: file.startsWith('sdk/'),
     })),
     {
       label: 'sdk/python/openwa/types.py',
@@ -1148,6 +1443,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/python/openwa/types.py'] ?? {},
       floor: MINIMUM_MAPPED['sdk/python/openwa/types.py'],
       compareOptionality: true,
+      sdk: true,
     },
     {
       label: 'sdk/go (types_*.go)',
@@ -1156,6 +1452,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/go'] ?? {},
       floor: MINIMUM_MAPPED['sdk/go'],
       compareOptionality: true,
+      sdk: true,
     },
     {
       label: 'sdk/java (model/*.java)',
@@ -1164,6 +1461,7 @@ if (isDirectRun) {
       excluded: EXCLUDED['sdk/java'] ?? {},
       floor: MINIMUM_MAPPED['sdk/java'],
       compareOptionality: false,
+      sdk: true,
     },
   ];
 
@@ -1175,26 +1473,30 @@ if (isDirectRun) {
     let fileCompared = 0;
     const fileResults = [];
 
-    for (const [handName, schemaName] of Object.entries(client.mapping)) {
+    for (const [handName, target] of Object.entries(client.mapping)) {
       if (client.excluded[handName]) continue;
       const hand = handTypes[handName];
-      const schema = schemas[schemaName];
       if (!hand) {
         fileResults.push(`  MISSING hand type ${handName} (declared in mapping but not found in ${client.label})`);
         failures++;
         continue;
       }
-      if (!schema) {
-        fileResults.push(`  MISSING schema ${schemaName} (declared in mapping but not in openapi.json)`);
-        failures++;
-        continue;
-      }
-      fileCompared++;
-      compared++;
-      const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality);
-      if (diffs.length) {
-        fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
-        failures++;
+      // A list maps one hand type to several schemas: a body type that is also the response has to
+      // conform to each of them.
+      for (const schemaName of [target].flat()) {
+        const schema = schemas[schemaName];
+        if (!schema) {
+          fileResults.push(`  MISSING schema ${schemaName} (declared in mapping but not in openapi.json)`);
+          failures++;
+          continue;
+        }
+        fileCompared++;
+        compared++;
+        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality);
+        if (diffs.length) {
+          fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
+          failures++;
+        }
       }
     }
 
@@ -1216,9 +1518,22 @@ if (isDirectRun) {
     }
   }
 
+  const exposed = exposedSchemas(openapi, unexposedResources(readFileSync(`${REPO_ROOT}sdk/README.md`, 'utf8')));
+  const comparedSchemas = new Set(
+    CLIENTS.filter(c => c.sdk)
+      .flatMap(c => Object.entries(c.mapping).filter(([handName]) => !c.excluded[handName]))
+      .flatMap(([, target]) => [target].flat()),
+  );
+  const uncovered = schemaCoverageProblems(exposed, comparedSchemas, UNMAPPED_SCHEMAS);
+  console.log(
+    `schema coverage: ${exposed.size} schemas sent or returned, ${Object.keys(UNMAPPED_SCHEMAS).length} recorded unmapped in UNMAPPED_SCHEMAS, ${uncovered.length ? 'FAILURES' : 'all covered'}`,
+  );
+  for (const line of uncovered) console.log(`  ${line}`);
+  failures += uncovered.length;
+
   console.log(
     failures
-      ? `\ncheck-contract-shapes: ${failures} failing pair(s) — the contract side wins; tighten the hand type or fix the backend DTO and regenerate.`
+      ? `\ncheck-contract-shapes: ${failures} failure(s) — the contract side wins; tighten the hand type or fix the backend DTO and regenerate.`
       : `\ncheck-contract-shapes: ${compared} pairs conform.`,
   );
   process.exit(failures ? 1 : 0);

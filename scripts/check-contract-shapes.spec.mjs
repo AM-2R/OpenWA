@@ -11,19 +11,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   comparePair,
+  exposedSchemas,
   handToken,
   parseGoTypes,
   parseHandTypes,
   parseJavaTypes,
   parseObjectToken,
   parsePythonTypes,
+  schemaCoverageProblems,
   schemaToken,
+  unexposedResources,
 } from './check-contract-shapes.mjs';
 
 const handSource = `
@@ -341,7 +344,81 @@ test('a run through a symlinked path still reports', () => {
       encoding: 'utf8',
     });
     assert.match(run.stdout + run.stderr, /pairs compared/);
+    assert.match(run.stdout + run.stderr, /schema coverage: \d+ schemas/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const ref = name => ({ $ref: `#/components/schemas/${name}` });
+const json = schema => ({ content: { 'application/json': { schema } } });
+const coverageSpec = {
+  paths: {
+    '/api/sessions/{sessionId}/labels': {
+      parameters: [{ name: 'sessionId', in: 'path' }],
+      get: { responses: { 200: json({ type: 'array', items: ref('LabelDto') }), 400: json(ref('ErrorResponse')) } },
+    },
+    '/api/sessions/{sessionId}/status': {
+      post: {
+        requestBody: json(ref('PostDto')),
+        responses: { 201: json(ref('StatusResultDto')), 404: { $ref: '#/components/responses/NotFound' } },
+      },
+    },
+    '/api/audit': { get: { responses: { 200: json(ref('AuditDto')) } } },
+  },
+  components: {
+    schemas: {
+      LabelDto: { type: 'object', properties: { hexColor: { type: 'string' } } },
+      PostDto: { type: 'object', properties: { text: { type: 'string' } } },
+      StatusResultDto: { type: 'object', properties: { contact: { allOf: [ref('ContactDto')] } } },
+      ContactDto: { type: 'object', properties: { id: { type: 'string' } } },
+      ErrorResponse: { type: 'object', properties: { detail: ref('ErrorDetail') } },
+      ErrorDetail: { type: 'object', properties: {} },
+      AuditDto: { type: 'object', properties: {} },
+    },
+  },
+};
+
+test('exposedSchemas follows nested refs from bodies and 2xx responses only, inside the exposed resources', () => {
+  // ContactDto is only reachable through StatusResultDto.contact: a nested shape is ungated unless it is
+  // asked for too. The error envelope, a resource the README leaves out and a non-schema ref are not.
+  const found = exposedSchemas(coverageSpec, new Set(['audit']));
+  assert.deepEqual([...found].sort(), ['ContactDto', 'LabelDto', 'PostDto', 'StatusResultDto']);
+});
+
+test('schemaCoverageProblems fails when the mapping that held a schema is deleted', () => {
+  const exposed = exposedSchemas(coverageSpec, new Set(['audit']));
+  const compared = new Set(['LabelDto', 'PostDto', 'StatusResultDto', 'ContactDto']);
+  assert.deepEqual(schemaCoverageProblems(exposed, compared, {}), []);
+  compared.delete('LabelDto');
+  const problems = schemaCoverageProblems(exposed, compared, {});
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /^LabelDto .*no client compares it/);
+});
+
+test('schemaCoverageProblems accepts a recorded schema and rejects a record that went stale', () => {
+  const exposed = new Set(['AckDto', 'LabelDto']);
+  const compared = new Set(['LabelDto']);
+  assert.deepEqual(schemaCoverageProblems(exposed, compared, { AckDto: 'shared ack type' }), []);
+  const stale = schemaCoverageProblems(exposed, compared, { AckDto: 'x', LabelDto: 'x', GoneDto: 'x' });
+  assert.equal(stale.length, 2);
+  assert.ok(stale.some(p => /LabelDto.*now compares/.test(p)));
+  assert.ok(stale.some(p => /GoneDto.*no exposed operation/.test(p)));
+});
+
+test('unexposedResources reads the README paragraph and refuses a README it cannot read', () => {
+  const names = ['docs', 'auth/*', 'audit', 'settings', 'stats', 'automation', 'infra', 'plugins'];
+  const readme = `> Deliberately **not** exposed: ${names.map(n => `\`${n}\``).join(', ')}.\n> Everything else the gateway publishes is exposed.`;
+  assert.deepEqual(
+    [...unexposedResources(readme)],
+    ['docs', 'auth', 'audit', 'settings', 'stats', 'automation', 'infra', 'plugins'],
+  );
+  assert.throws(() => unexposedResources('no such paragraph'), /Deliberately not exposed/);
+  assert.throws(
+    () => unexposedResources('Deliberately **not** exposed: `docs`. Everything else the gateway publishes'),
+    /only 1/,
+  );
+  // The real README must still parse, or the coverage check has lost its scope.
+  const real = readFileSync(fileURLToPath(new URL('../sdk/README.md', import.meta.url)), 'utf8');
+  assert.ok(unexposedResources(real).has('audit'));
 });
