@@ -144,23 +144,21 @@ function installFetchStub(): void {
       );
     }
     if (method === 'GET' && path === `${base}/contacts/blocked`) return Promise.resolve(jsonResponse(blockedIds));
-    // Writes that answer an acknowledgement: group edits, chat state changes, clearing and deleting a chat,
-    // and the contact writes (block, unblock, save).
-    const pinRoute = method === 'POST' && path.endsWith('/chats/pin');
-    if (pinRoute) return gated('pin', () => jsonResponse({ success: !declineWrites }));
-    if (
-      (method === 'POST' && /\/chats\/(archive|pin|mute)$/.test(path)) ||
-      (/\/contacts\/[^/]+\/block$/.test(path) && method !== 'GET') ||
-      (method === 'PUT' && /\/contacts\/[^/]+$/.test(path))
-    ) {
-      return Promise.resolve(jsonResponse({ success: !declineWrites }));
-    }
-    if (
-      (method === 'POST' && (path === `${base}/chats/unread` || path === `${base}/chats/delete`)) ||
-      (method === 'DELETE' && /\/chats\/[^/]+\/messages$/.test(path))
-    ) {
-      return Promise.resolve(jsonResponse({ success: !declineWrites }));
-    }
+    // Writes that answer an acknowledgement: chat state changes, clearing and deleting a chat, leaving a group
+    // and the contact writes (block, unblock, save). A test can hold each back by its name.
+    const writes: Array<[name: string, matches: boolean]> = [
+      ['pin', method === 'POST' && path.endsWith('/chats/pin')],
+      ['archive', method === 'POST' && path.endsWith('/chats/archive')],
+      ['mute', method === 'POST' && path.endsWith('/chats/mute')],
+      ['unread', method === 'POST' && path === `${base}/chats/unread`],
+      ['deleteChat', method === 'POST' && path === `${base}/chats/delete`],
+      ['clearChat', method === 'DELETE' && /\/chats\/[^/]+\/messages$/.test(path)],
+      ['leave', method === 'POST' && path === `${groupPath}/leave`],
+      ['block', method !== 'GET' && /\/contacts\/[^/]+\/block$/.test(path)],
+      ['saveContact', method === 'PUT' && /\/contacts\/[^/]+$/.test(path)],
+    ];
+    const write = writes.find(([, matches]) => matches);
+    if (write) return gated(write[0], () => jsonResponse({ success: !declineWrites }));
     if (path.startsWith(`${groupPath}/participants`)) {
       const { participants } = body as { participants: string[] };
       const refusal = refuseMember ? { status: 403, message: 'not-authorized' } : {};
@@ -673,6 +671,10 @@ const settle = async () => {
   });
 };
 
+/** A dialog's confirming button, which loses its label to a spinner while its request is out. */
+const confirmButton = (dialog: HTMLElement) =>
+  dialog.querySelector('.modal-footer button:last-child') as HTMLButtonElement;
+
 test('a number lookup that answers after the panel closed and the session changed opens nothing', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listSecond = true;
@@ -750,6 +752,68 @@ test("a pin that answers after a switch does not pin the other session's chat wi
   await settle();
 
   assert.ok(!screen.queryByRole('img', { name: 'Pinned' }), "B's row was pinned by A's late answer");
+});
+
+test("a dismissed block's late answer leaves the next confirmation open and enabled", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  const release = hold('block');
+  renderPage();
+  await screen.findByText('Team');
+  pickRowAction('Alice', 'Block contact');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Block contact' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'POST' && c.path.endsWith('/block'))));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+
+  pickRowAction('Team', 'Leave group');
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(confirmButton(dialog).disabled, false, "the block's busy state showed on the next dialog");
+  release();
+  await settle();
+  assert.ok(screen.queryByRole('dialog'), "the block's answer closed the Leave dialog");
+  assert.ok(!fetchCalls.some(c => c.path.endsWith('/leave')), 'the Leave dialog sent a request nobody asked for');
+});
+
+test("a dismissed mute's late answer leaves the next mute dialog open and enabled", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  const release = hold('mute');
+  renderPage();
+  await screen.findByText('Team');
+  pickRowAction('Alice', 'Mute notifications');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'POST' && c.path.endsWith('/chats/mute'))));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+
+  pickRowAction('Team', 'Mute notifications');
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(confirmButton(dialog).disabled, false, "the first mute's busy state showed on the next dialog");
+  release();
+  await settle();
+  assert.ok(screen.queryByRole('dialog'), "the first mute's answer closed the next dialog");
+});
+
+test("a dismissed contact save's late answer leaves the next save dialog open and enabled", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listExtra = true;
+  const release = hold('saveContact');
+  renderPage();
+  await screen.findByText('Bobby');
+  pickRowAction('Alice', 'Rename contact');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PUT' && c.path.includes('/contacts/'))));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+
+  pickRowAction('Bobby', 'Save contact');
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByLabelText('First name'), { target: { value: 'Robert' } });
+  assert.equal(confirmButton(dialog).disabled, false, "the first save's busy state showed on the next dialog");
+  release();
+  await settle();
+  assert.ok(screen.queryByRole('dialog'), "the first save's answer closed the next dialog");
 });
 
 test('a clear or delete the engine declines keeps the chat and its dialog, and says it failed', async () => {

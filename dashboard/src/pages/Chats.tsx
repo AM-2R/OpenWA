@@ -197,17 +197,21 @@ export function Chats() {
   const roomMenuRef = useRef<HTMLDivElement | null>(null);
   // The group whose info dialog is open, from its row's menu or from the open room's.
   const [groupDialogChat, setGroupDialogChat] = useState<Chat | null>(null);
-  // A destructive row action awaiting confirmation, and whether it is in flight.
+  // A destructive row action awaiting confirmation, and the one whose request is out. A dialog is busy only
+  // while its own request is: the answer of a dialog dismissed meanwhile (Escape, the overlay) neither
+  // disables nor closes the next one, so these are compared by identity, never cleared unconditionally.
   const [confirmAction, setConfirmAction] = useState<{
     kind: 'leave' | 'clear' | 'delete' | 'block';
     chat: Chat;
   } | null>(null);
-  const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
-  // The archive view of the Chats tab, and the chats whose mute or contact dialog is open.
+  const [confirmRunning, setConfirmRunning] = useState<typeof confirmAction>(null);
+  const confirmBusy = confirmAction !== null && confirmRunning === confirmAction;
+  // The archive view of the Chats tab, the chats whose mute or contact dialog is open, and the chat whose
+  // mute or contact request is out.
   const [showArchived, setShowArchived] = useState<boolean>(false);
   const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
   const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
-  const [dialogBusy, setDialogBusy] = useState<boolean>(false);
+  const [dialogRunning, setDialogRunning] = useState<Chat | null>(null);
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -1267,7 +1271,7 @@ export function Chats() {
         : duration === 'always'
           ? MUTE_FOREVER
           : Date.now() + (duration === '8h' ? 8 * 3_600_000 : 7 * 86_400_000);
-    setDialogBusy(true);
+    setDialogRunning(chat);
     try {
       expectSuccess(await sessionApi.muteChat(sessionId, chat.id, until));
       // The list reports an indefinite mute as expiry 0.
@@ -1275,11 +1279,11 @@ export function Chats() {
         muted: until !== null,
         muteExpiration: until === null ? undefined : duration === 'always' ? 0 : until,
       });
-      if (stillOn(sessionId)) setMuteDialogChat(null);
+      setMuteDialogChat(open => (open === chat ? null : open));
     } catch (err) {
       failWith('chats.rowActions.muteFailed')(err);
     } finally {
-      setDialogBusy(false);
+      setDialogRunning(running => (running === chat ? null : running));
     }
   };
 
@@ -1287,17 +1291,17 @@ export function Chats() {
     const sessionId = selectedSessionId;
     const contactId = addressbookIdOf(chat);
     if (!contactId) return;
-    setDialogBusy(true);
+    setDialogRunning(chat);
     try {
       expectSuccess(await contactApi.upsert(sessionId, contactId, firstName, lastName || undefined));
       showSuccessToast(t('chats.rowActions.contactSaved'));
       void queryClient.invalidateQueries({ queryKey: ['contacts', sessionId] });
       renameChat(sessionId, chat.id, [firstName, lastName].filter(Boolean).join(' '));
-      if (stillOn(sessionId)) setContactDialogChat(null);
+      setContactDialogChat(open => (open === chat ? null : open));
     } catch (err) {
       failWith('chats.rowActions.contactSaveFailed')(err);
     } finally {
-      setDialogBusy(false);
+      setDialogRunning(running => (running === chat ? null : running));
     }
   };
 
@@ -1336,10 +1340,11 @@ export function Chats() {
   // A switch closes the dialog, and a request that answers after it changes nothing on the new session.
   const runConfirmedAction = async () => {
     if (!confirmAction) return;
-    const { kind, chat } = confirmAction;
+    const started = confirmAction;
+    const { kind, chat } = started;
     const sessionId = selectedSessionId;
     const name = chat.name || chat.id.split('@')[0];
-    setConfirmBusy(true);
+    setConfirmRunning(started);
     try {
       if (kind === 'leave') {
         expectSuccess(await sessionApi.leaveGroup(sessionId, chat.id));
@@ -1363,7 +1368,7 @@ export function Chats() {
       }
       if (!stillOn(sessionId)) return;
       if ((kind === 'leave' || kind === 'delete') && activeChatIdRef.current === chat.id) setActiveChat(null);
-      setConfirmAction(null);
+      setConfirmAction(open => (open === started ? null : open));
     } catch (err) {
       const failed =
         kind === 'leave'
@@ -1375,7 +1380,7 @@ export function Chats() {
               : 'chats.rowActions.deleteFailed';
       failWith(failed)(err);
     } finally {
-      setConfirmBusy(false);
+      setConfirmRunning(running => (running === started ? null : running));
     }
   };
 
@@ -1828,7 +1833,7 @@ export function Chats() {
       {muteDialogChat && (
         <MuteChatDialog
           chat={muteDialogChat}
-          busy={dialogBusy}
+          busy={dialogRunning === muteDialogChat}
           onMute={duration => void handleMute(muteDialogChat, duration)}
           onClose={() => setMuteDialogChat(null)}
         />
@@ -1837,7 +1842,7 @@ export function Chats() {
       {contactDialogChat && (
         <SaveContactDialog
           chat={contactDialogChat}
-          busy={dialogBusy}
+          busy={dialogRunning === contactDialogChat}
           onSave={(first, last) => void handleSaveContact(contactDialogChat, first, last)}
           onClose={() => setContactDialogChat(null)}
         />
