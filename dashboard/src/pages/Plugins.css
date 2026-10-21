@@ -570,6 +570,11 @@
   transform: translateX(22px);
 }
 
+.plugins-page .toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .plugins-page .no-config {
   text-align: center;
   padding: 2rem;

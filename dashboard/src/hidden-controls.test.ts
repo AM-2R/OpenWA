@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -33,4 +33,28 @@ test('the Infrastructure radio inputs stay focusable and the card shows the focu
   const ring = all.find(r => r.selectors.some(s => /\.radio-option:has\(input:focus-visible\)$/.test(s)));
   assert.ok(ring, 'no focus ring for the focused radio card');
   assert.match(ring.body, /outline:\s*2px solid var\(--primary\)/);
+});
+
+/** Every stylesheet under src/, as a path relative to src/. */
+function cssFiles(dir = SRC): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return cssFiles(full);
+    return entry.name.endsWith('.css') ? [full.slice(SRC.length + 1)] : [];
+  });
+}
+
+test('every stylesheet that hides a toggle checkbox rings its slider on keyboard focus', () => {
+  const hiding = cssFiles().filter(file =>
+    rules(file).some(r => r.selectors.some(s => /\.toggle-switch input$/.test(s))),
+  );
+  // Vacuity floor: Sessions, Webhooks, Infrastructure and Plugins each carry their own copy.
+  assert.ok(hiding.length >= 4, `only ${hiding.length} stylesheets hide a toggle checkbox`);
+  const missing = hiding.filter(file => {
+    const ring = rules(file).find(r =>
+      r.selectors.some(s => /\.toggle-switch input:focus-visible \+ \.toggle-slider$/.test(s)),
+    );
+    return !ring || !/outline:\s*2px solid var\(--primary\)/.test(ring.body);
+  });
+  assert.deepEqual(missing, []);
 });

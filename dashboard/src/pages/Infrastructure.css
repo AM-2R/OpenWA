@@ -281,6 +281,11 @@
   transform: translateX(22px);
 }
 
+.infrastructure-page .toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 /* Queue Stats */
 .infrastructure-page .queue-stats {
   margin-top: 1.5rem;
