@@ -838,35 +838,43 @@
   border-radius: 10px;
 }
 
-/* When the tabs sit INSIDE the install modal header (between the title and the close button), drop
-   the standalone-row margins so they don't push the title up / leave a gap. On a narrow viewport they
-   take a row of their own under the title and the close button (flex-wrap on the header). */
+/* Three-item header (title + tabs + close). On a narrow viewport the tabs take a row of their own under the
+   title and the close button (flex-wrap on the header), without the standalone-row margins that would push
+   the title up or leave a gap. */
+.plugins-page .install-modal .modal-header {
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
+}
+
 .plugins-page .install-modal .modal-header .install-tabs {
   margin: 0;
   order: 3;
   width: 100%;
 }
 
-/* Where the header has room beside the longest title, pin the tabs to its true horizontal center with
-   absolute positioning: justify-content:space-between only centers them approximately because the
-   title (left) and close button (right) have different widths, leaving the pill visibly off-center. An
-   absolutely positioned box takes no part in wrapping, so below this width it would cover the title. */
+/* From 700px the header is three tracks: the middle one as wide as the tabs, the outer two sharing the rest
+   equally. That puts the tabs in the true horizontal center (justify-content:space-between only
+   approximates it, as the title and the close button differ in width) and cuts a long title inside its own
+   track, where absolute positioning let it run under the tabs. */
 @media (min-width: 700px) {
+  .plugins-page .install-modal .modal-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+  }
+
   .plugins-page .install-modal .modal-header .install-tabs {
     order: 0;
     width: auto;
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
+    /* Out of the row height, so a tall pill (a label that wraps) does not grow the header, and centered in
+       the header's padding box (1.5rem above the row, 1rem below it) as the absolute positioning it
+       replaces had it: 0.25rem above the center of the row. */
+    margin-block: -3.25rem -2.75rem;
   }
-}
 
-/* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill. */
-.plugins-page .install-modal .modal-header {
-  position: relative;
-  flex-wrap: wrap;
-  row-gap: 0.75rem;
+  .plugins-page .install-modal .modal-header .btn-icon {
+    justify-self: end;
+  }
 }
 
 .plugins-page .install-modal .modal-header h2 {
