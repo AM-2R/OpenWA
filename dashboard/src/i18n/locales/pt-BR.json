@@ -676,7 +676,7 @@
       "call.rejected": "Quando uma chamada é recusada",
       "call.missed": "Quando uma chamada não é atendida",
       "status.received": "Quando um contato publica um status",
-      "all": "Todos os eventos"
+      "all": "Todos os eventos, exceto message.receipt, que precisa ser indicado explicitamente"
     },
     "auth": {
       "title": "Autenticação de entrega",

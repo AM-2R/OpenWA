@@ -670,7 +670,7 @@
       "call.rejected": "Saat panggilan ditolak",
       "call.missed": "Saat panggilan tidak terjawab",
       "status.received": "Saat kontak memposting status",
-      "all": "Semua kejadian"
+      "all": "Semua kejadian kecuali message.receipt, yang harus disebutkan secara eksplisit"
     },
     "auth": {
       "title": "Autentikasi pengiriman",

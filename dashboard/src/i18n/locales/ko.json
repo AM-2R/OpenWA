@@ -670,7 +670,7 @@
       "call.rejected": "통화가 거절되었을 때",
       "call.missed": "통화에 응답하지 않았을 때",
       "status.received": "연락처가 상태를 게시했을 때",
-      "all": "모든 이벤트"
+      "all": "message.receipt을 제외한 모든 이벤트 (message.receipt은 직접 지정해야 함)"
     },
     "auth": {
       "title": "전송 인증",

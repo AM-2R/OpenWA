@@ -670,7 +670,7 @@
       "call.rejected": "When a call is declined",
       "call.missed": "When a call goes unanswered",
       "status.received": "When a contact posts a status",
-      "all": "All events"
+      "all": "All events except message.receipt, which must be named explicitly"
     },
     "auth": {
       "title": "Delivery authentication",

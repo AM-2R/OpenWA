@@ -670,7 +670,7 @@
       "call.rejected": "Wenn ein Anruf abgelehnt wird",
       "call.missed": "Wenn ein Anruf unbeantwortet bleibt",
       "status.received": "Wenn ein Kontakt einen Status veröffentlicht",
-      "all": "Alle Ereignisse"
+      "all": "Alle Ereignisse außer message.receipt, das ausdrücklich genannt werden muss"
     },
     "auth": {
       "title": "Zustellungsauthentifizierung",

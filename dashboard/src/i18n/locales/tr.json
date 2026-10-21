@@ -670,7 +670,7 @@
       "call.rejected": "Bir arama reddedildiğinde",
       "call.missed": "Bir arama yanıtsız kaldığında",
       "status.received": "Bir kişi durum paylaştığında",
-      "all": "Tüm olaylar"
+      "all": "message.receipt hariç tüm olaylar (message.receipt açıkça belirtilmelidir)"
     },
     "auth": {
       "title": "Teslimat kimlik doğrulaması",

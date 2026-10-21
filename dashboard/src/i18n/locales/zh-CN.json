@@ -670,7 +670,7 @@
       "call.rejected": "来电被拒接时",
       "call.missed": "来电未接听时",
       "status.received": "联系人发布状态时",
-      "all": "所有事件"
+      "all": "除 message.receipt 外的所有事件（message.receipt 须明确指定）"
     },
     "auth": {
       "title": "投递认证",
