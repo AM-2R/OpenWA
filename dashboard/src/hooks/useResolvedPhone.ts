@@ -12,11 +12,18 @@ import { contactApi } from '../services/api';
  */
 export function useResolvedPhone(sessionId: string | undefined, contactId: string | undefined) {
   return useQuery<string | null, Error>({
-    queryKey: ['resolvedPhone', sessionId, contactId] as const,
-    queryFn: () => contactApi.resolvePhone(sessionId!, contactId!).then(r => r.phone),
+    ...resolvedPhoneQuery(sessionId!, contactId!),
     enabled: Boolean(sessionId && contactId),
-    staleTime: 24 * 60 * 60 * 1000, // 1 day — lid→phone mappings don't churn
     gcTime: 60 * 60 * 1000,
     retry: false,
   });
+}
+
+/** The query behind {@link useResolvedPhone}, for a caller that asks about several ids at once (fetchQuery). */
+export function resolvedPhoneQuery(sessionId: string, contactId: string) {
+  return {
+    queryKey: ['resolvedPhone', sessionId, contactId] as const,
+    queryFn: () => contactApi.resolvePhone(sessionId, contactId).then(r => r.phone),
+    staleTime: 24 * 60 * 60 * 1000, // 1 day — lid→phone mappings don't churn
+  };
 }

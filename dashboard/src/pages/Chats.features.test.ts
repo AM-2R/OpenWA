@@ -107,6 +107,19 @@ const NUMBER_NAMED_CONTACT = {
   isBlocked: false,
 };
 let listExtra = false;
+// The phone the gateway resolves a privacy id to, by id; an id it knows nothing about answers null.
+const lidPhones: Record<string, string> = {};
+// When true, resolving a privacy id fails as it does while the engine is busy.
+let failLidPhones = false;
+// How many more privacy-id chats the list holds, none of which resolves to a phone.
+let extraLidChats = 0;
+const extraLidChat = (n: number): Chat => ({
+  ...CHAT,
+  id: `9000000000${String(n).padStart(3, '0')}@lid`,
+  name: `Lid ${n}`,
+  timestamp: 1_600_000_000 - n,
+  lastMessage: `from lid ${n}`,
+});
 // Served when a test turns `listDuplicateContact` on: Bob listed twice under one id, as whatsapp-web.js lists a
 // contact it holds as both a LID and a phone record. The first copy carries another number than the id's.
 const DUPLICATE_CONTACT = { ...CONTACT, number: '262813461250071' };
@@ -168,6 +181,7 @@ function installFetchStub(): void {
           { ...CHAT, ...aliceNow },
           ...(listGroup ? [GROUP] : []),
           ...(listExtra ? [PUSH_ONLY_CHAT, LID_CHAT, NUMBER_NAMED_CHAT] : []),
+          ...Array.from({ length: extraLidChats }, (_, n) => extraLidChat(n)),
         ]),
       );
     }
@@ -269,6 +283,11 @@ function installFetchStub(): void {
       const id = decodeURIComponent(path.split('/contacts/')[1].split('/profile-picture')[0]);
       return Promise.resolve(jsonResponse({ url: pictureFor[id] ?? null }));
     }
+    if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
+      const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
+      if (failLidPhones) return Promise.resolve(jsonResponse({ message: 'busy' }, 503));
+      return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
+    }
     if (method === 'GET' && path.startsWith(`${base}/contacts/check/`)) {
       return gated('check', () => jsonResponse({ exists: true, whatsappId: RESOLVED_ID }));
     }
@@ -334,6 +353,9 @@ afterEach(async () => {
   listExtra = false;
   listDuplicateContact = false;
   failContacts = false;
+  failLidPhones = false;
+  extraLidChats = 0;
+  for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
   aliceThread = [];
   declineWrites = false;
@@ -419,6 +441,82 @@ for (const reactStrictMode of [false, true]) {
     assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open over the list');
   });
 }
+
+// ── The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
+// under its @lid: starting a chat with that number has to find it. ──
+
+const phoneRequests = () =>
+  fetchCalls.filter(c => c.method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(c.path)).map(c => c.path);
+
+/** Type the number the new chat tests use into the panel and press Start chat. */
+async function startChatWithTypedNumber(): Promise<void> {
+  const { screen, fireEvent } = rtl;
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  fireEvent.change(screen.getByLabelText('Search name or number with country code'), {
+    target: { value: TYPED_NUMBER },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: /^Start chat with/ }));
+}
+
+const listedChatCards = (container: HTMLElement) => container.querySelectorAll('.chats-list .chat-item-card').length;
+
+test('a typed number whose chat the list holds under a privacy id opens that chat, not a new one', async () => {
+  const { screen, waitFor, within } = rtl;
+  listExtra = true;
+  lidPhones[LID_CHAT.id] = '15550009999';
+  const { container } = renderPage();
+  await screen.findByText('Lia');
+  const before = listedChatCards(container);
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Lia');
+  assert.equal(listedChatCards(container), before, 'a second chat was added beside the one the list holds');
+  assert.equal(
+    phoneRequests().filter(path => path.includes(encodeURIComponent(LID_CHAT.id))).length,
+    1,
+    'the engine was asked about the privacy id more than once',
+  );
+});
+
+test('a privacy-id chat of another phone is not mistaken for the number, which opens a new chat', async () => {
+  const { screen, waitFor, within } = rtl;
+  listExtra = true;
+  lidPhones[LID_CHAT.id] = '15550007777';
+  const { container } = renderPage();
+  await screen.findByText('Lia');
+  const before = listedChatCards(container);
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  assert.equal(listedChatCards(container), before + 1, 'the new chat was not added to the list');
+});
+
+test('a privacy id the engine cannot resolve right now does not stop a chat from opening', async () => {
+  const { screen, waitFor, within } = rtl;
+  listExtra = true;
+  failLidPhones = true;
+  const { container } = renderPage();
+  await screen.findByText('Lia');
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
+});
+
+test('only the newest privacy-id chats are asked about, not every one the list holds', async () => {
+  const { screen, waitFor } = rtl;
+  extraLidChats = 60;
+  const { container } = renderPage();
+  await screen.findByText('Lid 0');
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  assert.ok(phoneRequests().length > 0, 'no privacy id was asked about');
+  assert.ok(phoneRequests().length < extraLidChats, `all ${extraLidChats} privacy ids were asked about`);
+});
 
 for (const reactStrictMode of [false, true]) {
   test(`a group is created with the picked contacts on Baileys, and whatsapp-web.js is not offered one${reactStrictMode ? ' (StrictMode)' : ''}`, async () => {

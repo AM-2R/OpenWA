@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
-import { useResolvedPhone } from '../hooks/useResolvedPhone';
+import { useResolvedPhone, resolvedPhoneQuery } from '../hooks/useResolvedPhone';
 import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -96,6 +96,13 @@ const MARK_READ_DEBOUNCE_MS = 750;
 // Most messages the gateway takes in one read (MarkChatReadDto).
 const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
+
+// How many privacy-id chats a typed number is looked for among, and how many are asked about at once. The engine
+// answers one id per request, so searching the whole list would cost a request for every chat in it. Only the
+// newest chats are searched: an older conversation opens as a new chat, as it does for a number the list has no
+// row for. Raise the cap, or have the gateway name the privacy id of a phone, if that proves too few.
+const LID_CHATS_SEARCHED = 30;
+const LID_LOOKUPS_AT_ONCE = 5;
 
 // Longest one background chat-list walk may take before it is abandoned. A walk is a dozen small requests, and
 // the gateway answers a stalled engine at 180 s, so this is far above a healthy walk and below that.
@@ -1237,6 +1244,29 @@ export function Chats() {
     ? shownChats
     : [...shownChats.filter(c => c.pinned), ...shownChats.filter(c => !c.pinned)];
 
+  // The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
+  // under its @lid. Finds the id the list holds that conversation under: the same phone spelled another way, else
+  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache.
+  const findListedChat = async (phoneId: string): Promise<string | null> => {
+    const sessionId = selectedSessionRef.current;
+    const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
+    if (spelled) return spelled.id;
+    const phone = phoneId.split('@')[0].replace(/\D/g, '');
+    const privacyChats = chatsRef.current
+      .filter(c => c.kind === 'individual' && c.id.endsWith('@lid'))
+      .slice(0, LID_CHATS_SEARCHED);
+    for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
+      const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
+      const phones = await Promise.all(
+        batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
+      );
+      if (selectedSessionRef.current !== sessionId) return null;
+      const hit = batch.find((_, j) => phones[j]?.replace(/\D/g, '') === phone);
+      if (hit) return hit.id;
+    }
+    return null;
+  };
+
   // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
   // it is added to the sidebar locally until the first message, or the next list load, settles it.
   // The filter and search are cleared so the opened chat is visible in the list. A chat the panel found
@@ -1624,6 +1654,7 @@ export function Chats() {
                 <NewChatPanel
                   sessionId={selectedSessionId}
                   onOpenChat={handleOpenNewChat}
+                  findListedChat={findListedChat}
                   onClose={() => setShowNewChat(false)}
                 />
               ) : null

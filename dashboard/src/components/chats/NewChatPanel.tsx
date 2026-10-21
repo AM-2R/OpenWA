@@ -22,6 +22,11 @@ interface NewChatPanelProps {
    * the chat was found through, for the page to check it is still the one selected.
    */
   onOpenChat: (chat: Chat, sessionId: string) => void;
+  /**
+   * The id the chat list holds a phone-based id's conversation under when that is another id of the same contact
+   * (one that moved to privacy-id addressing keeps its chat under its @lid), or null when the list has none.
+   */
+  findListedChat?: (phoneId: string) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -64,7 +69,7 @@ const draftChat = (id: string, name: string, kind: Chat['kind'], timestamp = 0):
  * Sidebar sub-view for starting a 1:1 chat or creating a group. The page mounts it only for a key that
  * can write; group creation is offered on Baileys only, since whatsapp-web.js answers it with 501.
  */
-function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
+function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewChatPanelProps) {
   const { t } = useTranslation();
   const { error: showErrorToast, success: showSuccessToast } = useToast();
   const { engineType } = useRole();
@@ -127,7 +132,11 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
   // Resolve a typed number to its canonical WhatsApp id. The send routes accept an unregistered number
   // without an error, so this check is the only thing that keeps a chat from going nowhere. An answer
   // that arrives after the panel was closed is dropped, toasts included: nothing on screen asked for it.
-  const resolveNumber = async (digits: string, label: string): Promise<string | null> => {
+  const resolveNumber = async (
+    digits: string,
+    label: string,
+    listedAs?: (phoneId: string) => Promise<string | null>,
+  ): Promise<string | null> => {
     setChecking(true);
     try {
       const res = await contactApi.checkNumber(sessionId, digits);
@@ -136,7 +145,10 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
         showErrorToast(t('chats.newChat.notOnWhatsApp', { number: label }));
         return null;
       }
-      return res.whatsappId;
+      // A conversation the list keeps under another id of the same contact is the one to open. Failing to
+      // find it is no reason to fail the number, which opens a new chat as it would for any other.
+      const listed = listedAs ? await listedAs(res.whatsappId).catch(() => null) : null;
+      return listed ?? res.whatsappId;
     } catch (err) {
       if (openRef.current) {
         showErrorToast(t('chats.newChat.checkFailed'), err instanceof Error ? err.message : undefined);
@@ -149,7 +161,7 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
 
   const handleStartWithNumber = async () => {
     if (!typedNumber) return;
-    const id = await resolveNumber(typedNumber, typedNumberLabel);
+    const id = await resolveNumber(typedNumber, typedNumberLabel, findListedChat);
     if (id && openRef.current) onOpenChat(draftChat(id, '', 'individual'), sessionId);
   };
 
