@@ -11,7 +11,7 @@
 // JSX), loader hooks registered before any app-module import (see test-helpers/register-hooks),
 // and JSDOM installed before importing modules that read `window` at import time.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -1895,6 +1895,47 @@ test('triggers made while the trailing reload is out queue one more behind it', 
   await flush();
   await flush();
   assert.equal(countFetchCalls('GET', chatsPath), 3);
+});
+
+// A background walk that never answers is cut at a deadline of the page's own, a timer of a couple of minutes.
+// Only a timer that long is held back, to be fired by hand, so the rest of the page keeps its real clock.
+function holdWalkDeadlines(t: TestContext): Array<() => void> {
+  const fire: Array<() => void> = [];
+  const realSetTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', ((callback: () => void, ms?: number, ...args: unknown[]) => {
+    // Above a healthy walk, and below the 180 s the gateway takes to answer a stalled engine.
+    if (typeof ms === 'number' && ms >= 60_000 && ms < 180_000) {
+      fire.push(callback);
+      return { unref: () => undefined } as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(callback, ms, ...args);
+  }) as typeof setTimeout);
+  return fire;
+}
+
+test('a background walk that never answers is abandoned at its deadline, and the reload behind it starts', async t => {
+  const { screen, waitFor } = rtl;
+  renderChats();
+  await screen.findByText('Alice');
+  const deadlines = holdWalkDeadlines(t);
+  // Every list request stays out until its signal aborts it, as a half-open connection would.
+  const signals: Array<AbortSignal | null | undefined> = [];
+  chatsResponder = (_sessionId, _offset, signal) =>
+    new Promise<Response>((_resolve, reject) => {
+      signals.push(signal);
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    });
+
+  askForReloads();
+  await waitFor(() => assert.equal(signals.length, 1));
+  assert.equal(deadlines.length, 1, 'the background walk was given no deadline');
+  await flush();
+  assert.equal(signals.length, 1, 'a trigger made while the walk was out started its own');
+
+  deadlines[0]();
+  await waitFor(() => assert.equal(signals.length, 2, 'the reload behind the stalled walk never started'));
+  assert.equal(signals[0]?.aborted, true, 'the stalled walk was left holding its request');
+  assert.equal(signals[1]?.aborted, false);
 });
 
 test('a background reload that lands before the initial list is not overwritten by it', async () => {

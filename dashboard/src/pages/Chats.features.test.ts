@@ -74,9 +74,10 @@ let groupDescription = 'old description';
 let bobIsAdmin = false;
 // When true, GROUP also lists a member WhatsApp knows by a privacy id only, which carries no phone number.
 let groupHasLidMember = false;
-// When true, a membership write answers HTTP 200 with its participants refused in `results`, as the route does
-// for a batch WhatsApp turns down in part.
-let refuseMember = false;
+// How a membership write is refused. The dialog sends one participant at a time, and the gateway answers 403 when
+// a write fails for every participant it was asked about ('all'). A refusal inside a 200 answer ('some') is what
+// a batch it turned down in part gets; nothing in this dialog asks for one, but the answer shape is the route's.
+let refuseMember: false | 'all' | 'some' = false;
 
 const CONTACT = { id: '15550002222@c.us', name: 'Bob', number: '15550002222', isMyContact: true, isBlocked: false };
 const ALICE_CONTACT = { id: CHAT.id, name: 'Alice', number: '15550001111', isMyContact: true, isBlocked: false };
@@ -202,14 +203,36 @@ function installFetchStub(): void {
     if (write) return gated(write[0], () => jsonResponse({ success: !declineWrites }));
     if (path.startsWith(`${groupPath}/participants`)) {
       const { participants } = body as { participants: string[] };
-      if (path.endsWith('/promote') && !refuseMember) bobIsAdmin = true;
-      if (path.endsWith('/demote') && !refuseMember) bobIsAdmin = false;
-      const refusal = refuseMember ? { status: 403, message: 'not-authorized' } : {};
+      if (refuseMember === 'some') {
+        return Promise.resolve(
+          jsonResponse({
+            success: true,
+            message: 'ok',
+            results: participants.map(id => ({ id, success: false, status: 403, message: 'not-authorized' })),
+          }),
+        );
+      }
+      if (refuseMember === 'all') {
+        const op =
+          path.split('/').pop() === 'participants' ? (method === 'POST' ? 'add' : 'remove') : path.split('/').pop();
+        return Promise.resolve(
+          jsonResponse(
+            {
+              statusCode: 403,
+              message: `${op}Participants failed for all ${participants.length} participant(s) in group ${GROUP.id}: ${participants[0]} (403)`,
+              error: 'Forbidden',
+            },
+            403,
+          ),
+        );
+      }
+      if (path.endsWith('/promote')) bobIsAdmin = true;
+      if (path.endsWith('/demote')) bobIsAdmin = false;
       return Promise.resolve(
         jsonResponse({
           success: true,
           message: 'ok',
-          results: participants.map(id => ({ id, success: !refuseMember, ...refusal })),
+          results: participants.map(id => ({ id, success: true })),
         }),
       );
     }
@@ -607,7 +630,7 @@ test('a member known only by a privacy id is not shown as a phone number', async
   assert.ok(!(dialog.textContent ?? '').includes('+262'), 'a privacy id was formatted as an international number');
 });
 
-test('a participant the gateway refuses is reported although the write answered 200', async () => {
+test('a participant the gateway refuses is reported with the reason it gave', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   listGroup = true;
   renderPage();
@@ -627,11 +650,45 @@ test('a participant the gateway refuses is reported although the write answered 
   );
   assert.ok(!screen.queryByText('The action failed'), 'an accepted write was reported as failed');
 
-  refuseMember = true;
+  refuseMember = 'all';
   fireEvent.click(within(dialog).getByRole('button', { name: 'Remove admin: Bob' }));
   await screen.findByText('The action failed');
-  await screen.findByText('15550002222: not-authorized');
+  await screen.findByText(
+    /^demoteParticipants failed for all 1 participant\(s\) in group .*15550002222@c\.us \(403\)$/,
+  );
   assert.equal(writesTo('demote'), 1);
+});
+
+test('a participant refused inside a 200 answer is named with the reason it gave', async () => {
+  const { screen, fireEvent, within } = rtl;
+  listGroup = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+
+  refuseMember = 'some';
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Make admin: Bob' }));
+  await screen.findByText('The action failed');
+  await screen.findByText('15550002222: not-authorized');
+});
+
+test('a number the gateway refuses to add stays in the box, and an accepted one clears it', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  const box = () => within(dialog).getByLabelText('Add a number with country code') as HTMLInputElement;
+  fireEvent.change(box(), { target: { value: TYPED_NUMBER } });
+
+  refuseMember = 'all';
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+  await screen.findByText('The action failed');
+  assert.equal(box().value, TYPED_NUMBER, 'the number the gateway refused was cleared');
+
+  refuseMember = false;
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+  await waitFor(() => assert.equal(box().value, '', 'an accepted number stayed in the box'));
 });
 
 test('a member who is no admin sees the group read-only, and a viewer key gets no write actions', async () => {
@@ -1502,6 +1559,49 @@ test('Copy chat ID says so when the copy did not happen', async t => {
   await rtl.screen.findByText('Could not copy to clipboard');
   assert.equal(copy.mock.callCount(), 1);
   assert.ok(!rtl.screen.queryByText('Chat ID copied'));
+});
+
+test('a chat marked unread is read again once it is opened', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  pickRowAction('Alice', 'Mark as unread');
+  await screen.findByLabelText('Marked as unread');
+  fetchCalls.length = 0;
+
+  fireEvent.click(screen.getByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not read it again'), {
+    timeout: 3_000,
+  });
+  assert.ok(!screen.queryByLabelText('Marked as unread'), 'the badge stayed after the chat was opened');
+});
+
+test('a message that reaches the open chat while Mark as unread is out is not read automatically', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const release = hold('unread');
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+
+  pickRowAction('Alice', 'Mark as unread');
+  await waitFor(() =>
+    assert.ok(
+      fetchCalls.some(c => c.path.endsWith('/chats/unread')),
+      'the mark was not sent',
+    ),
+  );
+  fetchCalls.length = 0;
+  receiveFromAlice('wamid.during.1', 'while the mark is out');
+  await screen.findAllByText('while the mark is out');
+  // Past the quiet window, so a read queued by that message would have gone out.
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  release();
+  await settle();
+  assert.deepEqual(readsOf(CHAT.id), [], 'the message was read automatically and undid the mark');
 });
 
 test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {
