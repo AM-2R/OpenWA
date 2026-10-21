@@ -111,19 +111,21 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
       setOpen(false);
       triggerRef.current?.focus();
     };
-    // A fixed popover would drift from its row, so a scroll of the list or a resize closes it.
-    const onMove = (event: Event) => {
-      if (!popoverRef.current?.contains(event.target as Node)) setOpen(false);
+    // A fixed popover would drift from its row, so a resize closes it, and so does a scroll of anything the row
+    // sits in. The scroll of another element (the open thread following a live message) does not move the row.
+    const onScroll = (event: Event) => {
+      if ((event.target as Node).contains(rootRef.current)) setOpen(false);
     };
+    const onResize = () => setOpen(false);
     document.addEventListener('mousedown', onPress);
     document.addEventListener('keydown', onEscape, true);
-    document.addEventListener('scroll', onMove, true);
-    window.addEventListener('resize', onMove);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
     return () => {
       document.removeEventListener('mousedown', onPress);
       document.removeEventListener('keydown', onEscape, true);
-      document.removeEventListener('scroll', onMove, true);
-      window.removeEventListener('resize', onMove);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
     };
   }, [open]);
 

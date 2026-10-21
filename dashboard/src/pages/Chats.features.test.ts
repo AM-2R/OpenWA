@@ -710,6 +710,23 @@ test("dismissing a dialog the room's menu opened, or the menu itself, returns fo
   assert.equal(focusedName(), 'More actions', 'focus fell to the page after Escape');
 });
 
+test('a row menu stays open while the open thread scrolls, which does not move its row', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-messages'), 'the thread did not open'));
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  assert.ok(container.querySelector('.chat-row-menu-popover'), 'the menu did not open');
+
+  // A message that arrives makes the open thread scroll to its end.
+  fireEvent.scroll(container.querySelector('.room-messages') as HTMLElement);
+  assert.ok(container.querySelector('.chat-row-menu-popover'), 'a scroll of the thread closed the menu');
+
+  // The list the row sits in does move it.
+  fireEvent.scroll(container.querySelector('.chats-list') as HTMLElement);
+  assert.equal(container.querySelector('.chat-row-menu-popover'), null, 'the menu stayed open, adrift from its row');
+});
+
 test("a row's menu is placed by physical edges, so a right-to-left page keeps the position it computed", async () => {
   const { screen, fireEvent } = rtl;
   const { container } = renderPage();
