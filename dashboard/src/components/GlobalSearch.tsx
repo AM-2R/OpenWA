@@ -196,7 +196,8 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
                 }}
               >
                 <div className="global-search-hit-meta">
-                  {h.chatId} · {new Date(h.timestamp * 1000).toLocaleString()}
+                  {/* bdi: the id and the time read left to right even inside right-to-left text. */}
+                  <bdi>{h.chatId}</bdi> · <bdi>{new Date(h.timestamp * 1000).toLocaleString()}</bdi>
                 </div>
                 <div className="global-search-hit-snippet">
                   {renderHighlightedSnippet(h.snippet).map((seg, i) =>
