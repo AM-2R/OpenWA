@@ -43,6 +43,19 @@ describe('WwebjsContacts.getBlockedContacts', () => {
     await expect(contacts.getBlockedContacts()).resolves.toEqual(['628333@c.us']);
   });
 
+  it('lists an id once when the blocklist holds a contact under both its LID and its phone', async () => {
+    const { contacts, client } = makeContacts();
+    // whatsapp-web.js answers a LID entry under the contact's phone id (a plain string), so the two
+    // entries read as the same id.
+    client.getBlockedContacts.mockResolvedValue([
+      { id: '628111@c.us' },
+      { id: { _serialized: '628222@c.us' } },
+      { id: { _serialized: '628111@c.us' } },
+    ]);
+
+    await expect(contacts.getBlockedContacts()).resolves.toEqual(['628111@c.us', '628222@c.us']);
+  });
+
   it('resolves [] for an empty blocklist', async () => {
     const { contacts, client } = makeContacts();
     client.getBlockedContacts.mockResolvedValue([]);

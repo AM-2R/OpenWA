@@ -27,6 +27,67 @@ export function filterChats<T extends ChatLike>(chats: T[], query: string): T[] 
   return chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && matches(query, c.name, c.id));
 }
 
+/** The quick filters above the Chats tab list, applied after the search box. */
+export const CHAT_LIST_FILTERS = ['all', 'unread', 'direct', 'groups', 'unknown'] as const;
+export type ChatListFilter = (typeof CHAT_LIST_FILTERS)[number];
+
+/**
+ * The key a contact and a chat share in the address book. Engines spell a phone-based user id as
+ * `…@c.us` (whatsapp-web.js) or `…@s.whatsapp.net` (Baileys), so both reduce to the phone digits; any
+ * other id (a `@lid` privacy id among them) keeps its full form, so its digits never pass for a phone.
+ */
+export function contactKey(id: string): string {
+  const [user, domain] = id.split('@');
+  const phone = user.split(':')[0];
+  return (domain === 'c.us' || domain === 's.whatsapp.net') && /^\d+$/.test(phone) ? phone : id;
+}
+
+/** The keys of the contacts the address book holds as saved (`isMyContact`); undefined until loaded. */
+export function savedContactKeySet(
+  contacts: Array<{ id: string; isMyContact: boolean }> | undefined,
+): ReadonlySet<string> | undefined {
+  return contacts && new Set(contacts.filter(c => c.isMyContact).map(c => contactKey(c.id)));
+}
+
+/**
+ * A 1:1 chat whose contact the address book does not hold as saved. Decided from the address book, not
+ * from the chat's name: Baileys names an unsaved contact by its bare push name (`Bob`), with no marker.
+ * Until the address book has loaded no chat counts as unsaved, rather than all of them.
+ */
+export function isUnsavedContact(chat: ChatLike, savedKeys: ReadonlySet<string> | undefined): boolean {
+  if (chat.kind !== 'individual' || !savedKeys) return false;
+  return !savedKeys.has(contactKey(chat.id));
+}
+
+/**
+ * The phone-based contact id the address book can store a 1:1 chat's contact under: the chat id itself
+ * when it is one, otherwise null. The gateway refuses a `@lid` id for the address book, and its digits are
+ * no phone number.
+ */
+export function phoneContactId(chatId: string): string | null {
+  return /^\d+@(c\.us|s\.whatsapp\.net)$/.test(chatId) ? chatId : null;
+}
+
+/** A negative unread count is a chat marked unread (Baileys reports -1), which the Unread filter keeps. */
+export function applyChatListFilter<T extends ChatLike & { unreadCount: number }>(
+  chats: T[],
+  filter: ChatListFilter,
+  savedKeys?: ReadonlySet<string>,
+): T[] {
+  switch (filter) {
+    case 'unread':
+      return chats.filter(c => c.unreadCount !== 0);
+    case 'direct':
+      return chats.filter(c => c.kind === 'individual');
+    case 'groups':
+      return chats.filter(c => c.kind === 'group');
+    case 'unknown':
+      return chats.filter(c => isUnsavedContact(c, savedKeys));
+    default:
+      return chats;
+  }
+}
+
 /** Channels tab: same search box, matched on the channel's own name/id. */
 export function filterChannels<T extends { id: string; name: string }>(channels: T[], query: string): T[] {
   return channels.filter(ch => matches(query, ch.name, ch.id));
