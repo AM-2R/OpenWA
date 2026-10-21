@@ -5717,6 +5717,49 @@ describe('SessionService', () => {
       expect(messageRepository.insert).not.toHaveBeenCalled();
       expect(webhookService.dispatch).not.toHaveBeenCalled();
     });
+
+    // What an engine the session no longer owns reports must not reach the socket, the webhook or the stored
+    // status: it would read as the delivery state of whatever engine the session has now, or of none.
+    describe.each([
+      ['superseded by a newer engine', () => Promise.resolve(enginesOf().set('sess-uuid-1', { marker: 'B' }))],
+      ['retired by a stop', () => service.stop('sess-uuid-1')],
+    ])('after its engine was %s', (_how, retire) => {
+      it('ignores onMessageAck (no ack write, no socket event, no webhook, no hook)', async () => {
+        const callbacks = await startAndCapture();
+        await retire();
+        (messageRepository.update as jest.Mock).mockClear();
+        (eventsGateway.emitMessageAck as jest.Mock).mockClear();
+        (webhookService.dispatch as jest.Mock).mockClear();
+        (hookManager.execute as jest.Mock).mockClear();
+
+        callbacks.onMessageAck?.('wa-out-1', 'delivered');
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessageAck).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+        expect(hookManager.execute).not.toHaveBeenCalled();
+      });
+
+      it('ignores onMessageReceipt (no socket event, no webhook)', async () => {
+        const callbacks = await startAndCapture();
+        await retire();
+        (eventsGateway.emitMessageReceipt as jest.Mock).mockClear();
+        (webhookService.dispatch as jest.Mock).mockClear();
+
+        callbacks.onMessageReceipt?.({
+          messageId: 'wa-out-1',
+          chatId: '120363000000000001@g.us',
+          participant: '628222@c.us',
+          status: 'read',
+          timestamp: 1700000000,
+        });
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(eventsGateway.emitMessageReceipt).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // ── stuck-auth recovery budget (hoisted to session lifecycle) ─────
