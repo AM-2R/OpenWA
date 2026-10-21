@@ -419,7 +419,8 @@
   color: var(--error-text);
 }
 
-@media (max-width: 1280px) {
+/* Three columns need 1286px of viewport with the sidebar open. */
+@media (max-width: 1290px) {
   .templates-page .templates-workspace {
     grid-template-columns: 280px minmax(380px, 1fr);
   }
@@ -441,16 +442,8 @@
   }
 }
 
-@media (max-width: 900px) {
-  .templates-page {
-    padding: 1rem;
-  }
-
-  .templates-page .templates-session-select {
-    min-width: 0;
-    width: 100%;
-  }
-
+/* Stacked below 1000px: two columns need 984px of viewport with the sidebar open. */
+@media (max-width: 1000px) {
   .templates-page .templates-workspace {
     display: flex;
     flex-direction: column;
@@ -471,6 +464,17 @@
 
   .templates-page .template-preview {
     display: flex;
+  }
+}
+
+@media (max-width: 900px) {
+  .templates-page {
+    padding: 1rem;
+  }
+
+  .templates-page .templates-session-select {
+    min-width: 0;
+    width: 100%;
   }
 }
 
