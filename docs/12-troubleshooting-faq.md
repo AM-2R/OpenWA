@@ -1083,7 +1083,7 @@ DATABASE_IDLE_TIMEOUT_MS=30000        # idle client eviction (default 30000)
 DATABASE_CONNECTION_TIMEOUT_MS=10000  # wait for a free connection (default 10000)
 DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000)
 
-# Redis caching (per-key TTLs are fixed in code — there is no cache TTL env var)
+# Redis (the cache connection only answers the infra status probe — there is no cache TTL env var)
 # REDIS_ENABLED=true
 # REDIS_HOST=localhost
 # REDIS_PORT=6379
