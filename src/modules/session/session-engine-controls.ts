@@ -435,14 +435,7 @@ export class SessionEngineControls {
         retired = false;
       }
       if (retired) {
-        const resurrected = this.engines.get(id);
-        if (resurrected) {
-          await this.fences.destroyWithEscalation(id, resurrected);
-          this.engines.deleteIfLive(id, resurrected);
-        }
-        // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created
-        // them — purge again so the window leaves no credential residue behind (no-op for a stop()).
-        await this.host.purgeAuthDirsIfDeleted(id);
+        await this.reapRetiredEngine(id);
       } else if (this.host.isClosed()) {
         // Shutdown destroys every engine it finds, this one included, and skips initialize() for an
         // engine it caught mid-start. Either way the session is not kept, so this is no success. A
@@ -455,12 +448,27 @@ export class SessionEngineControls {
         // The engine is registered and running. A failed read (a missing row stays NotFound) must not
         // report a start that worked as failed: the retry a transient database error buys would answer
         // "already started". The row read on entry stands in for the one that failed.
+        // A row found gone only now is the retirement the failed read above could not report: the engine
+        // goes with it.
+        if (!retired && error instanceof NotFoundException) await this.reapRetiredEngine(id);
         if (retired || error instanceof NotFoundException) throw error;
         return session;
       }
     } finally {
       this.initializingSessions.delete(id);
     }
+  }
+
+  /** Tears down the engine a start registered for a session that was stopped or deleted meanwhile. */
+  private async reapRetiredEngine(id: string): Promise<void> {
+    const resurrected = this.engines.get(id);
+    if (resurrected) {
+      await this.fences.destroyWithEscalation(id, resurrected);
+      this.engines.deleteIfLive(id, resurrected);
+    }
+    // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created them, so
+    // purge again: the window then leaves no credential residue behind (no-op for a stop()).
+    await this.host.purgeAuthDirsIfDeleted(id);
   }
 
   async stop(id: string, hooks: StopHooks = {}): Promise<Session> {

@@ -8044,6 +8044,25 @@ describe('SessionService', () => {
       expect(mockEngine.forceDestroy).not.toHaveBeenCalled();
     });
 
+    // A failed retirement read assumes the session is still there, so the read that follows has the last word:
+    // a row found gone then leaves the engine this start registered with no session to serve.
+    it('tears the engine down when the retirement read failed and the row turns out to be gone', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (repository.findOne as jest.Mock)
+          .mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'))
+          .mockResolvedValue(null);
+        return Promise.resolve();
+      });
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow(NotFoundException);
+
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(service.getEngine('sess-uuid-1')).toBeUndefined();
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('sess-uuid-1');
+    });
+
     it('escalates to forceDestroy() when the retired engine fails its graceful destroy()', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
