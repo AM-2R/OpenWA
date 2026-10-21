@@ -3305,3 +3305,84 @@ test('a chat opened in another session starts at its newest message, not at the 
     twoSessions = false;
   }
 });
+
+// A live message in the open chat follows a reader who is at the bottom, whoever sent it: the contact, or the
+// account itself (the phone, an API client, an automation).
+for (const fromMe of [false, true]) {
+  test(`a live message ${fromMe ? 'from the account itself' : 'from the contact'} scrolls a reader at the bottom to it`, async () => {
+    const { within, waitFor } = rtl;
+    const restoreGeometry = installRoomGeometry();
+    try {
+      const { container } = renderChats();
+      const thread = await openPagedChat(container);
+      const newest = (): number => thread.scrollHeight - thread.clientHeight;
+      assert.equal(thread.scrollTop, newest(), 'a first visit did not open at the end');
+
+      receiveEvent(fromMe ? 'message.sent' : 'message.received', {
+        id: 'wamid.live.follow',
+        chatId: CHAT_2.id,
+        from: fromMe ? 'me' : CHAT_2.id,
+        to: fromMe ? CHAT_2.id : 'me',
+        body: 'live follow',
+        type: 'text',
+        fromMe,
+        timestamp: 1_700_001_500,
+      });
+      await within(thread).findByText('live follow');
+      await waitFor(() => assert.equal(thread.scrollTop, newest(), 'the new message was left below the fold'));
+    } finally {
+      restoreGeometry();
+    }
+  });
+}
+
+test('a live message from the account itself leaves a reader of older messages where they are', async () => {
+  const { fireEvent, within } = rtl;
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+    thread.scrollTop = 900;
+    fireEvent.scroll(thread);
+
+    receiveEvent('message.sent', {
+      id: 'wamid.live.reading',
+      chatId: CHAT_2.id,
+      from: 'me',
+      to: CHAT_2.id,
+      body: 'live while reading',
+      type: 'text',
+      fromMe: true,
+      timestamp: 1_700_001_500,
+    });
+    await within(thread).findByText('live while reading');
+    await flush();
+    assert.equal(thread.scrollTop, 900);
+  } finally {
+    restoreGeometry();
+  }
+});
+
+test('a message sent from the page scrolls the thread to it, whatever the reader was reading', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+    thread.scrollTop = 900;
+    fireEvent.scroll(thread);
+
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'sent from the page' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await within(thread).findByText('sent from the page');
+    await waitFor(() =>
+      assert.equal(
+        thread.scrollTop,
+        thread.scrollHeight - thread.clientHeight,
+        'the thread stayed where the reader was',
+      ),
+    );
+  } finally {
+    restoreGeometry();
+  }
+});

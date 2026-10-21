@@ -759,10 +759,12 @@ export function Chats() {
       // up to date so re-opening them shows fresh data without a refetch.
       appendMessage(event.sessionId, newMsg.chatId, mappedMessage);
 
-      // If the message belongs to the currently visible chat, mark-as-read and run the scroll heuristic.
+      // If the message belongs to the currently visible chat, mark-as-read and run the scroll heuristic. Own-account
+      // messages (the phone, an API client, an automation) follow a reader at the bottom like any other; a send from
+      // this page scrolled through the composer, and its echo finds the reader there already.
       if (activeChat && newMsg.chatId === activeChat.id) {
         markChatRead(activeChat.id);
-        if (!newMsg.fromMe) onMessageAppended('incoming');
+        onMessageAppended('incoming');
       }
 
       // Update sidebar chat list. Whether the chat is missing is decided against the list on screen,
