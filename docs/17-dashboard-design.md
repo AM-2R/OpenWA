@@ -79,6 +79,7 @@ flowchart TB
         HOME[Dashboard /]
         SESSIONS[Sessions /sessions]
         CHATS[Chats /chats]
+        NUMBERS[Number Checker /number-checker]
         WEBHOOKS[Webhooks /webhooks]
         TEMPLATES[Templates /templates]
         TESTER[Message Tester /message-tester]
@@ -114,6 +115,7 @@ mounted for any admin key.
                      block, leave group; clear and delete on whatsapp-web.js only) [operator];
                      group info dialog; new chat / new group [operator]; read-only channel feed
                      on whatsapp-web.js)
+/number-checker    → Number Checker (single and bulk check of whether numbers are on WhatsApp) [operator]
 /webhooks          → Webhooks (per-session webhook endpoints)
 /templates         → Message Templates
 /message-tester    → Message Tester (ad-hoc send-* + check-number)
