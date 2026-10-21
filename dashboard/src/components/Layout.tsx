@@ -71,6 +71,9 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  // Collapsing is a desktop preference: the phone drawer has no collapse control, so it never renders collapsed,
+  // and the flag stays as it was for when the window widens again.
+  const collapsed = isCollapsed && !isMobile;
   // Show the build-time version immediately, then replace it with the live running version from the
   // backend so a stale-built bundle can't display the wrong number. Falls back silently on error.
   const [version, setVersion] = useState(__APP_VERSION__);
@@ -183,11 +186,11 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
       {isMobile && isMobileOpen && <div className="sidebar-overlay" onClick={() => setIsMobileOpen(false)} />}
 
       <aside
-        className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        className={`sidebar ${collapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
       >
         <div className="sidebar-header">
           <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
-          {!isCollapsed && (
+          {!collapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
               <span className="brand-version">v{version}</span>
@@ -231,10 +234,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 end={to === '/'}
                 onClick={handleNavClick}
-                title={isCollapsed ? label : undefined}
+                title={collapsed ? label : undefined}
               >
                 <Icon size={20} />
-                {!isCollapsed && <span>{label}</span>}
+                {!collapsed && <span>{label}</span>}
               </NavLink>
             );
           })}
@@ -251,7 +254,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               aria-expanded={isLanguageMenuOpen}
             >
               <Languages size={18} />
-              {!isCollapsed && <span>{languageLabel}</span>}
+              {!collapsed && <span>{languageLabel}</span>}
             </button>
             {isLanguageMenuOpen && (
               <div className="language-menu-list" role="menu" aria-label={t('common.language')}>
@@ -279,17 +282,17 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               <span className="appearance-button-cue" aria-hidden="true">
                 <ThemeIcon size={16} />
               </span>
-              {!isCollapsed && <span>{themeLabel}</span>}
+              {!collapsed && <span>{themeLabel}</span>}
             </button>
           </div>
-          <button className="logout-btn" onClick={onLogout} title={isCollapsed ? t('common.logout') : undefined}>
+          <button className="logout-btn" onClick={onLogout} title={collapsed ? t('common.logout') : undefined}>
             <LogOut size={20} />
-            {!isCollapsed && <span>{t('common.logout')}</span>}
+            {!collapsed && <span>{t('common.logout')}</span>}
           </button>
         </div>
       </aside>
 
-      <main className={`main-content ${isCollapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
+      <main className={`main-content ${collapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
         <Outlet />
       </main>
     </div>

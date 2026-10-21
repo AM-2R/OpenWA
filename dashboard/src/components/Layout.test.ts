@@ -84,6 +84,35 @@ test('the theme button can return to following the system', () => {
   assert.equal(localStorage.getItem('openwa_theme'), 'system');
 });
 
+// Collapsing is a desktop preference: the phone drawer has no collapse control, so a flag left over from a wider
+// window must not strip its labels, and the window widening again must find the preference where it was left.
+test('a collapsed sidebar shows its labels in the phone drawer and collapses again on desktop', () => {
+  const width = window.innerWidth;
+  try {
+    const { container } = renderLayout();
+    const sidebar = container.querySelector('aside.sidebar')!;
+    rtl.fireEvent.click(container.querySelector('.collapse-toggle')!);
+    assert.ok(sidebar.classList.contains('collapsed'));
+    assert.equal(container.querySelectorAll('.nav-item span').length, 0, 'the collapsed desktop sidebar shows labels');
+
+    window.innerWidth = 500;
+    rtl.fireEvent(window, new window.Event('resize'));
+    assert.ok(sidebar.classList.contains('mobile'));
+    assert.ok(!sidebar.classList.contains('collapsed'), 'the phone drawer kept the collapsed class');
+    const labels = Array.from(container.querySelectorAll('.nav-item')).map(item => item.textContent);
+    assert.ok(labels.length > 0 && labels.every(label => label), `the drawer entries read ${JSON.stringify(labels)}`);
+    assert.ok(container.querySelector('.sidebar-brand'), 'the drawer has no brand');
+    assert.equal(container.querySelector('.logout-btn')!.textContent, 'Logout');
+    assert.ok(!container.querySelector('main')!.classList.contains('expanded'));
+
+    window.innerWidth = width;
+    rtl.fireEvent(window, new window.Event('resize'));
+    assert.ok(sidebar.classList.contains('collapsed'), 'the desktop preference was lost');
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
 // The key management, infrastructure and plugin routes refuse a key restricted to selected sessions, whatever
 // its role, and every refusal lands in the audit log as a failed attempt.
 test('an admin key scoped to sessions is not offered the pages that refuse it', async () => {
