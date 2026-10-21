@@ -18,10 +18,6 @@ class FakeRedis {
   constructor(public readonly opts?: unknown) {
     redisInstances.push(this);
   }
-  // Like ioredis, a duplicate inherits the options and takes overrides on top.
-  duplicate(override?: object): FakeRedis {
-    return new FakeRedis({ ...(this.opts as object), ...override });
-  }
   on(event: string, handler: (err: Error) => void): this {
     this.handlers[event] = handler;
     return this;
@@ -170,7 +166,7 @@ describe('RedisIoAdapter', () => {
       try {
         const adapter = new RedisIoAdapter({} as never);
         adapter.createIOServer(2785);
-        // pub + its duplicate = two clients, both given an error handler.
+        // pub and sub = two clients, both given an error handler.
         expect(redisInstances).toHaveLength(2);
         expect(redisInstances[0].handlers.error).toBeDefined();
         expect(redisInstances[1].handlers.error).toBeDefined();
