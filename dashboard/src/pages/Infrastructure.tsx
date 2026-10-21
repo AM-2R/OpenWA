@@ -320,6 +320,7 @@ export function Infrastructure() {
                       <input
                         id="infra-4"
                         type="password"
+                        autoComplete="new-password"
                         value={configForm.dbConfig.password}
                         onChange={e => configForm.updateDbConfig('password', e.target.value)}
                       />
@@ -597,6 +598,7 @@ export function Infrastructure() {
                       <input
                         id="infra-12"
                         type="password"
+                        autoComplete="new-password"
                         value={configForm.redisConfig.password}
                         onChange={e => configForm.updateRedisConfig('password', e.target.value)}
                         placeholder={t('infrastructure.redis.passwordOptional')}
@@ -801,6 +803,7 @@ export function Infrastructure() {
                         <input
                           id="infra-17"
                           type="password"
+                          autoComplete="new-password"
                           value={configForm.storageConfig.s3SecretKey}
                           onChange={e => configForm.updateStorageConfig('s3SecretKey', e.target.value)}
                         />

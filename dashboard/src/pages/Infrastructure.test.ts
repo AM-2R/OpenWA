@@ -746,6 +746,33 @@ test('an operator engine pick under a pin is deliberate and still saved', async 
   });
 });
 
+// The dashboard key is a password a browser may have saved for this origin. These fields hold other secrets
+// (an empty one means "keep the stored value"), so the browser must not fill them with it.
+test('the database, Redis and S3 secret fields are not offered saved passwords', async () => {
+  const { screen, waitFor } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      redis: { enabled: true, connected: true, host: 'redis.example', port: 6379, builtIn: false },
+      storage: { type: 's3', bucket: 'media', builtIn: false },
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      redis: { enabled: true, builtIn: false, host: 'redis.example', port: '6379', passwordSet: true },
+      storage: { ...SAVED_CONFIG.storage, type: 's3' },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  await waitFor(() => assert.equal(container.querySelectorAll('input[type="password"]').length, 3));
+  for (const field of container.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+    assert.equal(field.getAttribute('autocomplete'), 'new-password', field.id);
+  }
+});
+
 // ── Built-in containers the restart stops ────────────────────────────────────
 
 test('turning a running built-in Redis off asks the restart to stop its container', async () => {
