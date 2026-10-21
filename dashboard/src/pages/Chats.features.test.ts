@@ -163,7 +163,7 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse([SESSION, ...(listSecond ? [SECOND_SESSION] : [])]));
     }
     if (method === 'GET' && path.startsWith(`${base}/chats?`)) {
-      return Promise.resolve(
+      return gated('chats', () =>
         jsonResponse([
           { ...CHAT, ...aliceNow },
           ...(listGroup ? [GROUP] : []),
@@ -1445,6 +1445,116 @@ for (const kind of ['clear', 'delete'] as const) {
   });
 }
 
+// ── A chat list asked for before one of the page's own changes answers with the flags from before it, and must
+// not undo that change. ──
+
+const chatListReads = () =>
+  fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${SESSION.id}/chats?`)).length;
+
+const RELOAD_RACES: Array<{ title: string; act: () => Promise<void>; shows: () => void }> = [
+  {
+    title: 'an archive',
+    act: async () => pickRowAction('Alice', 'Archive chat'),
+    shows: () => assert.ok(!rtl.screen.queryByText('Alice'), 'the archived chat is back in the main list'),
+  },
+  {
+    title: 'a pin',
+    act: async () => pickRowAction('Alice', 'Pin chat'),
+    shows: () => assert.ok(rtl.screen.getByRole('img', { name: 'Pinned' }), 'the pinned chat lost its pin'),
+  },
+  {
+    title: 'a mute',
+    act: async () => {
+      pickRowAction('Alice', 'Mute notifications');
+      await confirmDialog('Mute notifications');
+    },
+    shows: () => assert.ok(rtl.screen.getByRole('img', { name: 'Muted' }), 'the muted chat lost its mute'),
+  },
+  {
+    title: 'a mark as unread',
+    act: async () => pickRowAction('Alice', 'Mark as unread'),
+    shows: () => assert.ok(rtl.screen.getByLabelText('Marked as unread'), 'the chat marked unread reads as read'),
+  },
+  {
+    title: 'a rename',
+    act: async () => {
+      await pickRowActionOnceLoaded('Alice', 'Rename contact');
+      const dialog = await rtl.screen.findByRole('dialog');
+      rtl.fireEvent.change(rtl.within(dialog).getByLabelText('First name'), { target: { value: 'Alicia' } });
+      rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+    },
+    shows: () => assert.ok(rtl.screen.getByText('Alicia'), 'the renamed chat has its old name back'),
+  },
+];
+
+for (const race of RELOAD_RACES) {
+  test(`a chat list asked for before ${race.title} does not undo it when it answers`, async () => {
+    const { screen, waitFor } = rtl;
+    renderPage();
+    await screen.findByText('Alice');
+    const release = hold('chats');
+    // An edit in a chat that was never opened asks for the list again, and the answer is held back.
+    receiveEvent('message.edited', {
+      messageId: 'wamid.edit.1',
+      chatId: CHAT.id,
+      body: 'edited',
+      timestamp: 1_700_001_000,
+    });
+    await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+
+    await race.act();
+    await waitFor(race.shows);
+    // The list was asked for before the change, so it still holds the flags from before it.
+    release();
+    await settle();
+    await settle();
+    race.shows();
+  });
+}
+
+test('a chat list asked for after a change is taken as it comes, so a later change elsewhere shows', async () => {
+  const { screen, waitFor } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  pickRowAction('Alice', 'Archive chat');
+  await waitFor(() => assert.ok(!screen.queryByText('Alice'), 'the chat was not archived'));
+
+  // The phone takes the chat out of the archive, and the next list is asked for after the change here.
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.2',
+    chatId: CHAT.id,
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+  await waitFor(() => assert.ok(screen.getByText('Alice'), 'the list asked for later did not bring the chat back'));
+});
+
+test('a message that reaches a chat after a change keeps its row when an earlier list answers', async () => {
+  const { screen, waitFor } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  const release = hold('chats');
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.3',
+    chatId: CHAT.id,
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+  pickRowAction('Alice', 'Mark as unread');
+  await screen.findByLabelText('Marked as unread');
+
+  // The first message into a chat marked unread counts as one, which the earlier list's flags must not undo.
+  receiveFromAlice('wamid.live.after', 'after the mark');
+  await screen.findByLabelText('1 unread message');
+  release();
+  await settle();
+  await settle();
+  assert.ok(screen.getByLabelText('1 unread message'), 'the earlier list put the old unread state over the frame');
+  assert.ok(screen.getByText('after the mark'), 'the earlier list rolled the preview back');
+});
+
 // ── What clearing and deleting a chat leave behind on the page. ──
 
 test('clearing a chat empties its preview and refreshes the thread that is open', async () => {
@@ -1916,28 +2026,29 @@ function setTabHidden(hidden: boolean): void {
   }
 }
 
-/** A message from Alice, delivered the way the gateway's socket delivers one. */
-function receiveFromAlice(id: string, body: string): void {
+/** A frame the gateway's socket delivers, as the page's realtime handlers receive it. */
+function receiveEvent(event: string, data: Record<string, unknown>): void {
   rtl.act(() =>
     lastSocket()?.receive('message', {
       type: 'event',
       timestamp: new Date(1_700_002_000_000).toISOString(),
-      payload: {
-        event: 'message.received',
-        sessionId: SESSION.id,
-        data: {
-          id,
-          chatId: CHAT.id,
-          from: CHAT.id,
-          to: 'me',
-          body,
-          type: 'text',
-          fromMe: false,
-          timestamp: 1_700_001_900,
-        },
-      },
+      payload: { event, sessionId: SESSION.id, data },
     }),
   );
+}
+
+/** A message from Alice, delivered the way the gateway's socket delivers one. */
+function receiveFromAlice(id: string, body: string): void {
+  receiveEvent('message.received', {
+    id,
+    chatId: CHAT.id,
+    from: CHAT.id,
+    to: 'me',
+    body,
+    type: 'text',
+    fromMe: false,
+    timestamp: 1_700_001_900,
+  });
 }
 
 test('a message that reaches the open chat while the tab is hidden is marked read once the tab is visible', async () => {

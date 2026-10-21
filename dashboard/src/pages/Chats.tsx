@@ -413,6 +413,14 @@ export function Chats() {
   // The newest request number out when a live frame last moved each chat's row. A send stamps its row
   // with the browser clock, so only this, not a newer timestamp, shows a row changed after a refetch left.
   const liveRowsRef = useRef(new Map<string, number>());
+  // The same stamp for the page's own changes to a row (a pin, an archive, a mute, a mark as unread, a rename),
+  // with what each changed: a refetch asked for before the change answers with the flags from before it, and
+  // keeps these over them. One that was asked for after the change already carries it, so it drops the entry.
+  const patchedRowsRef = useRef(new Map<string, { request: number; patch: Partial<Chat> }>());
+  const rememberPatch = useCallback((chatId: string, patch: Partial<Chat>) => {
+    const held = patchedRowsRef.current.get(chatId);
+    patchedRowsRef.current.set(chatId, { request: chatsRequestRef.current, patch: { ...held?.patch, ...patch } });
+  }, []);
   const loadChats = useCallback(
     async (
       sessionId: string,
@@ -440,6 +448,12 @@ export function Chats() {
         // A live frame can move a row past the snapshot a background refetch was built from while it is
         // out. That row is kept, or its preview and unread badge would roll back until the next message.
         const moved = (id: string) => (liveRowsRef.current.get(id) ?? 0) >= request;
+        // The page's own changes this snapshot predates. Read before the updater, which React may run later.
+        const patches = new Map<string, Partial<Chat>>();
+        for (const [id, entry] of patchedRowsRef.current) {
+          if (entry.request >= request) patches.set(id, entry.patch);
+          else patchedRowsRef.current.delete(id);
+        }
         const merge = background && listedSessionRef.current === sessionId;
         listedSessionRef.current = sessionId;
         setChats(prev => {
@@ -449,7 +463,10 @@ export function Chats() {
           return rows
             .map(c => {
               const row = live.get(c.id);
-              return row && moved(c.id) && (row.timestamp || 0) > (c.timestamp || 0) ? row : c;
+              // A row a live frame moved already carries the page's changes and what the frame added.
+              if (row && moved(c.id) && (row.timestamp || 0) > (c.timestamp || 0)) return row;
+              const patch = patches.get(c.id);
+              return patch ? { ...c, ...patch } : c;
             })
             .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         });
@@ -1245,11 +1262,15 @@ export function Chats() {
   // its result must not land on the list or the open chat of the session now selected.
   const stillOn = (sessionId: string) => sessionId === selectedSessionRef.current;
 
-  const renameChat = useCallback((sessionId: string, chatId: string, name: string) => {
-    if (sessionId !== selectedSessionRef.current) return;
-    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, name } : c)));
-    setActiveChat(prev => (prev?.id === chatId ? { ...prev, name } : prev));
-  }, []);
+  const renameChat = useCallback(
+    (sessionId: string, chatId: string, name: string) => {
+      if (sessionId !== selectedSessionRef.current) return;
+      rememberPatch(chatId, { name });
+      setChats(prev => prev.map(c => (c.id === chatId ? { ...c, name } : c)));
+      setActiveChat(prev => (prev?.id === chatId ? { ...prev, name } : prev));
+    },
+    [rememberPatch],
+  );
 
   // Several chat routes answer HTTP 200 with `{ success: false }` when the engine declined to act (WhatsApp
   // keeps at most three chats pinned; Baileys cannot clear or delete a chat it knows no last message of),
@@ -1262,6 +1283,7 @@ export function Chats() {
 
   const patchChat = (sessionId: string, chatId: string, patch: Partial<Chat>) => {
     if (!stillOn(sessionId)) return;
+    rememberPatch(chatId, patch);
     setChats(prev => prev.map(c => (c.id === chatId ? { ...c, ...patch } : c)));
     setActiveChat(prev => (prev?.id === chatId ? { ...prev, ...patch } : prev));
   };
