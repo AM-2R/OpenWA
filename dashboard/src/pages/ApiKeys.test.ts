@@ -205,6 +205,22 @@ test('the create modal stays open until the request settles and then shows the s
   await screen.findByText('owa_k1_new');
 });
 
+// The secret is shown once: closing the dialog that shows it drops it, and the next Create opens the form.
+test('closing the dialog that shows a new key drops the secret, and Create opens the form again', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.click(create);
+  await screen.findByText('owa_k1_new');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  assert.equal(screen.queryByRole('dialog') === null, true, 'the dialog stayed open');
+  fireEvent.click(screen.getByRole('button', { name: 'Create API Key' }));
+  assert.equal(screen.queryByText('owa_k1_new') === null, true, 'the previous secret is shown again');
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Name').value, '');
+  assert.ok(screen.getByRole('button', { name: 'Create' }));
+});
+
 // The gateway counts an emoji, with or without its presentation selector, as one character.
 test('a name of two emoji keeps Create disabled', async () => {
   const { screen, fireEvent } = rtl;
