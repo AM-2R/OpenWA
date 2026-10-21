@@ -97,6 +97,7 @@ function resetFetchCalls(): void {
   sessionProxy = { enabled: false, proxyType: null, proxyHost: null, hasCredentials: false };
   proxyGetFails = false;
   sessionListFailures = 0;
+  sessionListEmpty = false;
   distinctFailureMessages = false;
   startFailure = null;
   startGate = null;
@@ -127,6 +128,8 @@ let configPatchFails = false;
 let proxyGetFails = false;
 // How many of the next GET /api/sessions reads fail, as they do while the gateway is down.
 let sessionListFailures = 0;
+// Whether GET /api/sessions answers with no sessions at all.
+let sessionListEmpty = false;
 // Whether each failed read carries its own message, as a 502, a 504 and a dropped connection do.
 let distinctFailureMessages = false;
 // When set, POST .../start answers with this error, first applying `leaves` to the session's row: the
@@ -190,6 +193,7 @@ function installFetchStub(): void {
           : 'gateway unavailable';
         return Promise.resolve(jsonResponse({ message }, 503));
       }
+      if (sessionListEmpty) return Promise.resolve(jsonResponse([]));
       if (listGate) {
         const until = listGate;
         listGate = null;
@@ -488,6 +492,37 @@ test('a refused and then successful create leave a failed list read in the banne
   fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
   await screen.findByText('retry-bot');
   assert.ok(screen.queryByText('gateway unavailable'), 'the create cleared the failed read banner');
+});
+
+// A failed read says nothing about how many sessions there are: the banner is the only message, and the
+// page must not tell the operator there are none and invite them to create one.
+test('a failed first list read shows the error, not the empty state', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  sessionListFailures = 1;
+  // No connect, so the recovery effect does not re-read the list behind the test's back.
+  holdConnect();
+  renderSessions();
+
+  await screen.findByText('gateway unavailable');
+  assert.equal(screen.queryByText('No sessions found') === null, true, 'a failed read claimed there are no sessions');
+});
+
+test('an empty list shows the empty state, and a refused create does not take it away', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  sessionListEmpty = true;
+  createFailure = { status: 409, message: 'Session name already in use' };
+  renderSessions();
+
+  await screen.findByText('No sessions found');
+  fireEvent.click(screen.getByRole('button', { name: 'New Session' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByPlaceholderText('e.g., marketing-bot'), { target: { value: 'retry-bot' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+  await screen.findAllByText('Session name already in use');
+
+  assert.equal(screen.queryByText('No sessions found') === null, false, 'the refused create hid the empty state');
 });
 
 test('Enter in the name field follows the same gate as the Create button', async () => {
