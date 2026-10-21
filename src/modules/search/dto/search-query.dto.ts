@@ -37,7 +37,7 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({
     description:
-      "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+      "Restrict to a single chat id. With the built-in search provider, a phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it); a plugin provider receives the id as sent.",
   })
   @IsOptional()
   @ToStrictString()
@@ -46,7 +46,7 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({
     description:
-      "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+      "Sender filter. With the built-in search provider, matches `from` or a group message's `author`, and a phone also matches any lid that resolves to it; a plugin provider receives the id as sent.",
   })
   @IsOptional()
   @ToStrictString()
