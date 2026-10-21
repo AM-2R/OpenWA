@@ -1,13 +1,36 @@
+import 'reflect-metadata';
 import { DECORATORS } from '@nestjs/swagger';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { MuteChatDto } from './mute-chat.dto';
 
 describe('MuteChatDto published schema', () => {
-  // @nestjs/swagger derives nothing from @IsInt/@Min, so the decorator has to state both.
-  it('publishes muteUntil as a nullable integer of at least 1', () => {
+  // @nestjs/swagger derives nothing from @IsInt/@Min/@Max, so the decorator has to state all of them.
+  it('publishes muteUntil as a nullable integer between 1 and the last JavaScript date', () => {
     expect(Reflect.getMetadata(DECORATORS.API_MODEL_PROPERTIES, MuteChatDto.prototype, 'muteUntil')).toMatchObject({
       type: 'integer',
       nullable: true,
       minimum: 1,
+      maximum: 8_640_000_000_000_000,
     });
+  });
+});
+
+// whatsapp-web.js converts the value through Date, which is NaN past 8.64e15 and so became a mute with no
+// end, and Baileys writes it into an int64 that wraps past 2^63 (1e300 encodes as 0). Both engines take every
+// instant up to that bound exactly, and the dashboard's "always" and the documented far-future example sit
+// far below it.
+describe('MuteChatDto muteUntil bound', () => {
+  const muteUntilConstraints = async (muteUntil: unknown): Promise<string[]> => {
+    const errors = await validate(plainToInstance(MuteChatDto, { chatId: '1234567890-123@g.us', muteUntil }));
+    return errors.filter(e => e.property === 'muteUntil').flatMap(e => Object.keys(e.constraints ?? {}));
+  };
+
+  it.each([null, 1, 1_800_000_000_000, Date.UTC(2100, 0, 1), 8_640_000_000_000_000])('accepts %s', async value => {
+    expect(await muteUntilConstraints(value)).toEqual([]);
+  });
+
+  it.each([8_640_000_000_000_001, Number.MAX_SAFE_INTEGER, 1e16, 1e300])('refuses %s', async value => {
+    expect(await muteUntilConstraints(value)).toEqual(['max']);
   });
 });

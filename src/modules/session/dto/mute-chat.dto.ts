@@ -1,6 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsString, Matches, Min, ValidateIf, MaxLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsString, Matches, Max, Min, ValidateIf, MaxLength } from 'class-validator';
 import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
+
+/**
+ * The last instant a JavaScript Date can hold. whatsapp-web.js converts `muteUntil` through Date, which is
+ * NaN past it and then becomes a mute with no end, and Baileys writes the number into an int64 that wraps
+ * past 2^63 (1e300 encodes as 0). Both take every instant up to this bound exactly.
+ */
+export const MUTE_UNTIL_MAX = 8_640_000_000_000_000;
 
 export class MuteChatDto {
   @ApiProperty({
@@ -22,18 +29,21 @@ export class MuteChatDto {
     description:
       'Absolute epoch-MILLISECONDS timestamp at which the mute expires, or `null` to unmute now. ' +
       'Required — omitting it is rejected rather than guessed, because the two plausible readings ' +
-      '(unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp. ' +
+      '(unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp, no later ' +
+      'than 8640000000000000 (the last instant a JavaScript date holds). ' +
       'Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires ' +
       'immediately while the request still answers 200.',
     example: 1800000000000,
     type: 'integer',
     nullable: true,
     minimum: 1,
+    maximum: MUTE_UNTIL_MAX,
   })
   // `null` is a real instruction (unmute), so it skips the numeric checks rather than failing them.
   // A missing field is NOT null, so it still falls through to @IsInt and is rejected with a 400.
   @ValidateIf((o: MuteChatDto) => o.muteUntil !== null)
   @IsInt()
   @Min(1)
+  @Max(MUTE_UNTIL_MAX)
   muteUntil!: number | null;
 }
