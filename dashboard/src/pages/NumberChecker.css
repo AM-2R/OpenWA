@@ -421,7 +421,7 @@
 }
 
 .number-checker .nc-history-table th {
-  text-align: left;
+  text-align: start;
   padding: 0.75rem 1rem;
   background: var(--bg-light);
   color: var(--text-secondary);
