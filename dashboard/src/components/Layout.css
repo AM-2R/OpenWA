@@ -249,6 +249,10 @@
   border-radius: var(--radius);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
   z-index: 120;
+  /* The menu grows upward from the footer, so it may be as tall as the window less the footer (up to 186px in
+     Arabic) and a margin. */
+  max-height: calc(100vh - 13rem);
+  overflow-y: auto;
 }
 
 .language-menu-item {
@@ -282,6 +286,7 @@
   right: auto;
   left: calc(100% + 0.5rem);
   bottom: 0;
+  max-height: calc(100vh - 9rem);
 }
 
 .logout-btn {

@@ -82,6 +82,19 @@ test('the mobile sidebar casts its shadow only while it is open', () => {
   assert.match(decl(open[0].body, 'box-shadow') ?? '', /^2px /);
 });
 
+// The language menu opens upward from the sidebar footer with all 15 languages in it, 559px tall. With no bound its
+// first entries (English included) ended above the top edge of any window shorter than about 720px, and the sidebar
+// is fixed, so nothing scrolled them back into view. The footer and the menu sit lower in the collapsed sidebar.
+test('the language menu is bounded by the window and scrolls', () => {
+  const menu = find('.language-menu-list').find(r => !r.media);
+  assert.ok(menu, 'no base .language-menu-list rule');
+  assert.equal(decl(menu.body, 'overflow-y'), 'auto');
+  assert.equal(decl(menu.body, 'max-height'), 'calc(100vh - 13rem)');
+  const collapsed = find('.sidebar.collapsed .language-menu-list').find(r => !r.media);
+  assert.ok(collapsed, 'no collapsed .language-menu-list rule');
+  assert.equal(decl(collapsed.body, 'max-height'), 'calc(100vh - 9rem)');
+});
+
 // The Plugins page pins its status rail with position: sticky. overflow-x: hidden makes .main-content a scroll
 // container (overflow-y computes to auto), the nearest one a sticky box sticks to, and that one never scrolls, so
 // the rail scrolled away with the page. clip hides the overflow without that.
