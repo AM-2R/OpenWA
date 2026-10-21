@@ -173,6 +173,12 @@ export class SessionEngineControls {
   private readonly reconnectStates: Map<string, ReconnectState>;
   private readonly stuckAuthRecoveryUsed: Set<string>;
   private readonly initializingSessions: Set<string>;
+  /**
+   * Deletes in flight per id, counted so that two overlapping deletes of one id do not end each other's hold.
+   * The stop mark of a delete cannot refuse a start for as long as the delete runs: start() takes a mark that
+   * was already set when it began for a stale one and clears it.
+   */
+  private readonly deleting = new Map<string, number>();
 
   constructor(private readonly host: SessionEngineControlsHost) {
     this.sessionRepository = host.sessionRepository;
@@ -191,6 +197,11 @@ export class SessionEngineControls {
     this.reconnectStates = host.reconnectStates;
     this.stuckAuthRecoveryUsed = host.stuckAuthRecoveryUsed;
     this.initializingSessions = host.initializingSessions;
+  }
+
+  /** True while a delete of the session runs, from its engine teardown until its rows are gone or it failed. */
+  isDeleting(id: string): boolean {
+    return this.deleting.has(id);
   }
 
   /** findOne-or-404 with the runtime-state projection, mirroring SessionService.findOne. */
@@ -281,6 +292,13 @@ export class SessionEngineControls {
       // initializingSessions reservation added synchronously at start() entry: its finally removes it
       // again, so a refused start does not leave a false "already starting" mark behind (briefly held).
       await this.fences.awaitPendingTeardown(session.name);
+
+      // A delete still running outranks every start, however long it has run: the mark it set is not a
+      // stale one, and clearing it below would let an engine start under the delete that is removing the
+      // session (the engine would outlive the row). Checked here, with no await before the clear.
+      if (this.deleting.has(id)) {
+        throw new SessionStoppedException(`Session ${id} is being deleted`);
+      }
 
       // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark, but
       // yield to one set after this start began, leaving it in place.
@@ -711,6 +729,7 @@ export class SessionEngineControls {
     // rejected 409 from fence #2 leaves them intact (the session still exists).
     let parentDeleted = false;
     const writes = closeSessionWrites(this.host.dataSource(), id);
+    this.deleting.set(id, (this.deleting.get(id) ?? 0) + 1);
 
     try {
       // Stop engine if running — time-bounded + isolated so a stuck Chromium can't wedge the delete;
@@ -829,6 +848,9 @@ export class SessionEngineControls {
       throw error;
     } finally {
       writes.release();
+      const running = (this.deleting.get(id) ?? 1) - 1;
+      if (running > 0) this.deleting.set(id, running);
+      else this.deleting.delete(id);
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
       // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS
       // delete added — it does NOT touch reconnect timer / engine / last status / error / recovery

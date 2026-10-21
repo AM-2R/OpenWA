@@ -76,6 +76,7 @@ const flush = async (): Promise<void> => {
 
 interface Internals {
   engines: EngineRegistry;
+  stoppingSessions: Set<string>;
   reconnectStates: Map<string, ReconnectState>;
   logger: { warn: (...args: unknown[]) => void };
   executeReconnect(id: string, session: Session, state: ReconnectState): Promise<void>;
@@ -91,9 +92,11 @@ describe('SessionEngineLifecycle races', () => {
   let engineFactory: { create: jest.Mock; purgeSessionData: jest.Mock };
   let webhookService: { dispatch: jest.Mock };
   let config: Record<string, unknown>;
+  let dataSource: Record<string, unknown>;
 
   beforeEach(async () => {
     config = {};
+    dataSource = {};
     repository = {
       findOne: jest.fn().mockResolvedValue(session()),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -112,7 +115,7 @@ describe('SessionEngineLifecycle races', () => {
         PresenceStore,
         { provide: getRepositoryToken(Session, 'data'), useValue: repository },
         { provide: getRepositoryToken(Message, 'data'), useValue: { find: jest.fn().mockResolvedValue([]) } },
-        { provide: getDataSourceToken('data'), useValue: {} },
+        { provide: getDataSourceToken('data'), useValue: dataSource },
         { provide: EngineFactory, useValue: engineFactory },
         EngineRegistry,
         SessionLidResolver,
@@ -219,6 +222,127 @@ describe('SessionEngineLifecycle races', () => {
 
       expect(await outcome).toBeInstanceOf(SessionStoppedException);
       expect(engineFactory.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // A delete removes the rows of a session with a long history in many batches, long after its engine is gone.
+  // The stop mark it set cannot refuse a start for that long: start() takes a mark that was already there when
+  // it began for a stale one and clears it, which for the mark of a delete left an engine running on the
+  // deleted session.
+  describe('start against a delete in flight', () => {
+    type Gate = { promise: Promise<unknown[]>; resolve: (rows: unknown[]) => void };
+    let gates: Gate[];
+    let transaction: jest.Mock;
+
+    // The next delete to look up rows waits here, which is where a delete spends its time on a long history.
+    const hold = (): Gate => {
+      const gate = deferred<unknown[]>();
+      gates.push(gate);
+      return gate;
+    };
+
+    // What the delete ended with: nothing, or its error.
+    const settle = (deleting: Promise<void>): Promise<unknown> =>
+      deleting.then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+
+    // Starts a delete and leaves it waiting on its first batch, after it evicted the engine of a running session.
+    const deleteInBatchPhase = async (): Promise<{ gate: Gate; settled: Promise<unknown> }> => {
+      await lifecycle.start(ID);
+      const gate = hold();
+      const settled = settle(lifecycle.delete(ID));
+      await flush();
+      expect(internals.engines.has(ID)).toBe(false);
+      return { gate, settled };
+    };
+
+    beforeEach(() => {
+      gates = [];
+      const rows = { find: jest.fn(() => gates.shift()?.promise ?? Promise.resolve([])), delete: jest.fn() };
+      const manager = { delete: jest.fn().mockResolvedValue({ affected: 0 }), remove: jest.fn() };
+      transaction = jest.fn((work: (m: unknown) => Promise<void>) => work(manager));
+      Object.assign(dataSource, { getRepository: jest.fn(() => rows), transaction });
+    });
+
+    it.each([
+      ['an operator start', { explicit: true }],
+      ['a boot or takeover start', { explicit: false }],
+    ])('refuses %s and registers no engine', async (_who, options) => {
+      const { gate, settled } = await deleteInBatchPhase();
+
+      await expect(lifecycle.start(ID, options)).rejects.toBeInstanceOf(SessionStoppedException);
+
+      expect(engineFactory.create).toHaveBeenCalledTimes(1);
+      expect(internals.engines.has(ID)).toBe(false);
+      gate.resolve([]);
+      expect(await settled).toBeUndefined();
+      expect(internals.engines.has(ID)).toBe(false);
+    });
+
+    it('leaves the stop mark of the delete in place for the whole delete', async () => {
+      const { gate, settled } = await deleteInBatchPhase();
+
+      await expect(lifecycle.start(ID)).rejects.toBeInstanceOf(SessionStoppedException);
+
+      expect(internals.stoppingSessions.has(ID)).toBe(true);
+      gate.resolve([]);
+      await settled;
+      expect(internals.stoppingSessions.has(ID)).toBe(false);
+    });
+
+    it('lets the session start again when the delete failed', async () => {
+      transaction.mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+      const { gate, settled } = await deleteInBatchPhase();
+
+      gate.resolve([]);
+      expect(((await settled) as Error).message).toContain('statement timeout');
+      expect(lifecycle.isEngineActive(ID)).toBe(false);
+
+      await lifecycle.start(ID, { explicit: true });
+
+      expect(internals.engines.has(ID)).toBe(true);
+    });
+
+    it('holds back a start until the last of two overlapping deletes ends', async () => {
+      transaction.mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
+      const first = await deleteInBatchPhase();
+      const secondGate = hold();
+      const second = settle(lifecycle.delete(ID));
+      await flush();
+
+      // The first delete fails and drops the stop mark the second one is still running under.
+      first.gate.resolve([]);
+      expect(((await first.settled) as Error).message).toContain('statement timeout');
+      await expect(lifecycle.start(ID)).rejects.toBeInstanceOf(SessionStoppedException);
+      expect(internals.engines.has(ID)).toBe(false);
+
+      secondGate.resolve([]);
+      expect(await second).toBeUndefined();
+      await lifecycle.start(ID);
+      expect(internals.engines.has(ID)).toBe(true);
+    });
+
+    it('retires a start whose row read was still pending when the delete began', async () => {
+      const read = deferred<Session>();
+      repository.findOne.mockReturnValueOnce(read.promise);
+      const starting = lifecycle.start(ID, { explicit: true }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      await flush();
+      const gate = hold();
+      const settled = settle(lifecycle.delete(ID));
+      await flush();
+
+      read.resolve(session());
+
+      expect(await starting).toBeInstanceOf(SessionStoppedException);
+      expect(engineFactory.create).not.toHaveBeenCalled();
+      gate.resolve([]);
+      await settled;
+      expect(internals.engines.has(ID)).toBe(false);
     });
   });
 
