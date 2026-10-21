@@ -298,6 +298,38 @@ test('NumberChecker: the Message Tester button reads as a plain link, because it
   assert.ok(rtl.screen.getByRole('button', { name: 'Go to Message Tester' }));
 });
 
+test('NumberChecker: every number and id cell of both result tables is isolated as left-to-right', async () => {
+  stubLookups(number =>
+    number === '916581234567' ? jsonResponse({ number, exists: false, whatsappId: null }) : registered(number),
+  );
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  const phone = rtl.screen.getByPlaceholderText(/9876543210/);
+  const check = () => rtl.screen.getByRole('button', { name: 'Check' });
+  rtl.fireEvent.change(phone, { target: { value: '+65 8123 4567' } });
+  rtl.fireEvent.click(check());
+  await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+  rtl.fireEvent.change(phone, { target: { value: '916581234567' } });
+  rtl.fireEvent.click(check());
+  await rtl.screen.findByText('Unregistered', { selector: '.nc-status-badge' });
+
+  // Each row: the dir of the isolating wrapper of its number cell and of its id cell, an id placeholder included.
+  const isolation = (columns: [number, number]) =>
+    [...container.querySelectorAll('.nc-history-table tbody tr')].map(row =>
+      columns.map(column => row.children[column].querySelector('bdi')?.getAttribute('dir')),
+    );
+  assert.deepEqual(isolation([0, 2]), [
+    ['ltr', 'ltr'],
+    ['ltr', 'ltr'],
+  ]);
+
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '911111111111' } });
+  startBatch();
+  await rtl.screen.findByText('+911111111111');
+  assert.deepEqual(isolation([1, 3]), [['ltr', 'ltr']]);
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
