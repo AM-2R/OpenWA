@@ -51,7 +51,7 @@
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
@@ -62,7 +62,7 @@
 
 .chats-page .session-selector:focus {
   border-color: var(--primary);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
@@ -1760,7 +1760,7 @@
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   color: var(--text-primary);
   font-size: 0.875rem;
   outline: none;
@@ -1772,7 +1772,7 @@
 .chats-page .status-compose-modal input:focus,
 .chats-page .status-compose-modal select:focus {
   border-color: var(--primary);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 

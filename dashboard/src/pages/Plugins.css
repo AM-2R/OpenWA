@@ -358,7 +358,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.9375rem;
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   transition: all 0.2s;
   box-sizing: border-box;
 }
@@ -374,7 +374,7 @@
 .plugins-page .config-form .form-group textarea:focus {
   outline: none;
   border-color: var(--primary);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
@@ -1000,7 +1000,7 @@
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   font-size: 0.9375rem;
   margin-bottom: 1rem;
   box-sizing: border-box;

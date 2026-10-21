@@ -119,6 +119,9 @@ select {
   -moz-appearance: none;
   width: 100%;
   padding: 0.75rem 2.5rem 0.75rem 1rem;
+  /* The chevron below sits in the end padding; a page rule with its own padding must not take that
+     room back, or a long value runs under the arrow. */
+  padding-inline-end: 2.5rem !important;
   font-size: 0.9375rem;
   font-family: inherit;
   color: var(--text-primary);

@@ -121,7 +121,8 @@ input,
 select,
 textarea {
   font-family: inherit;
-  background: var(--bg-white);
+  /* background-color, not the shorthand: the shorthand would reset the chevron index.css draws on select. */
+  background-color: var(--bg-white);
   color: var(--text-primary);
   border-color: var(--border);
 }

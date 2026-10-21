@@ -193,7 +193,7 @@
   font-size: 0.9375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-white);
+  background-color: var(--bg-white);
   transition: border-color 0.2s;
 }
 
