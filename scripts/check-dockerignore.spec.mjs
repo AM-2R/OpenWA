@@ -57,6 +57,23 @@ test('a rule that drops any patcher the Dockerfile copies fails the gate', () =>
   }
 });
 
+test('a source spelled ./x, /x, x//y or x/./y, or read by ADD, is the same build input as x', () => {
+  // Docker resolves each spelling to one path in the context, which is the form the rules match.
+  const sources = ['scripts/new.js', './scripts/new.js', '/scripts/new.js', 'scripts//new.js', 'scripts/./new.js'];
+  for (const instruction of ['COPY', 'ADD']) {
+    for (const source of sources) {
+      const run = runGate({
+        // The first line is a control, so that a gate which reads no ADD fails on the missing report and
+        // not on having found no source at all.
+        Dockerfile: `COPY control.txt ./\n${instruction} ${source} ./scripts/\n`,
+        '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n`,
+      });
+      assert.equal(run.status, 1, `${instruction} ${source} is dropped by a rule and the gate passed`);
+      assert.match(run.out, /rejects 'scripts\/new\.js'/, `${instruction} ${source}: ${run.out}`);
+    }
+  }
+});
+
 test('a wildcard COPY source is expanded against the tree', () => {
   const run = runGate({
     Dockerfile: 'COPY pkg-*.txt ./\n',

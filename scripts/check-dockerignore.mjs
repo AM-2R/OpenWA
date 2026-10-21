@@ -11,12 +11,13 @@
  *   1. Non-build / sensitive material (private working notes, VCS metadata, runtime data, local
  *      env files, agent/tool workspaces, dependency and build-output dirs) is rejected.
  *   2. Every input the multi-stage build actually needs (package manifests, src/, the dashboard
- *      source, docker-entrypoint.sh, TS configs, and every file the Dockerfile COPYs by name,
- *      derived from it) still passes.
+ *      source, docker-entrypoint.sh, TS configs, and every file the Dockerfile COPYs or ADDs by
+ *      name, derived from it) still passes.
  *
  * Run locally: `npm run check:dockerignore`. Runs in CI (lint job).
  */
 import { readFileSync, readdirSync } from 'node:fs';
+import { posix } from 'node:path';
 
 const root = new URL('../', import.meta.url);
 const text = readFileSync(new URL('.dockerignore', root), 'utf8');
@@ -163,34 +164,38 @@ const mustKeep = [
 
 const errors = [];
 
-// Everything else the Dockerfile COPYs out of the build context is an input too. Derive those instead
-// of restating them: a hand-written list lost eight of the patchers, and a rule dropping one of them
-// then broke the image build rather than this check. A copy from another stage, a flag, the
-// destination and `.` (the whole context) are not inputs.
+// Everything else the Dockerfile COPYs or ADDs out of the build context is an input too. Derive those
+// instead of restating them: a hand-written list lost eight of the patchers, and a rule dropping one of
+// them then broke the image build rather than this check. A copy from another stage, a flag, the
+// destination, a remote ADD source and `.` (the whole context) are not inputs.
 const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8').replace(/\\\n/g, ' ');
 const wildcard = /[*?[]/;
 function copyInputs(source) {
-  if (!wildcard.test(source)) return [source];
-  const cut = source.lastIndexOf('/') + 1;
-  const dir = source.slice(0, cut);
+  if (/^[a-z][a-z0-9+.-]*:\/\/|^git@/i.test(source)) return [];
+  // Docker resolves ./x, /x and x//y against the context root, which is the form the rules match.
+  const path = posix.normalize(source).replace(/^\/+|\/+$/g, '');
+  if (path === '' || path === '.') return [];
+  if (!wildcard.test(path)) return [path];
+  const cut = path.lastIndexOf('/') + 1;
+  const dir = path.slice(0, cut);
   if (wildcard.test(dir)) {
-    errors.push(`the Dockerfile COPYs '${source}', and this check expands a wildcard only in the file name.`);
+    errors.push(`the Dockerfile reads '${source}', and this check expands a wildcard only in the file name.`);
     return [];
   }
-  const name = globToRegExp(source.slice(cut));
+  const name = globToRegExp(path.slice(cut));
   return readdirSync(new URL(dir || './', root))
     .filter(entry => name.test(entry))
     .map(entry => dir + entry);
 }
 const copied = [];
-for (const [, args] of dockerfile.matchAll(/^COPY\s+(.+)$/gim)) {
+for (const [, args] of dockerfile.matchAll(/^[ \t]*(?:COPY|ADD)[ \t]+(.+)$/gim)) {
   const words = args.trim().split(/\s+/);
   if (words.some(word => word.startsWith('--from='))) continue;
   const sources = words.filter(word => !word.startsWith('--')).slice(0, -1);
-  copied.push(...sources.filter(source => source !== '.').flatMap(copyInputs));
+  copied.push(...sources.flatMap(copyInputs));
 }
 if (copied.length === 0) {
-  errors.push('no COPY source found in the Dockerfile; the COPY parser in this check needs updating.');
+  errors.push('no COPY or ADD source found in the Dockerfile; the parser in this check needs updating.');
 }
 const keep = [...new Set([...mustKeep, ...copied])];
 
