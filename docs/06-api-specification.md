@@ -5982,7 +5982,7 @@ File count and total size in the active storage backend.
 { "storageType": "local", "count": 128, "sizeBytes": 5242880, "sizeMB": "5.00" }
 ```
 
-**Errors:** `401` · `403` · `500` · `503` `STORAGE_TYPE=s3` but the bucket has not been reachable since boot, or its credentials are missing (this route, the export and the import refuse rather than report on the local fallback directory; an outage after the bucket was reachable answers `500`)
+**Errors:** `401` · `403` · `409` the local storage directory cannot be enumerated completely, so the count would leave files out: it holds a symbolic link, a directory the app cannot read (permission denied), or one nested 20 levels deep or more; `message` names the path relative to the storage root and the cause, and the export refuses the same store the same way. Replace a link with a bind mount or fix the permissions, then retry · `500` · `503` `STORAGE_TYPE=s3` but the bucket has not been reachable since boot, or its credentials are missing (this route, the export and the import refuse rather than report on the local fallback directory; an outage after the bucket was reachable answers `500`)
 
 ---
 
@@ -6000,7 +6000,7 @@ Export all storage files into a `tar.gz` under `data/exports` and return its **s
 
 `download` is a server filesystem path — feed it back to `POST /api/infra/storage/import`. The archive is auto-deleted after `STORAGE_EXPORT_TTL_MS` (default 1h).
 
-**Errors:** `401` · `403` · `500` · `503` S3 configured but not reachable since boot (a later outage answers `500`)
+**Errors:** `401` · `403` · `409` the local storage directory cannot be enumerated completely, so the archive would leave files out (a symbolic link, a directory the app cannot read, or one nested too deep; `message` names the path relative to the storage root and the cause; nothing is written) · `500` · `503` S3 configured but not reachable since boot (a later outage answers `500`)
 
 ---
 

@@ -8548,6 +8548,16 @@
               }
             }
           },
+          "409": {
+            "description": "The local storage directory cannot be enumerated completely, so the answer would silently leave files out: it holds a symbolic link, a directory the app cannot read, or one nested too deep. `message` names the path relative to the storage root and the cause. Replace a link with a bind mount or fix the permissions, then retry; nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "STORAGE_TYPE is s3 but the bucket is unreachable or its credentials are missing; nothing was read or written.",
             "content": {
@@ -8592,6 +8602,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The local storage directory cannot be enumerated completely, so the answer would silently leave files out: it holds a symbolic link, a directory the app cannot read, or one nested too deep. `message` names the path relative to the storage root and the cause. Replace a link with a bind mount or fix the permissions, then retry; nothing was written.",
             "content": {
               "application/json": {
                 "schema": {

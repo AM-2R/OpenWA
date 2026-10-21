@@ -7,6 +7,19 @@ import { isPathWithin } from '../utils/path-safety';
 /** Max directory depth a local traversal descends. Prevents a pathological tree from running unbounded. */
 const LOCAL_TRAVERSAL_MAX_DEPTH = 20;
 
+/**
+ * The walk refuses to go on because it cannot enumerate part of the store completely: a directory the app cannot
+ * read, a symbolic link it does not follow, a directory nested past the depth limit. A count or an export that went
+ * on would leave files out without a word. The message reaches the API caller, so it names the path relative to
+ * the storage root and the cause, never the host path; the error the host raised, with its path, is on `cause`.
+ */
+export class StorageWalkRefusedError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'StorageWalkRefusedError';
+  }
+}
+
 export interface LocalWalkOptions {
   /**
    * Skip a path the walk cannot enumerate, naming it in a warning, instead of failing the walk. Only for a
@@ -33,8 +46,10 @@ export async function* iterateLocalFiles(
   /** A path the walk cannot enumerate: fail the walk, or skip it and say so when the caller allows it. */
   const unreadable = (entry: string, error: Error): void => {
     if (!options.skipUnreadable) throw error;
+    // The log gets the host's own account of the failure, with its path.
+    const detail = error instanceof StorageWalkRefusedError && error.cause instanceof Error ? error.cause : error;
     options.logger?.warn(
-      `Skipping a storage path that cannot be enumerated: ${JSON.stringify(entry)} (${error.message})`,
+      `Skipping a storage path that cannot be enumerated: ${JSON.stringify(entry)} (${detail.message})`,
     );
   };
   // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth. A prefix
@@ -46,7 +61,7 @@ export async function* iterateLocalFiles(
   while (queue.length > 0) {
     const { dir, depth } = queue.shift()!;
     if (depth >= LOCAL_TRAVERSAL_MAX_DEPTH) {
-      unreadable(dir, new Error(`Storage directory exceeds the maximum traversal depth: ${dir}`));
+      unreadable(dir, new StorageWalkRefusedError(`Storage directory exceeds the maximum traversal depth: ${dir}`));
       continue;
     }
 
@@ -58,11 +73,19 @@ export async function* iterateLocalFiles(
       const code = (error as NodeJS.ErrnoException).code;
       // A directory removed during enumeration has no files left to export.
       if (code === 'ENOENT') continue;
-      if (dir === LOST_AND_FOUND && (code === 'EACCES' || code === 'EPERM')) {
+      const permission = code === 'EACCES' || code === 'EPERM';
+      if (dir === LOST_AND_FOUND && permission) {
         options.logger?.log(`Skipping the unreadable ${LOST_AND_FOUND} directory at the storage root`);
         continue;
       }
-      unreadable(dir, error as Error);
+      // Only a permission failure is one the operator can fix, so only it is refused with a cause the caller can
+      // read. Any other failure (an I/O error, say) goes on as it came, and is an internal error.
+      unreadable(
+        dir,
+        permission
+          ? new StorageWalkRefusedError(`Storage directory cannot be read: ${dir || '.'} (${code})`, { cause: error })
+          : (error as Error),
+      );
       continue;
     }
 
@@ -77,7 +100,10 @@ export async function* iterateLocalFiles(
       } else if (entry.isSymbolicLink()) {
         // Not followed: a link can loop or leave the store, and what it points at would be missing from the
         // listing. getFile and a walk that starts below the link still reach it.
-        unreadable(relativePath, new Error(`Storage path is a symbolic link and is not followed: ${relativePath}`));
+        unreadable(
+          relativePath,
+          new StorageWalkRefusedError(`Storage path is a symbolic link and is not followed: ${relativePath}`),
+        );
       }
     }
   }

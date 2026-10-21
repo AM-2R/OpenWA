@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { iterateLocalFiles, type LocalWalkOptions } from './storage-local-files';
+import { iterateLocalFiles, StorageWalkRefusedError, type LocalWalkOptions } from './storage-local-files';
 
 describe('iterateLocalFiles', () => {
   let root: string;
@@ -39,6 +39,16 @@ describe('iterateLocalFiles', () => {
 
   const deepKey = [...Array<string>(20).fill('d'), 'deep.bin'].join('/');
 
+  /** Walk and return what it threw. */
+  const refusal = async (prefix = '', options?: LocalWalkOptions): Promise<StorageWalkRefusedError> => {
+    const error = await walk(prefix, options).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(StorageWalkRefusedError);
+    return error as StorageWalkRefusedError;
+  };
+
   it('lists every file with "/" separated keys', async () => {
     write('a.bin');
     write('x/y/b.bin');
@@ -48,10 +58,30 @@ describe('iterateLocalFiles', () => {
   });
 
   describe('by default', () => {
-    it('fails on a directory it cannot read, with the error it got', async () => {
+    // The message reaches the API caller, so it names the path relative to the storage root and the cause, never the
+    // host path. The error the host raised, with its path, stays on `cause` for the log.
+    it.each(['EACCES', 'EPERM'])('refuses a directory it cannot read (%s), naming it and the cause', async code => {
       write('ok.bin');
       write('locked/hidden.bin');
-      const error = failReaddirAt(path.join(root, 'locked'));
+      const error = failReaddirAt(path.join(root, 'locked'), code);
+
+      const refused = await refusal();
+
+      expect(refused.message).toBe(`Storage directory cannot be read: locked (${code})`);
+      expect(refused.message).not.toContain(root);
+      expect(refused.name).toBe('StorageWalkRefusedError');
+      expect(refused.cause).toBe(error);
+    });
+
+    it('names the storage root as "." when the root itself cannot be read', async () => {
+      failReaddirAt(root, 'EACCES');
+
+      expect((await refusal()).message).toBe('Storage directory cannot be read: . (EACCES)');
+    });
+
+    it('lets any other failure through as it came, so it stays an internal error', async () => {
+      write('broken/file.bin');
+      const error = failReaddirAt(path.join(root, 'broken'), 'EIO');
 
       await expect(walk()).rejects.toBe(error);
     });
@@ -79,9 +109,9 @@ describe('iterateLocalFiles', () => {
 
       it('still fails on one that is not at the storage root', async () => {
         write(`nested/${lostAndFound}/recovered.bin`);
-        const error = failReaddirAt(path.join(root, 'nested', lostAndFound));
+        failReaddirAt(path.join(root, 'nested', lostAndFound));
 
-        await expect(walk()).rejects.toBe(error);
+        expect((await refusal()).message).toBe(`Storage directory cannot be read: nested/${lostAndFound} (EACCES)`);
       });
 
       it('still fails on an error that is not a permission error', async () => {
@@ -92,10 +122,13 @@ describe('iterateLocalFiles', () => {
       });
     });
 
-    it('fails on a directory below the maximum depth', async () => {
+    it('refuses a directory below the maximum depth, naming it', async () => {
       write(deepKey);
 
-      await expect(walk()).rejects.toThrow(/maximum traversal depth/);
+      const refused = await refusal();
+
+      expect(refused.message).toMatch(/^Storage directory exceeds the maximum traversal depth: d(\/d){19}$/);
+      expect(refused.message).not.toContain(root);
     });
 
     // A link is neither followed (it can loop, or leave the store) nor listed, so what it points at would be
@@ -103,12 +136,15 @@ describe('iterateLocalFiles', () => {
     it.each([
       ['directory', 'linked'],
       ['file', 'alias.bin'],
-    ])('fails on a symbolic link to a %s, naming it', async (kind, name) => {
+    ])('refuses a symbolic link to a %s, naming it', async (kind, name) => {
       write('real/inside.bin');
       write('real.bin');
       fs.symlinkSync(path.join(root, kind === 'directory' ? 'real' : 'real.bin'), path.join(root, name));
 
-      await expect(walk()).rejects.toThrow(new RegExp(`symbolic link.*${name.replace('.', '\\.')}`));
+      const refused = await refusal();
+
+      expect(refused.message).toBe(`Storage path is a symbolic link and is not followed: ${name}`);
+      expect(refused.message).not.toContain(root);
     });
 
     it('walks a prefix that is itself a symbolic link, since the walk starts from a path', async () => {
@@ -143,6 +179,8 @@ describe('iterateLocalFiles', () => {
       expect(await walk('', options)).toEqual(['ok.bin', 'other/fine.bin']);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('"locked"'));
+      // The log keeps the host's own account of the failure, with its path; only the API message drops it.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(path.join(root, 'locked')));
     });
 
     it('skips a directory below the maximum depth and still lists the rest', async () => {
