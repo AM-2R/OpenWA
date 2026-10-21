@@ -445,6 +445,18 @@ code {
   background-position: left 0.75rem center;
 }
 
+/* Glyphs that point along the reading direction flip with it. The sidebar chevron is swapped in
+   Layout.tsx instead, so it is not listed here. */
+[dir='rtl'] .lucide-arrow-left,
+[dir='rtl'] .lucide-arrow-right,
+[dir='rtl'] .lucide-corner-up-left,
+[dir='rtl'] .lucide-corner-up-right,
+[dir='rtl'] .lucide-log-in,
+[dir='rtl'] .lucide-log-out,
+[dir='rtl'] .lucide-send {
+  transform: scaleX(-1);
+}
+
 /* Inputs in modals: text aligns naturally */
 [dir='rtl'] .modal-body input,
 [dir='rtl'] .modal-body textarea,
