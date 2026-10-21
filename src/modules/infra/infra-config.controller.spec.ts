@@ -792,6 +792,13 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     expect(env).toContain('DATABASE_PASSWORD=keepme');
   });
 
+  it('a null pool size reads as absent and keeps the stored one', () => {
+    const existing =
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=old.example.com\nDATABASE_PASSWORD=keepme\nDATABASE_POOL_SIZE=25\n';
+    const env = written({ database: { type: 'postgres', poolSize: null } }, existing);
+    expect(env).toContain('DATABASE_POOL_SIZE=25');
+  });
+
   it('a partial storage save keeps the stored S3 region instead of resetting it to the default', () => {
     const existing =
       'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_BUCKET=old-bucket\nS3_REGION=eu-west-1\nS3_ACCESS_KEY_ID=ak-strong\nS3_SECRET_ACCESS_KEY=sk-strong\n';

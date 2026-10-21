@@ -89,7 +89,8 @@ export function applyDatabaseSection(
         updates.POSTGRES_SCHEMA = database.schema || 'public';
       }
     }
-    if (database.poolSize !== undefined) {
+    // null is what JSON makes of an emptied number input, and reads as absent like the other fields.
+    if (database.poolSize !== undefined && database.poolSize !== null) {
       if (!Number.isInteger(database.poolSize) || database.poolSize < 0) {
         throw new BadRequestException(
           `database.poolSize must be a non-negative integer (got ${JSON.stringify(database.poolSize)})`,
