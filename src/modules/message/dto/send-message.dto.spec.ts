@@ -315,11 +315,12 @@ describe('SendTextMessageDto customLinkPreview', () => {
   });
 });
 
-// Implicit conversion rewrote a number, a boolean or an object into its string form before @IsString ran, so
-// {"text":{"order":42}} was sent as the literal text "[object Object]". Every field below is documented as a
-// string, in docs/06 and in the request types of all five SDKs.
-describe('string fields refuse a value that is not a string', () => {
-  const invalid: Array<[unknown]> = [[{ order: 42 }], [628123456789], [true]];
+// Implicit conversion rewrote a boolean or an object into its string form before @IsString ran, so
+// {"text":{"order":42}} was sent as the literal text "[object Object]". A number keeps the conversion: no-code
+// clients post a phone number or a chat id held as a number, and every release has read it as its decimal
+// string. Every field below is documented as a string, in docs/06 and in the request types of all five SDKs.
+describe('string fields refuse a boolean or an object', () => {
+  const invalid: Array<[unknown]> = [[{ order: 42 }], [true], [['a']]];
 
   it.each(invalid)('SendTextMessageDto refuses text %j', async text => {
     const errors = await validateDto(SendTextMessageDto, { chatId: 'g@g.us', text });
@@ -343,6 +344,18 @@ describe('string fields refuse a value that is not a string', () => {
   it.each(invalid)('SendContactDto refuses contactNumber %j', async contactNumber => {
     const errors = await validateDto(SendContactDto, { chatId: 'g@g.us', contactName: 'Alice', contactNumber });
     expect(errors.map(e => e.property)).toEqual(['contactNumber']);
+  });
+
+  it('still reads a number as its decimal string', async () => {
+    const contact = plainToInstance(
+      SendContactDto,
+      { chatId: 'g@g.us', contactName: 'Alice', contactNumber: 628999888777 },
+      GLOBAL_VALIDATION_OPTIONS.transformOptions,
+    );
+    expect(contact.contactNumber).toBe('628999888777');
+    expect(await validate(contact, GLOBAL_VALIDATION_OPTIONS)).toHaveLength(0);
+
+    expect(await validateDto(SendTextMessageDto, { chatId: 628123456789, text: 5 })).toHaveLength(0);
   });
 
   it('still takes the same values spelled as strings', async () => {

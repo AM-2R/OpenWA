@@ -17,8 +17,9 @@ import { join } from 'path';
  *              `true` and `@IsBoolean()` can never reject them.
  *   Number   — `Number('')` and `Number('   ')` are `0`, so a blank field arrives as a real zero
  *              and `@IsInt()`/`@IsNumber()` accept it.
- *   String   - a number, boolean or object becomes its string form (`5`, `true`, `[object Object]`), so
- *              `@IsString()` accepts it and the route sends text the caller never wrote.
+ *   String   - a boolean or object becomes its string form (`true`, `[object Object]`), so `@IsString()`
+ *              accepts it and the route sends text the caller never wrote. A number keeps the conversion,
+ *              because clients that hold a phone number as a number rely on it.
  *
  * The first two fail toward the more permissive value, which is how a `forEveryone=false` delete became
  * a delete-for-everyone. `ToStrictBoolean`/`ToStrictNumber`/`ToStrictString` (`./strict-boolean`)
@@ -37,11 +38,12 @@ const PIPE_VALIDATOR_OPTS = { whitelist: true, forbidNonWhitelisted: true };
 const PROBES: Record<string, { values: unknown[]; reason: string }> = {
   Boolean: { values: ['yes'], reason: 'implicit conversion turns any non-empty string into true' },
   Number: { values: [''], reason: 'Number("") is 0, so a blank field becomes a real zero' },
-  // Three probes, because their string forms differ: "628123456789" and "true" pass a digit pattern or a
-  // name rule that "[object Object]" fails, so one probe alone would let such a field skip the decorator.
+  // Two string forms, because they differ: "true" passes a name rule that "[object Object]" fails, so one
+  // probe alone would let such a field skip the decorator. An array is never converted, so it pins that it
+  // stays refused. A number is not here: it is converted on purpose, and asserted separately below.
   String: {
-    values: [628123456789, true, { order: 42 }],
-    reason: 'implicit conversion rewrites a number, boolean or object into its string form, which @IsString accepts',
+    values: [true, { order: 42 }, ['a']],
+    reason: 'implicit conversion rewrites a boolean or an object into its string form, which @IsString accepts',
   },
 };
 
@@ -124,6 +126,17 @@ describe('DTO input-coercion drift gate', () => {
           `${target.cls.name}.${target.prop} accepted ${JSON.stringify(value)} — ${reason}. ` +
             `Add @ToStrict${target.type}() from common/utils/strict-boolean.`,
       ).toBe(true);
+    },
+  );
+
+  // Clients that hold a phone number or a chat id as a number post it as one, and every release has read it
+  // as its decimal string. The value reaching the validators is checked, not the verdict: a pattern such as
+  // a chat id's legitimately refuses the digits, which is not the conversion going missing.
+  it.each(targets.filter(t => t.type === 'String').map(t => [`${t.cls.name}.${t.prop}`, t] as const))(
+    '%s still reads a number as its decimal string',
+    (_label, target) => {
+      const instance = plainToInstance(target.cls, { [target.prop]: 628123456789 }, PIPE_TRANSFORM_OPTS);
+      expect((instance as Record<string, unknown>)[target.prop]).toBe('628123456789');
     },
   );
 });

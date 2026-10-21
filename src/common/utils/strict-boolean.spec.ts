@@ -144,14 +144,32 @@ describe('ToStrictString', () => {
     }
   });
 
-  it.each([[628123456789], [true], [false], [0], [{ order: 42 }], [['a']]])(
-    'rejects %j instead of reading it as text',
-    async value => {
-      const { instance, errors } = await run(StringSubject, { text: value });
-      expect(instance.text).toEqual(value);
-      expect(errors.map(e => e.property)).toEqual(['text']);
-    },
-  );
+  // A number keeps the conversion every release has had: no-code clients post a phone number held as a number.
+  it.each([
+    [628123456789, '628123456789'],
+    [0, '0'],
+    [-5, '-5'],
+    [1.5, '1.5'],
+    [1e21, '1e+21'],
+  ])('reads the number %j as the string %j, as the pipe always did', async (value, expected) => {
+    const { instance, errors } = await run(StringSubject, { text: value });
+    expect(instance.text).toBe(expected);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('converts a number exactly as the unguarded pipe does', async () => {
+    for (const value of [628123456789, 0, -0, -5, 1.5, 1e21, Number.MAX_SAFE_INTEGER]) {
+      const guarded = await run(StringSubject, { text: value });
+      const unguarded = await run(UnguardedString, { text: value });
+      expect(guarded.instance.text).toBe(unguarded.instance.text);
+    }
+  });
+
+  it.each([[true], [false], [{ order: 42 }], [['a']]])('rejects %j instead of reading it as text', async value => {
+    const { instance, errors } = await run(StringSubject, { text: value });
+    expect(instance.text).toEqual(value);
+    expect(errors.map(e => e.property)).toEqual(['text']);
+  });
 
   it('leaves an absent property absent and a null one null', async () => {
     const absent = await run(StringSubject, {});
@@ -163,9 +181,8 @@ describe('ToStrictString', () => {
   });
 
   // The behaviour the decorator exists to prevent: the customer receiving the literal "[object Object]".
-  it('documents the unguarded behaviour it replaces: a number, boolean or object becomes a string', async () => {
+  it('documents the unguarded behaviour it replaces: a boolean or object becomes a string', async () => {
     for (const [value, expected] of [
-      [628123456789, '628123456789'],
       [true, 'true'],
       [{ order: 42 }, '[object Object]'],
     ] as const) {

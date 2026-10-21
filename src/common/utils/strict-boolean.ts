@@ -58,17 +58,19 @@ export const ToStrictNumber = (): PropertyDecorator => Transform(coerceStrictNum
 /**
  * The string counterpart, for the same reason and with the same `obj[key]` trick.
  *
- * Implicit conversion applies `String(value)` to a `string`-typed property, so a number, a boolean or
- * an object is rewritten into its string form (`5`, `true`, `[object Object]`) before `@IsString()` runs,
- * and the route accepts it. An integration whose expression yields an object then sent the customer
- * the literal text `[object Object]`. An array is the one value left alone, so the same field already
- * answered 400 for it.
+ * Implicit conversion applies `String(value)` to a `string`-typed property, so a boolean or an object is
+ * rewritten into its string form (`true`, `[object Object]`) before `@IsString()` runs, and the route
+ * accepts it. An integration whose expression yields an object then sent the customer the literal text
+ * `[object Object]`. An array is the one value left alone, so the same field already answered 400 for it.
  *
- * The caller's value is kept as it is, so `@IsString()` and the other string validators refuse anything
- * that is not already a string. A string is never altered, so a form-encoded body is unaffected.
+ * A number keeps the conversion: clients that hold a phone number or a chat id as a number post it as one,
+ * and every release has read it as its decimal string. Every other value is kept as the caller sent it,
+ * so `@IsString()` and the other string validators refuse it. A string is never altered, so a
+ * form-encoded body is unaffected.
  */
 export function coerceStrictString({ obj, key }: Pick<TransformFnParams, 'obj' | 'key'>): unknown {
-  return (obj as Record<string, unknown> | undefined)?.[key];
+  const raw = (obj as Record<string, unknown> | undefined)?.[key];
+  return typeof raw === 'number' ? String(raw) : raw;
 }
 
 /** Property decorator form of {@link coerceStrictString}. Pair it with `@IsString()`. */
