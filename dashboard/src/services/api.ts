@@ -1133,7 +1133,7 @@ export const templateApi = {
 export interface CheckNumberResponse {
   number: string;
   exists: boolean;
-  /** Engine-canonical WhatsApp id for the number (e.g. `…@c.us` or `…@lid`), or null if unregistered. */
+  /** The number's WhatsApp id in the neutral `<phone>@c.us` form on both engines, or null if unregistered. */
   whatsappId: string | null;
 }
 
