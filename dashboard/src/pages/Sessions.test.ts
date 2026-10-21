@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
 import { holdConnect, lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
+import { SESSION_FEED_EVENTS } from '../utils/sessionFeedSubscription.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -2152,4 +2153,46 @@ for (const [label, cardButton, confirmButton, method, path] of [
 test('Sessions.css aligns text to the text direction, not a physical side', () => {
   const css = readFileSync(new URL('./Sessions.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(css, /text-align\s*:\s*(left|right)\b/, 'text is aligned to a physical side');
+});
+
+// ── Live feed subscription ───────────────────────────────────────────────────
+
+/** The payload of every frame the page sent over the socket. */
+const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
+
+test('the page joins the live session feed once connected, with the events it renders', async () => {
+  const { screen, waitFor } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() =>
+    assert.deepEqual(feedFrames(), [{ type: 'subscribe', sessionId: '*', events: [...SESSION_FEED_EVENTS] }]),
+  );
+});
+
+test('a key refused the wildcard room joins each listed session instead', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() => assert.equal(feedFrames().length, 1));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() =>
+    socket.receive('message', { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+  );
+
+  const joined = (): string[] =>
+    feedFrames()
+      .slice(1)
+      .map(frame => (frame as { sessionId: string }).sessionId)
+      .sort();
+  await waitFor(() => assert.deepEqual(joined(), SESSIONS.map(session => session.id).sort()));
+  for (const frame of feedFrames().slice(1)) {
+    assert.deepEqual((frame as { events: string[] }).events, [...SESSION_FEED_EVENTS]);
+  }
 });

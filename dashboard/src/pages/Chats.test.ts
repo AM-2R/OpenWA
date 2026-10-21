@@ -3386,3 +3386,42 @@ test('a message sent from the page scrolls the thread to it, whatever the reader
     restoreGeometry();
   }
 });
+
+// ── Live feed subscription ───────────────────────────────────────────────────
+
+const MESSAGE_FEED_EVENTS = [
+  'message.received',
+  'message.sent',
+  'message.ack',
+  'message.reaction',
+  'message.revoked',
+  'message.edited',
+  'status.received',
+];
+
+/** The payload of every frame the page sent over the socket. */
+const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
+
+test("the page joins the open session's message events once connected, and moves to the next session on a switch", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Main (15551234567)');
+    await waitFor(() =>
+      assert.deepEqual(feedFrames(), [{ type: 'subscribe', sessionId: SESSION.id, events: MESSAGE_FEED_EVENTS }]),
+    );
+
+    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
+      target: { value: SESSION_2.id },
+    });
+    await waitFor(() =>
+      assert.deepEqual(feedFrames().slice(1), [
+        { type: 'unsubscribe', sessionId: SESSION.id },
+        { type: 'subscribe', sessionId: SESSION_2.id, events: MESSAGE_FEED_EVENTS },
+      ]),
+    );
+  } finally {
+    twoSessions = false;
+  }
+});
