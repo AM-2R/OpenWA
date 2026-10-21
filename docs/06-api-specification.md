@@ -1126,7 +1126,7 @@ Mute a chat's notifications until a given moment, or unmute it.
 | Field       | Type           | Required | Constraints                                                                                                    | Description                                                     |
 | ----------- | -------------- | -------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `chatId`    | string         | Yes      | `@IsString`; `@IsNotEmpty`; `@MaxLength(255)`; `@Matches(/^[^\s@]+@[^\s@]+$/)` (localpart@host, no whitespace) | Engine-native JID, e.g. `1234567890-123@g.us`                   |
-| `muteUntil` | number \| null | Yes      | `@IsInt`; `@Min(1)`; `@Max(8640000000000000)` when not `null`                                                  | Epoch **milliseconds** the mute expires at, or `null` to unmute |
+| `muteUntil` | number \| null | Yes      | `@IsInt`; `@Min(1)`; `@Max(9007199254740991)` when not `null`                                                  | Epoch **milliseconds** the mute expires at, or `null` to unmute |
 
 ```json
 { "chatId": "1234567890-123@g.us", "muteUntil": 1800000000000 }
@@ -1145,9 +1145,9 @@ Mute a chat's notifications until a given moment, or unmute it.
 > **`muteUntil` is required, and `null` is not the same as omitting it.** The two plausible readings
 > of a missing field — unmute, or mute forever — are opposites, so the endpoint rejects the omission
 > with a `400` instead of guessing. Send `null` to unmute. To mute indefinitely, send a far-future
-> timestamp, at most `8640000000000000` (the last instant a JavaScript date holds; a later one is a
-> `400`): neither engine exposes a portable "forever" value (whatsapp-web.js uses `-1` internally,
-> Baileys has none), so the API keeps one well-defined shape.
+> timestamp, at most `9007199254740991` (`Number.MAX_SAFE_INTEGER`, the largest integer a JSON number
+> carries exactly; a larger one is a `400`): neither engine exposes a portable "forever" value
+> (whatsapp-web.js uses `-1` internally, Baileys has none), so the API keeps one well-defined shape.
 
 > **Milliseconds, not seconds.** This was measured against a live WhatsApp account rather than read
 > off the protocol: the app-state field is the unsuffixed `MuteAction.muteEndTimestamp` while the same

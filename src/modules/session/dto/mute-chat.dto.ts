@@ -4,11 +4,13 @@ import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
 import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /**
- * The last instant a JavaScript Date can hold. whatsapp-web.js converts `muteUntil` through Date, which is
- * NaN past it and then becomes a mute with no end, and Baileys writes the number into an int64 that wraps
- * past 2^63 (1e300 encodes as 0). Both take every instant up to this bound exactly.
+ * The largest integer a JSON number carries exactly, and the bound on `muteUntil`. Both engines take every
+ * value up to it: whatsapp-web.js converts the value through Date, so past the last JavaScript date
+ * (8.64e15) the date is invalid and the call becomes a mute with no end, which is what a client sending
+ * this value for "forever" means, and Baileys writes the number exactly into an int64. Past it a number is
+ * no longer an exact integer, and the int64 wraps from 2^63 (1e300 encodes as 0).
  */
-export const MUTE_UNTIL_MAX = 8_640_000_000_000_000;
+export const MUTE_UNTIL_MAX = Number.MAX_SAFE_INTEGER;
 
 export class MuteChatDto {
   @ApiProperty({
@@ -32,7 +34,7 @@ export class MuteChatDto {
       'Absolute epoch-MILLISECONDS timestamp at which the mute expires, or `null` to unmute now. ' +
       'Required — omitting it is rejected rather than guessed, because the two plausible readings ' +
       '(unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp, no later ' +
-      'than 8640000000000000 (the last instant a JavaScript date holds). ' +
+      'than 9007199254740991 (Number.MAX_SAFE_INTEGER, the largest integer a JSON number carries exactly). ' +
       'Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires ' +
       'immediately while the request still answers 200.',
     example: 1800000000000,
