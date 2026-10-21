@@ -65,8 +65,8 @@ func (s *GroupsService) JoinGroup(ctx context.Context, sessionID string, body Jo
 	return &out, nil
 }
 
-// GetGroupSettings returns the group's announce / locked / ephemeral-timer
-// settings.
+// GetGroupSettings returns the group's announce / locked / ephemeral-timer /
+// member-add-mode settings.
 func (s *GroupsService) GetGroupSettings(ctx context.Context, sessionID, groupID string) (*GroupSettings, error) {
 	var out GroupSettings
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(groupID)+"/settings", nil, nil, &out)

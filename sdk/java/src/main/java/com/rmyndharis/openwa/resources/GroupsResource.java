@@ -148,7 +148,7 @@ public final class GroupsResource {
             SuccessResult.class);
     }
 
-    /** Get the group settings (announce / locked / ephemeral timer). */
+    /** Get the group settings (announce / locked / ephemeral timer / member-add mode). */
     public GroupSettings getGroupSettings(String sessionId, String groupId) {
         return client.request(
             HttpMethod.GET,

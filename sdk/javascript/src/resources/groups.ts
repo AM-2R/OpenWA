@@ -140,7 +140,7 @@ export class GroupsResource {
     });
   }
 
-  /** Get the group settings (announce / locked / ephemeral timer). */
+  /** Get the group settings (announce / locked / ephemeral timer / member-add mode). */
   getGroupSettings(sessionId: string, groupId: string): Promise<GroupSettingsResponse> {
     return this.client.request<GroupSettingsResponse>({
       method: 'GET',
