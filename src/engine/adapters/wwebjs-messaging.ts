@@ -374,6 +374,22 @@ export class WwebjsMessaging {
     return withPage(this.host, context, op);
   }
 
+  /**
+   * A read that runs before a reply or forward has sent anything. When the page died under it, or the
+   * session went away meanwhile, nothing was sent: report the death, then answer the not-ready 409 a
+   * send gets everywhere else, not the plain page error the send breaker counts. Any other failure
+   * rethrows unchanged. Not for the send itself, whose failure leaves the outcome unknown.
+   */
+  private async readBeforeSend<T>(context: string, read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      this.host.reportIfPageTransportError(error, context);
+      this.host.ensureReady();
+      throw error;
+    }
+  }
+
   // Cache of resolved individual recipients: `<phone>@c.us` -> the id `sendMessage` accepts (a
   // `<lid>@lid` for a migrated contact, or the confirmed `@c.us` for a non-migrated one). `getNumberId`
   // is a rate-limited WhatsApp Web existence probe that also throws intermittently, so caching every
@@ -719,11 +735,11 @@ export class WwebjsMessaging {
     ensureSendable(chatId, 'reply');
     try {
       // Find the message to quote
-      const chat = await this.client().getChatById(chatId);
+      const chat = await this.readBeforeSend('replyToMessage', () => this.client().getChatById(chatId));
       if (!chat) {
         throw new MessageNotFoundError(quotedMsgId, chatId);
       }
-      const messages = await chat.fetchMessages({ limit: 100 });
+      const messages = await this.readBeforeSend('replyToMessage', () => chat.fetchMessages({ limit: 100 }));
       const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
 
       if (!quotedMsg) {
@@ -750,11 +766,11 @@ export class WwebjsMessaging {
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
     this.host.ensureReady();
     try {
-      const chat = await this.client().getChatById(fromChatId);
+      const chat = await this.readBeforeSend('forwardMessage', () => this.client().getChatById(fromChatId));
       if (!chat) {
         throw new MessageNotFoundError(messageId, fromChatId);
       }
-      const messages = await chat.fetchMessages({ limit: 100 });
+      const messages = await this.readBeforeSend('forwardMessage', () => chat.fetchMessages({ limit: 100 }));
       const msgToForward = messages.find(m => m.id._serialized === messageId);
 
       if (!msgToForward) {

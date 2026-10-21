@@ -84,6 +84,8 @@ const outcomeOf = (operation: Promise<unknown>): Promise<Outcome> =>
 
 const found = (wid: string): { _serialized: string } => ({ _serialized: wid });
 
+const closedTarget = (): Error => new Error('Protocol error (Runtime.callFunctionOn): Target closed.');
+
 interface Case {
   name: string;
   /** The client the operation runs against, with its first await parked on `parked`; `unreached` must stay uncalled. */
@@ -199,6 +201,31 @@ const CASES: Case[] = [
     run: adapter => adapter.replyToMessage(CHAT, 'Q1', 'hi'),
   },
   {
+    // The history read precedes the send: a page that dies under it means nothing went out.
+    name: 'a reply parked in its history read',
+    build: parked => {
+      const reply = jest.fn();
+      const chat = { fetchMessages: () => parked.park().then(() => Promise.reject(closedTarget())) };
+      return {
+        client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.resolve(chat) },
+        unreached: reply,
+      };
+    },
+    run: adapter => adapter.replyToMessage(CHAT, 'Q1', 'hi'),
+  },
+  {
+    name: 'a forward parked in the read of its source chat',
+    build: parked => {
+      const forward = jest.fn();
+      const source = { fetchMessages: () => parked.park().then(() => Promise.reject(closedTarget())) };
+      return {
+        client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.resolve(source) },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+  {
     name: 'a forward parked in the destination lookup',
     build: parked => {
       const forward = jest.fn();
@@ -302,6 +329,21 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
       expect(reply).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ error: expect.any(EngineNotReadyError) as unknown });
     });
+  });
+
+  it.each([
+    ['a reply', (adapter: WhatsAppWebJsAdapter) => adapter.replyToMessage(CHAT, 'Q1', 'hi')],
+    ['a forward', (adapter: WhatsAppWebJsAdapter) => adapter.forwardMessage('src@c.us', CHAT, 'M1')],
+  ])('leaves an ordinary failure in the history read of %s untouched on a ready session', async (_kind, run) => {
+    const boom = new Error('Evaluation failed: boom');
+    const chat = { fetchMessages: () => Promise.reject(boom) };
+    const { adapter, finish } = readyAdapter({
+      getNumberId: () => Promise.resolve(found(CHAT)),
+      getChatById: () => Promise.resolve(chat),
+    });
+
+    await expect(run(adapter)).rejects.toBe(boom);
+    await finish();
   });
 
   it('keeps a send that was already on the wire an outcome-unknown failure', async () => {
