@@ -208,6 +208,15 @@ test('NumberChecker: numbers and ids are isolated as left-to-right, so a right-t
   assert.equal(jid?.textContent, '6581234567@c.us');
 });
 
+test('NumberChecker: the number field and the bulk list are typed left to right, so a right-to-left page keeps the plus sign in front', async () => {
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  assert.equal(rtl.screen.getByPlaceholderText(/9876543210/).getAttribute('dir'), 'ltr');
+
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  assert.equal(container.querySelector('.nc-textarea')?.getAttribute('dir'), 'ltr');
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {

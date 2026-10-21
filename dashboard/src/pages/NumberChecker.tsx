@@ -460,6 +460,7 @@ export function NumberChecker() {
                 <div className="nc-input-row">
                   <input
                     type="text"
+                    dir="ltr"
                     className="nc-input"
                     placeholder={t('numberChecker.single.phonePlaceholder')}
                     value={phoneNumber}
@@ -764,6 +765,7 @@ export function NumberChecker() {
               <div className="nc-form-group">
                 <label className="nc-label">{t('numberChecker.bulk.numbersLabel')}</label>
                 <textarea
+                  dir="ltr"
                   className="nc-textarea"
                   placeholder="919612345678&#10;6281234567890&#10;14155552671"
                   value={batchInput}
