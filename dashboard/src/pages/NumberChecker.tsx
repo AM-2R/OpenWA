@@ -270,6 +270,7 @@ export function NumberChecker() {
     const runId = ++batchRunIdRef.current;
     setIsCheckingBatch(true);
     setBatchResults([]);
+    setBatchFilter('all');
     setBatchStop(null);
     setBatchProgress({ current: 0, total: numbers.length });
 

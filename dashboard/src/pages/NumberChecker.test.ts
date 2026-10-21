@@ -611,6 +611,23 @@ test('NumberChecker: a lookup error that is not a gateway refusal fails that num
   assert.equal(container.querySelector('.nc-batch-stopped'), null);
 });
 
+test('NumberChecker: a new run starts on the All filter, so a Failed filter left over does not hide its rows', async () => {
+  stubLookups(number =>
+    number === '911111111111' ? jsonResponse({ message: 'engine hiccup' }, 500) : registered(number),
+  );
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+  rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: /^Failed \(1\)/ }));
+
+  rtl.fireEvent.change(textarea, { target: { value: '912222222222' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+
+  await rtl.screen.findByText('+912222222222');
+  assert.match(container.querySelector('.nc-filter-btn.active')?.textContent ?? '', /^All \(1\)/);
+});
+
 test('NumberChecker: a run in which every lookup failed is not reported as completed', async () => {
   const lookups = stubLookups(() => jsonResponse({ message: 'engine hiccup' }, 500));
   const { container } = renderComponent();
