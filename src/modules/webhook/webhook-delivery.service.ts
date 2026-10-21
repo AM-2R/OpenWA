@@ -135,6 +135,10 @@ class UnrecordedWebhookFailure extends Error {}
 const isLimiterClosed = (error: unknown): boolean =>
   error instanceof Error && error.message === 'ConcurrencyLimiter closed';
 
+/** The limiter refused the task because it already runs and queues as many as it admits. */
+const isLimiterFull = (error: unknown): boolean =>
+  error instanceof Error && error.message === 'ConcurrencyLimiter queue full';
+
 /**
  * The replay's retries were stopped by its aborted signal, in a backoff or just before a retry POST.
  * A POST that fails after the abort is not this: on the last attempt it is a terminal failure and is
@@ -195,13 +199,15 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly optInSubscriptions = new Map<string, { events: Promise<ReadonlySet<string>>; expiresAt: number }>();
   /**
-   * Opt-in events admitted by dispatch() and not yet settled. One flush of buffered receipts is
-   * thousands of dispatches in a tick, so they hold at most a quarter of the park budget, as a session
-   * gate does; the excess is dropped before it opens an outbox row, a failure row or a hook call.
+   * Per session, the stage its opt-in events (WILDCARD_EXCLUDED_EVENTS) pass before the shared dispatch
+   * pool. One flush of buffered receipts is thousands of dispatches in a tick: a quarter of the dispatch
+   * concurrency of them run at once, up to three quarters of WEBHOOK_DISPATCH_MAX_QUEUED wait their turn
+   * (holding only the event), and the rest are dropped before they open an outbox row, a failure row or a
+   * hook call. The pool never sees more than the running ones, so a flood, or a receiver that never
+   * answers, cannot shed or hold back what another session sends. An entry lives while its session has
+   * events in the stage; `dropped` counts those turned away since it was created.
    */
-  private optInPending = 0;
-  /** Opt-in events dropped since the allowance last emptied, reported when it does. */
-  private optInDropped = 0;
+  private readonly optInStages = new Map<string, { stage: ConcurrencyLimiter; dropped: number }>();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -265,6 +271,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * so the bound limits this hook only; the whole teardown is the sum in shutdown-budget.ts.
    */
   async onModuleDestroy(): Promise<void> {
+    // Opt-in events still waiting for their stage hold nothing durable (no outbox row yet) and are best effort,
+    // so they are let go in both modes; the ones already running finish with the rest.
+    for (const { stage } of this.optInStages.values()) stage.close();
     if (!this.queueEnabled) {
       this.dispatchLimiter.close();
       for (const gate of this.degradedSessionGates.values()) gate.close();
@@ -297,27 +306,54 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
     if (!(await this.sessionNamesOptInEvent(sessionId, event))) return;
-    if (this.optInPending >= Math.max(1, Math.floor(this.dispatchMaxQueued / 4))) {
-      if (this.optInDropped++ === 0) {
-        this.logger.warn(
-          `Dropping ${event} events: more are pending than a quarter of WEBHOOK_DISPATCH_MAX_QUEUED allows`,
-          { event, pending: this.optInPending, action: 'webhook_opt_in_dropping' },
-        );
-      }
-      return;
+    let entry = this.optInStages.get(sessionId);
+    if (!entry) {
+      // A quarter of the pool runs at once (the limiter keeps at least one) and three quarters of the park bound
+      // wait, at least one place.
+      entry = {
+        stage: new ConcurrencyLimiter(
+          Math.floor(this.dispatchLimiter.maxCount / 4),
+          Math.max(1, Math.floor((this.dispatchMaxQueued * 3) / 4)),
+        ),
+        dropped: 0,
+      };
+      this.optInStages.set(sessionId, entry);
     }
-    this.optInPending++;
     try {
-      await this.fanOut(sessionId, event, data);
+      await entry.stage.run(() => this.fanOut(sessionId, event, data));
+    } catch (error) {
+      // Over the stage's bound, or still waiting when shutdown closed it; anything else is not ours to hide.
+      if (isLimiterFull(error)) this.noteOptInDrop(sessionId, event, entry);
+      else if (!isLimiterClosed(error)) throw error;
     } finally {
-      if (--this.optInPending === 0 && this.optInDropped > 0) {
-        this.logger.warn(`Dropped ${this.optInDropped} opt-in events while their allowance was full`, {
-          dropped: this.optInDropped,
-          action: 'webhook_opt_in_dropped',
-        });
-        this.optInDropped = 0;
-      }
+      this.releaseOptInStage(sessionId, entry);
     }
+  }
+
+  /**
+   * An opt-in event past its session's bound: counted with the other deliveries that were never sent, and
+   * announced once per burst, when the session starts dropping. It leaves no row to replay, by design.
+   */
+  private noteOptInDrop(sessionId: string, event: string, entry: { dropped: number }): void {
+    incrementWebhookDeliveryFailures();
+    if (entry.dropped++ > 0) return;
+    this.logger.warn(`Dropping ${event} events of session ${sessionId}: its queue of opt-in events is full`, {
+      sessionId,
+      event,
+      action: 'webhook_opt_in_dropping',
+    });
+  }
+
+  /** Forget a session's stage once it is idle, reporting how many events it turned away. */
+  private releaseOptInStage(sessionId: string, entry: { stage: ConcurrencyLimiter; dropped: number }): void {
+    if (entry.stage.activeCount > 0 || entry.stage.queuedCount > 0 || this.optInStages.get(sessionId) !== entry) return;
+    this.optInStages.delete(sessionId);
+    if (entry.dropped === 0) return;
+    this.logger.warn(`Dropped ${entry.dropped} opt-in events of session ${sessionId} while its queue was full`, {
+      sessionId,
+      dropped: entry.dropped,
+      action: 'webhook_opt_in_dropped',
+    });
   }
 
   private async fanOut(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {

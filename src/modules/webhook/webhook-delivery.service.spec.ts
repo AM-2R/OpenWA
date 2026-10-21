@@ -1780,6 +1780,38 @@ describe('WebhookDeliveryService', () => {
       expect(webhookQueue.add).toHaveBeenCalledWith('webhook-wh-named', expect.anything(), expect.anything());
     });
 
+    // One flush of receipts from a session, with the default dispatch settings: 500 are all enqueued, and of 2000
+    // the 4 that run and the 750 that wait are, the others being dropped and counted.
+    it.each([
+      [500, 500],
+      [2000, 754],
+    ])(
+      'enqueues %i receipts of one session in a tick as %i jobs, and counts the rest as dropped',
+      async (size, queued) => {
+        const queueService = await buildQueueService((key: string, def?: unknown) =>
+          key === 'queue.enabled' ? true : def,
+        );
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.receipt'] })]);
+        (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+        await Promise.all(
+          Array.from({ length: size }, (_, i) =>
+            queueService.dispatch('sess-1', 'message.receipt', {
+              id: 'OUT1',
+              participant: `${i}@c.us`,
+              status: 'read',
+            }),
+          ),
+        );
+
+        expect(webhookQueue.add).toHaveBeenCalledTimes(queued);
+        expect(outboxService.open).toHaveBeenCalledTimes(queued);
+        expect(insertedFailures).toEqual([]);
+        expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(size - queued);
+      },
+    );
+
     it('uses one direct POST for operator redrive even with the queue enabled', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) =>
         key === 'queue.enabled' ? true : def,
@@ -2823,15 +2855,19 @@ describe('WebhookDeliveryService', () => {
       await a;
     });
 
-    // An opt-in event fires once per recipient and status, so one flush of buffered receipts can be
-    // thousands of dispatches in a single tick. They must not spend the budget every session shares.
+    // An opt-in event fires once per recipient and status, so one flush of buffered receipts can be thousands of
+    // dispatches in a tick. Each session passes a stage of its own before the shared pool: a quarter of the
+    // dispatch concurrency of its events run at once, three quarters of WEBHOOK_DISPATCH_MAX_QUEUED more wait their
+    // turn, and the rest are dropped. The pool therefore never holds more than a session's running ones, which keeps
+    // a flood or a dead receiver of one session from shedding or holding back what another session sends.
     describe('a burst of opt-in events', () => {
+      type StageInternals = { optInStages: Map<string, unknown> };
       const receipt = (i: number) => ({ id: 'OUT1', participant: `${i}@c.us`, status: 'read' });
       const hangingReceipts: Array<() => void> = [];
       const warnSpy = () =>
         jest.spyOn((service as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn');
-      const burst = (size: number) =>
-        Array.from({ length: size }, (_, i) => service.dispatch('sess-r', 'message.receipt', receipt(i)));
+      const burst = (size: number, sessionId = 'sess-r') =>
+        Array.from({ length: size }, (_, i) => service.dispatch(sessionId, 'message.receipt', receipt(i)));
       // Answers the receipts' receiver until every dispatch has settled, parked ones included.
       const drain = async (dispatches: Array<Promise<void>>): Promise<void> => {
         let settled = false;
@@ -2844,48 +2880,65 @@ describe('WebhookDeliveryService', () => {
 
       beforeEach(() => {
         hangingReceipts.length = 0;
-        // 4 slots and a park bound of 8, so the opt-in allowance, a quarter of 8, is 2 events at a time.
-        internals().dispatchLimiter = new ConcurrencyLimiter(4, 8);
+        // 8 slots and a park bound of 8: a session's receipts run 2 at a time (a quarter of 8) and 6 more wait
+        // (three quarters of 8), so 8 of a burst are admitted.
+        internals().dispatchLimiter = new ConcurrencyLimiter(8, 8);
         internals().dispatchMaxQueued = 8;
         hooksBySession['sess-r'] = [
           createMockWebhook({ id: 'wh-r', url: 'https://receipt.example/hook', events: ['message.receipt'] }),
         ];
+        hooksBySession['sess-q'] = [
+          createMockWebhook({ id: 'wh-q', url: 'https://quiet.example/hook', events: ['message.receipt'] }),
+        ];
+        hooksBySession['sess-f'] = [
+          createMockWebhook({
+            id: 'wh-f',
+            url: 'https://failing.example/hook',
+            events: ['message.receipt'],
+            retryCount: 2,
+          }),
+        ];
         hooksBySession['sess-o'] = [
           createMockWebhook({ id: 'wh-o', url: 'https://other.example/hook', events: ['message.received'] }),
         ];
-        mockFetch.mockImplementation((url: string) =>
-          url.startsWith('https://receipt.')
-            ? new Promise(resolve => hangingReceipts.push(() => resolve({ ok: true, status: 200 })))
-            : Promise.resolve({ ok: true, status: 200 }),
-        );
+        mockFetch.mockImplementation((url: string) => {
+          if (url.startsWith('https://receipt.')) {
+            return new Promise(resolve => hangingReceipts.push(() => resolve({ ok: true, status: 200 })));
+          }
+          if (url.startsWith('https://failing.')) return Promise.reject(new Error('ECONNREFUSED'));
+          return Promise.resolve({ ok: true, status: 200 });
+        });
       });
 
-      it('leaves the shared dispatch budget to the other sessions and records no failure for the excess', async () => {
+      it('runs a quarter of the dispatch concurrency at once, queues three quarters of the park bound behind it, and drops the rest', async () => {
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
         const receipts = burst(14);
-        await settle(() => hangingReceipts.length > 1);
+        await settle(() => hangingReceipts.length > 2);
 
-        await service.dispatch('sess-o', 'message.received', {});
-
-        // The other session's event went out while the receipts were still waiting on their receiver.
-        expect(urlsCalled().filter(url => url.startsWith('https://other.'))).toHaveLength(1);
-        expect(insertedFailures).toEqual([]);
-        expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
-        // Only the admitted receipts and the other session's event ever opened an outbox row.
-        expect(outboxService.open).toHaveBeenCalledTimes(3);
+        // Only the running ones have read the webhooks and opened an outbox row; the queued ones cost nothing yet.
+        expect(hangingReceipts).toHaveLength(2);
+        expect(outboxService.open).toHaveBeenCalledTimes(2);
 
         await drain(receipts);
-        expect(outboxService.close).toHaveBeenCalledTimes(3);
+
+        expect(urlsCalled()).toHaveLength(8);
+        expect(outboxService.open).toHaveBeenCalledTimes(8);
+        expect(outboxService.close).toHaveBeenCalledTimes(8);
+        // A dropped event leaves no failure row, outbox row or hook call: it is only counted, and logged.
+        expect(insertedFailures).toEqual([]);
+        expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+        expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(6);
       });
 
-      it('warns when it starts dropping, and again with the count once the admitted events are done', async () => {
+      it('warns when a session starts dropping, and again with the count once its events are done', async () => {
         const warn = warnSpy();
         const receipts = burst(14);
-        await settle(() => hangingReceipts.length > 1);
+        await settle(() => hangingReceipts.length > 2);
 
         expect(warn).toHaveBeenCalledTimes(1);
         expect(warn).toHaveBeenCalledWith(
           expect.any(String),
-          expect.objectContaining({ action: 'webhook_opt_in_dropping' }),
+          expect.objectContaining({ action: 'webhook_opt_in_dropping', sessionId: 'sess-r' }),
         );
 
         await drain(receipts);
@@ -2893,20 +2946,96 @@ describe('WebhookDeliveryService', () => {
         expect(warn).toHaveBeenCalledTimes(2);
         expect(warn).toHaveBeenLastCalledWith(
           expect.any(String),
-          expect.objectContaining({ action: 'webhook_opt_in_dropped', dropped: 12 }),
+          expect.objectContaining({ action: 'webhook_opt_in_dropped', sessionId: 'sess-r', dropped: 6 }),
         );
       });
 
-      it('admits opt-in events again once the admitted ones are done, and warns again on the next burst', async () => {
+      it('drops and logs nothing for a burst its stage holds', async () => {
+        const warn = warnSpy();
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+        await drain(burst(8));
+
+        expect(urlsCalled()).toHaveLength(8);
+        expect(warn).not.toHaveBeenCalled();
+        expect(getWebhookDeliveryFailuresTotal()).toBe(dropsBefore);
+      });
+
+      it("leaves another session's ordinary events and receipts alone while one session holds its stage", async () => {
+        const receipts = burst(14);
+        await settle(() => hangingReceipts.length > 2);
+
+        // The receiver of sess-r never answers, and its stage is full.
+        await service.dispatch('sess-o', 'message.received', {});
+        await service.dispatch('sess-q', 'message.receipt', receipt(1));
+
+        expect(urlsCalled()).toEqual(
+          expect.arrayContaining(['https://other.example/hook', 'https://quiet.example/hook']),
+        );
+        expect(insertedFailures).toEqual([]);
+        expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+        await drain(receipts);
+      });
+
+      it("delivers another session's receipt while one session holds its stage with a receiver that keeps failing", async () => {
+        const failing = burst(14, 'sess-f');
+        let failingSettled = false;
+        void Promise.all(failing).then(() => (failingSettled = true));
+        await settle(() => urlsCalled().length > 0);
+
+        await service.dispatch('sess-q', 'message.receipt', receipt(1));
+
+        // It went out while the failing session was still working through its retries.
+        expect(urlsCalled()).toContain('https://quiet.example/hook');
+        expect(failingSettled).toBe(false);
+        await Promise.all(failing);
+      });
+
+      it('forgets a session once its events have settled, and counts the next burst afresh', async () => {
         const warn = warnSpy();
         for (let round = 0; round < 2; round++) {
-          const receipts = burst(5);
-          await settle(() => hangingReceipts.length > 1);
+          const receipts = burst(10);
+          await settle(() => hangingReceipts.length > 2);
           await drain(receipts);
+          expect((service as unknown as StageInternals).optInStages.size).toBe(0);
         }
 
-        expect(urlsCalled()).toHaveLength(4);
-        expect(warn.mock.calls.filter(([, meta]) => (meta as { dropped?: number }).dropped === 3)).toHaveLength(2);
+        expect(urlsCalled()).toHaveLength(16);
+        expect(warn.mock.calls.filter(([, meta]) => (meta as { dropped?: number }).dropped === 2)).toHaveLength(2);
+      });
+
+      it('keeps at least one place to run and one to wait however small the pool', async () => {
+        internals().dispatchLimiter = new ConcurrencyLimiter(1, 0);
+        internals().dispatchMaxQueued = 0;
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+        await drain(burst(3));
+
+        expect(urlsCalled()).toHaveLength(2);
+        expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(1);
+      });
+
+      it('drops the events still waiting at shutdown without counting or recording them', async () => {
+        (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number =>
+          key === 'webhook.shutdownDrainMs' ? 100 : key === 'queue.enabled' ? false : (def as T),
+        );
+        const warn = warnSpy();
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
+        const receipts = burst(14);
+        await settle(() => hangingReceipts.length > 2);
+
+        await service.onModuleDestroy();
+        await drain(receipts);
+
+        // The two that were running finish; the six that waited are gone, and only the six over the bound were
+        // counted and reported.
+        expect(urlsCalled()).toHaveLength(2);
+        expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(6);
+        expect(insertedFailures).toEqual([]);
+        expect(warn).toHaveBeenLastCalledWith(
+          expect.any(String),
+          expect.objectContaining({ action: 'webhook_opt_in_dropped', dropped: 6 }),
+        );
       });
 
       it('gives its place back when a dispatch throws', async () => {
@@ -2915,7 +3044,7 @@ describe('WebhookDeliveryService', () => {
           if (key === 'webhook.mediaInlineMaxBytes') throw new Error('config unavailable');
           return original(key) ?? def;
         });
-        await Promise.allSettled(burst(2));
+        await Promise.allSettled(burst(8));
         (configService.get as jest.Mock).mockImplementation(original);
 
         const receipts = burst(2);
@@ -2930,6 +3059,37 @@ describe('WebhookDeliveryService', () => {
 
         expect(urlsCalled()).toHaveLength(6);
         expect(insertedFailures).toEqual([]);
+      });
+
+      // The sizes an operator gets by default: a flush of 500 receipts is delivered in full, and a flush of 2000
+      // delivers the 4 that run and the 750 that wait.
+      describe('with the default dispatch settings', () => {
+        beforeEach(() => {
+          internals().dispatchLimiter = new ConcurrencyLimiter(16, 1000);
+          internals().dispatchMaxQueued = 1000;
+          mockFetch.mockResolvedValue({ ok: true, status: 200 });
+        });
+
+        it('delivers a flush of 500 receipts from one session in full', async () => {
+          const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+          await Promise.all(burst(500));
+
+          expect(urlsCalled()).toHaveLength(500);
+          expect(insertedFailures).toEqual([]);
+          expect(getWebhookDeliveryFailuresTotal()).toBe(dropsBefore);
+        });
+
+        it('delivers at least 750 of a flush of 2000 and counts every other one as dropped', async () => {
+          const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+          await Promise.all(burst(2000));
+
+          expect(urlsCalled()).toHaveLength(754);
+          expect(outboxService.open).toHaveBeenCalledTimes(754);
+          expect(insertedFailures).toEqual([]);
+          expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(2000 - 754);
+        });
       });
     });
   });
