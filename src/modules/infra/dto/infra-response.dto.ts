@@ -299,7 +299,7 @@ export class InfraConfigStorageDto {
   @ApiProperty({ example: false })
   builtIn!: boolean;
 
-  @ApiProperty({ example: './data/storage' })
+  @ApiProperty({ example: './data/media' })
   localPath!: string;
 
   @ApiProperty({ example: '' })

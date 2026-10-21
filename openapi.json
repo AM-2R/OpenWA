@@ -22330,7 +22330,7 @@
           },
           "localPath": {
             "type": "string",
-            "example": "./data/storage"
+            "example": "./data/media"
           },
           "s3Bucket": {
             "type": "string",
