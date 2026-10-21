@@ -3216,3 +3216,92 @@ test('a live sidebar row survives movement outside a paginated reconnect snapsho
   assert.equal(rtl.screen.getAllByText('Updated during paging').length, 1);
   assert.ok(rtl.screen.queryByLabelText('3 unread messages'));
 });
+
+// ── Reading position of a thread ─────────────────────────────────────────────
+
+const ROOM_HEIGHT = 600;
+
+/**
+ * Scroll geometry for every `.room-messages` the page mounts, clamped to the content as a browser clamps it. The
+ * room unmounts when a session switch closes its chat, so a shim on one element (makeScrollable) would arrive
+ * after the restore it is meant to see. Content height is the bubbles, as in makeScrollable.
+ */
+function installRoomGeometry(): () => void {
+  const proto = window.HTMLDivElement.prototype;
+  const inherited = Object.getOwnPropertyDescriptors(window.Element.prototype);
+  const tops = new WeakMap<Element, number>();
+  const isRoom = (el: Element): boolean => el.classList.contains('room-messages');
+  const contentHeight = (el: Element): number => el.querySelectorAll('.message-bubble').length * BUBBLE_PX;
+  const maxTop = (el: Element): number => Math.max(0, contentHeight(el) - ROOM_HEIGHT);
+  Object.defineProperties(proto, {
+    scrollHeight: {
+      configurable: true,
+      get(this: Element) {
+        return isRoom(this) ? contentHeight(this) : inherited.scrollHeight.get!.call(this);
+      },
+    },
+    clientHeight: {
+      configurable: true,
+      get(this: Element) {
+        return isRoom(this) ? ROOM_HEIGHT : inherited.clientHeight.get!.call(this);
+      },
+    },
+    scrollTop: {
+      configurable: true,
+      get(this: Element) {
+        return isRoom(this) ? Math.min(tops.get(this) ?? 0, maxTop(this)) : inherited.scrollTop.get!.call(this);
+      },
+      set(this: Element, value: number) {
+        if (isRoom(this)) tops.set(this, Math.max(0, Math.min(value, maxTop(this))));
+        else inherited.scrollTop.set!.call(this, value);
+      },
+    },
+  });
+  return () => {
+    for (const key of ['scrollHeight', 'clientHeight', 'scrollTop'] as const) {
+      delete (proto as unknown as Record<string, unknown>)[key];
+    }
+  };
+}
+
+test('a chat opened in another session starts at its newest message, not at the offset left in the first', async () => {
+  const { screen, fireEvent, within } = rtl;
+  twoSessions = true;
+  // Session 2 lists Carol too, a contact both accounts share.
+  chatsResponder = sessionId =>
+    Promise.resolve(
+      jsonResponse(sessionId === SESSION.id ? [CHAT, CHAT_2] : [CHAT, { ...CHAT_2, lastMessage: 'carol on two' }]),
+    );
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+    assert.equal(thread.scrollTop, thread.scrollHeight - thread.clientHeight, 'a first visit did not open at the end');
+
+    thread.scrollTop = 900; // the reader goes back through Carol's history in the first session
+    fireEvent.scroll(thread);
+
+    const selector = container.querySelector('select.session-selector') as HTMLSelectElement;
+    fireEvent.change(selector, { target: { value: SESSION_2.id } });
+    await screen.findByText('carol on two');
+    fireEvent.click(screen.getByText('Carol'));
+    const second = container.querySelector('.room-messages') as HTMLElement;
+    await within(second).findByText('paged message 119');
+    assert.equal(
+      second.scrollTop,
+      second.scrollHeight - second.clientHeight,
+      "Carol opened in the second session at the offset left in the first session's thread",
+    );
+
+    // The first session's own position is still there when the reader comes back to it.
+    fireEvent.change(selector, { target: { value: SESSION.id } });
+    await screen.findByText('hello from carol');
+    fireEvent.click(screen.getByText('Carol'));
+    const back = container.querySelector('.room-messages') as HTMLElement;
+    await within(back).findByText('paged message 119');
+    assert.equal(back.scrollTop, 900, "the first session's position was lost");
+  } finally {
+    restoreGeometry();
+    twoSessions = false;
+  }
+});

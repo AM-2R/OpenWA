@@ -343,13 +343,19 @@ export function Chats() {
   // chat has any message (doesn't toggle per append) and covers both the
   // first-fetch resolution and a WS-driven first message on a previously-empty
   // chat. `loadingMessages` alone would miss the latter case.
+  // The position is kept per thread, so the key carries the session: a group both numbers belong to has one chat
+  // id and two threads, and the offset read in one is not a place in the other.
   const {
     containerRef: messagesContainerRef,
     onMessageAppended,
     onMediaLoad,
     measureMedia,
     onOlderMessagesRequested,
-  } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0, loadingOlderMessages);
+  } = useChatScrollPosition(
+    activeChat ? `${selectedSessionId}:${activeChat.id}` : null,
+    messages.length > 0,
+    loadingOlderMessages,
+  );
 
   const handleLoadOlderMessages = useCallback(() => {
     onOlderMessagesRequested();
@@ -1104,9 +1110,9 @@ export function Chats() {
 
   // Side effects when the active chat changes: mark-as-read on the gateway + clear sidebar unread badge.
   // The message-history fetch is driven by useChatMessages; scroll restoration is driven by
-  // useChatScrollPosition (both keyed off activeChat?.id). Deliberately keying off `activeChat?.id`
-  // (not the whole object) so a sidebar reshuffle that mutates the activeChat instance doesn't re-fire
-  // the mark-as-read RPC for the same chat.
+  // useChatScrollPosition (both keyed off activeChat?.id, the latter with the session too). Deliberately keying
+  // off `activeChat?.id` (not the whole object) so a sidebar reshuffle that mutates the activeChat instance
+  // doesn't re-fire the mark-as-read RPC for the same chat.
   useEffect(() => {
     if (!activeChat) return;
     // Opening a chat is what reads it again after Mark as unread.

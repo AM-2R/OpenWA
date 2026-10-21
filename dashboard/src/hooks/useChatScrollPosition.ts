@@ -69,7 +69,8 @@ export function decideRestoreTarget(
  * div in Chats.tsx). The Map of saved positions lives in a ref so it doesn't
  * trigger renders and is garbage-collected when the host component unmounts. A chat the
  * reader left at the bottom has no entry (it reopens at its newest message), however
- * much arrived after their last scroll.
+ * much arrived after their last scroll. The key names a thread, not just a chat: the
+ * caller puts the session into it, since one chat id can have a thread in two sessions.
  */
 
 /** Distance from the bottom (px) within which the user still counts as "at the bottom". */
