@@ -27,7 +27,7 @@ import { SendPacingService } from '../message/send-pacing.service';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { captureSessionWrites } from '../../common/utils/session-write-scope';
+import { captureSessionWrites, closeSessionWrites } from '../../common/utils/session-write-scope';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -276,6 +276,48 @@ describe('Session content lifetime', () => {
     await seed;
     expect(await db.getRepository(StatusUpdate).count()).toBe(0);
   });
+
+  it('stops the status seed at the first item after its session is retired', async () => {
+    const session = await createSession();
+    const id = session.id;
+    const history = Array.from({ length: 200 }, (_, index) => ({
+      id: `story-${index}`,
+      isStatusBroadcast: true,
+      author: '10000000001@c.us',
+      from: 'status@broadcast',
+      fromMe: false,
+      type: 'text',
+      body: `story ${index}`,
+      timestamp: Math.floor(Date.now() / 1000),
+    }));
+    const engine = {
+      getChatHistory: () => Promise.resolve(history),
+      getContactById: jest.fn().mockResolvedValue(null),
+    };
+    const store = new StatusStoreService(db.getRepository(StatusUpdate), {} as StorageService, config);
+    const ingest = store.ingest.bind(store);
+    let deletion: ReturnType<typeof closeSessionWrites> | undefined;
+    const ingested = jest.spyOn(store, 'ingest').mockImplementation(async (...args) => {
+      const stored = await ingest(...args);
+      deletion ??= closeSessionWrites(db, id);
+      return stored;
+    });
+    const warn = jest.fn();
+    const leaf = new SessionEngineLeafEvents({
+      sessionRepository: db.getRepository(Session),
+      statusStore: store,
+      configService: config,
+      logger: { ...logger, warn },
+    } as unknown as ConstructorParameters<typeof SessionEngineLeafEvents>[0]);
+
+    await leaf.seedStatuses(id, engine as unknown as IWhatsAppEngine);
+    deletion?.release();
+
+    expect(ingested).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(await db.getRepository(StatusUpdate).count()).toBe(1);
+  });
+
   it('refuses a pre-send continuation after the session id was replaced', async () => {
     const session = await createSession();
     const id = session.id;
