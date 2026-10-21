@@ -769,3 +769,26 @@ test('mergeDeliveryStatus: a late lower tick never downgrades the shown one, and
   assert.equal(mergeDeliveryStatus('sent', 'failed'), 'failed');
   assert.equal(mergeDeliveryStatus('failed', 'read'), 'failed');
 });
+
+test('applyMessageEdit marks the message and preserves reactions and media', () => {
+  const metadata = { reactions: { alice: '👍' }, media: { mimetype: 'image/jpeg', data: 'test' } };
+  const before = [msg({ id: 'edited', metadata })];
+  const after = applyMessageEdit(before, { messageId: 'edited', body: 'new caption' });
+  assert.deepEqual(after[0].metadata, { ...metadata, edited: true });
+  assert.deepEqual(before[0].metadata, metadata);
+});
+
+test('applyMessageEdit cannot mark or restore a revoked message', () => {
+  const before = [msg({ id: 'revoked', type: 'revoked', body: '' })];
+  assert.equal(applyMessageEdit(before, { messageId: 'revoked', body: 'late edit' }), before);
+});
+
+test('a later message echo preserves the edited marker', () => {
+  const before = [msg({ id: 'edited', waMessageId: 'edited', metadata: { edited: true } })];
+  const after = mergeOrAppend(
+    before,
+    msg({ id: 'edited', waMessageId: 'edited', metadata: { reactions: { alice: '👍' } } }),
+  );
+  assert.equal(after[0].metadata?.edited, true);
+  assert.deepEqual(after[0].metadata?.reactions, { alice: '👍' });
+});

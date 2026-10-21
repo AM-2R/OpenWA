@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Show a localized edited indicator in Chats for observed message edits, including after a reload (#1905).
+
 - Keep deleted sessions free of late message, status and bulk writes.
 - Retain sending limits while hooks or preparation are pending, including across UTC midnight.
 - Preserve whatsapp-web.js readiness when an earlier QR render completes.

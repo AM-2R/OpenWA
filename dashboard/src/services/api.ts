@@ -329,6 +329,8 @@ export interface ChatMessage {
     };
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    /** The gateway observed an edit of this message. */
+    edited?: boolean;
     call?: { video: boolean; missed: boolean };
     /** Business prompt choices (Baileys). Present on inbound prompts that offer buttons. */
     buttons?: Array<{ id: string; text: string }>;

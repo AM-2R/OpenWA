@@ -72,6 +72,7 @@
     "logs": "로그"
   },
   "chats": {
+    "edited": "수정됨",
     "media": {
       "location": "위치",
       "call": "통화",

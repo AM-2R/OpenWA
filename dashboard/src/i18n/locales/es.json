@@ -74,6 +74,7 @@
     "templates": "Plantillas"
   },
   "chats": {
+    "edited": "Editado",
     "media": {
       "location": "Ubicación",
       "call": "Llamada",
