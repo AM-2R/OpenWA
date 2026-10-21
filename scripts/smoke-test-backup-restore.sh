@@ -68,17 +68,18 @@
 #       staging copy is removed after a backup that succeeds and one that fails
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
-#   (am) restore refuses an OPENWA_DATA_DIR that is . or .., /, the working directory, a parent of it, a
-#       link to it or the home directory, before it reads the archive (the / case is skipped where a
-#       user can write /)
-#   (an) restore refuses to empty a state dir that is ., /, a link to /, the working directory, the data
-#       dir, the home directory or a directory around the workspace or the data dir, before anything is
-#       written (the / cases are skipped where a user can write /)
-#   (ao) restore refuses an archive member named ../x, a/../x or /x before it extracts anything
+#   (am) restore refuses an OPENWA_DATA_DIR that is ., ./, .., ../, /, the working directory, a parent of
+#       it, a link to it or the home directory, before it reads the archive (the / case is skipped
+#       where a user can write /)
+#   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to /, the working
+#       directory, the data dir, the home directory or a directory around the workspace or the data
+#       dir, before anything is written (the / cases are skipped where a user can write /)
+#   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
-#   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, and an external
-#       database's are kept in its snapshot
+#   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, beside the file a
+#       link points at and beside the link's own name, and an external database's are kept in its
+#       snapshot
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2351,15 +2352,25 @@ ARCHIVE_AM="$(ls "$AM"/out/openwa-backup-*.tar.gz)"
 printf 'am-keep\n' >"$AM/work/keep.txt"
 ln -s work "$AM/alias"
 AM_WORKSPACE='must not be the workspace or one of its parent directories'
-refused_restore "$AM" "am: ." 'refusing unsafe OPENWA_DATA_DIR target: .' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=.
-refused_restore "$AM" "am: .." 'refusing unsafe OPENWA_DATA_DIR target: ..' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=..
-refused_restore "$AM" "am: working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/work"
-refused_restore "$AM" "am: parent of the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM"
-refused_restore "$AM" "am: link to the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/alias"
-refused_restore "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
-pass "(am) an OPENWA_DATA_DIR that is ., .., the workspace, a parent of it, a link to it or the home directory is refused"
+# am_refused: a refused_restore that must also stop before the archive is read, which restore.sh says in
+# its first line of progress.
+am_refused() {
+  refused_restore "$@"
+  if printf '%s' "$OUT" | grep -q 'Extracting'; then
+    fail "($2) the restore read the archive before it refused: $OUT"
+  fi
+}
+am_refused "$AM" "am: ." 'refusing unsafe OPENWA_DATA_DIR target: .' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=.
+am_refused "$AM" "am: ./" 'refusing unsafe OPENWA_DATA_DIR target: ./' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=./
+am_refused "$AM" "am: .." 'refusing unsafe OPENWA_DATA_DIR target: ..' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=..
+am_refused "$AM" "am: ../" 'refusing unsafe OPENWA_DATA_DIR target: ../' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=../
+am_refused "$AM" "am: working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/work"
+am_refused "$AM" "am: parent of the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM"
+am_refused "$AM" "am: link to the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/alias"
+am_refused "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
+pass "(am) an OPENWA_DATA_DIR that is ., ./, .., ../, the workspace, a parent of it, a link to it or the home directory is refused"
 if [ "$ROOT_SAFE" -eq 1 ]; then
-  refused_restore "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
+  am_refused "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
   pass "(am) / is refused as OPENWA_DATA_DIR"
 else
   echo "SKIP: (am) the / case, which needs a user who cannot write /"
@@ -2369,8 +2380,8 @@ echo ""
 echo "==> (an) restore refuses to empty a broad state directory, before anything is written"
 # A state dir is emptied before it is refilled. One setting that names the working directory, the data
 # dir, the home directory or a directory around the workspace or the data dir would take unrelated
-# files with it, so the snapshot pass refuses each. The checks overlap, so each case pins the message
-# of its own check: a check that was deleted would otherwise be covered by its neighbour.
+# files with it, so the snapshot pass refuses each. The checks overlap, so each case pins the message of
+# its own check: a check that was deleted would otherwise be covered by its neighbour.
 AN="$WORK/an"
 mkdir -p "$AN/work/data" "$AN/home" "$AN/vol/data"
 for keep in "$AN/work" "$AN/work/data" "$AN/home" "$AN/vol/data"; do
@@ -2384,9 +2395,11 @@ refused_restore "$AN" "an: around the workspace" 'whatsapp-web.js sessions targe
   "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN"
 refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target that contains the data directory' \
   "$AN/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AN/vol/data" SESSION_DATA_PATH="$AN/vol"
-refused_restore "$AN" "an: ." 'refusing to replace unsafe whatsapp-web.js sessions target: .' \
-  "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=.
-pass "(an) a state dir that is ., the workspace, the data dir, the home directory or around the workspace or the data dir is refused"
+AN_UNSAFE='refusing to replace unsafe whatsapp-web.js sessions target'
+for literal in . ./ .. ../; do
+  refused_restore "$AN" "an: $literal" "$AN_UNSAFE: $literal" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$literal"
+done
+pass "(an) a state dir that is ., ./, .., ../, the workspace, the data dir, the home directory or around the workspace or the data dir is refused"
 if [ "$ROOT_SAFE" -eq 1 ]; then
   refused_restore "$AN" "an: /" 'refusing to replace unsafe whatsapp-web.js sessions target: /' \
     "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=/
@@ -2417,10 +2430,18 @@ printf 'ao-abs\n' >"$AO/abs/member.txt"
   tar -czPf "$AO/inner.tar.gz" . a/../b.txt
   tar -czPf "$AO/abs.tar.gz" . "$AO/abs/member.txt"
 )
+# A file cannot be named a/.. on disk, and a directory of that name is listed as a/../, so rename one
+# while archiving. GNU tar spells that --transform and bsdtar -s, and each refuses the other's flag.
+tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" --transform 's,^b\.txt$,a/..,' b.txt 2>/dev/null ||
+  tar -czPf "$AO/dotdot-end.tar.gz" -C "$AO/stage" -s ',^b\.txt$,a/..,' b.txt
+if ! tar -tzf "$AO/dotdot-end.tar.gz" 2>/dev/null | grep -qx 'a/\.\.'; then
+  fail "(ao) could not build an archive with a member named a/.."
+fi
 refused_restore "$AO" "ao: ../x" 'unsafe path in backup archive: ../escape.txt' "$AO/work" "$AO/dotdot.tar.gz"
 refused_restore "$AO" "ao: a/../x" 'unsafe path in backup archive: a/../b.txt' "$AO/work" "$AO/inner.tar.gz"
+refused_restore "$AO" "ao: a/.." 'unsafe path in backup archive: a/..' "$AO/work" "$AO/dotdot-end.tar.gz"
 refused_restore "$AO" "ao: /x" "unsafe path in backup archive: $AO/abs/member.txt" "$AO/work" "$AO/abs.tar.gz"
-pass "(ao) an archive member named ../x, a/../x or /x is refused from the listing"
+pass "(ao) an archive member named ../x, a/../x, a/.. or /x is refused from the listing"
 
 echo ""
 echo "==> (ap) a restore over files other users can read leaves them at mode 600"
@@ -2466,7 +2487,8 @@ echo "==> (aq) every sidecar of a replaced database goes, and an external databa
 # must not outlive the restore: a hot journal would roll the restored file back to the old rows. (q) holds
 # a real -wal; these are plain files, which is all the clean-up looks at. The snapshot has to keep them
 # for the same reason, or restoring it back would lose the rollback they carry. The external database
-# is a link, so its sidecars sit beside the file it points at, where SQLite names them.
+# is a link, so its sidecars sit beside the file it points at, where SQLite names them. A leftover under
+# the link's own name goes too.
 AQ="$WORK/aq"
 mkdir -p "$AQ/src/data" "$AQ/live/data" "$AQ/ext" "$AQ/real"
 make_fixture "$AQ/src/data/main.sqlite" "aq-archive-main"
@@ -2484,11 +2506,14 @@ for db in "$AQ/real/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
     printf 'aq-stale%s\n' "$sfx" >"$db$sfx"
   done
 done
+for sfx in -wal -shm -journal; do
+  printf 'aq-beside-link%s\n' "$sfx" >"$AQ/ext/auth.sqlite$sfx"
+done
 (
   cd "$AQ/live"
   MAIN_DATABASE_NAME="$AQ/ext/auth.sqlite" "$RESTORE" "$ARCHIVE_AQ" --force >/dev/null
 )
-for db in "$AQ/real/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
+for db in "$AQ/real/auth.sqlite" "$AQ/ext/auth.sqlite" "$AQ/live/data/openwa.sqlite"; do
   for sfx in -wal -shm -journal; do
     if [ -e "$db$sfx" ]; then
       fail "(aq) the old install's $(basename "$db")$sfx survived the restore"
