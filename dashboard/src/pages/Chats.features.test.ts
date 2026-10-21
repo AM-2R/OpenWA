@@ -2,7 +2,7 @@
 // filters, the new-chat panel, and the chat row actions with their dialogs, each with its wire effect. The page is wrapped in the providers
 // App.tsx uses and the backend is stubbed at the fetch layer; runs under the bare `node --test` runner.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
@@ -1467,6 +1467,41 @@ test("the open room's menu follows the chat list when a reload brings a change m
   fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
   const menu = container.querySelector('.room-menu-popover') as HTMLElement;
   assert.ok(within(menu).getByRole('button', { name: 'Unpin chat' }), 'the room menu kept offering Pin chat');
+});
+
+// The Clipboard API is missing over plain HTTP on a LAN address (and in jsdom); the house helper falls back to a
+// hidden textarea and execCommand.
+async function copyChatIdWith(t: TestContext, copied: boolean): Promise<ReturnType<typeof t.mock.fn>> {
+  const { screen, fireEvent, waitFor } = rtl;
+  const copy = t.mock.fn(() => copied);
+  const hadExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  Object.defineProperty(document, 'execCommand', { value: copy, configurable: true, writable: true });
+  t.after(() => {
+    if (hadExecCommand) Object.defineProperty(document, 'execCommand', hadExecCommand);
+    else delete (document as unknown as Record<string, unknown>).execCommand;
+  });
+  assert.equal(navigator.clipboard, undefined);
+
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  fireEvent.click(screen.getByRole('button', { name: 'Copy chat ID' }));
+  return copy;
+}
+
+test('Copy chat ID works where navigator.clipboard does not exist', async t => {
+  const copy = await copyChatIdWith(t, true);
+  await rtl.screen.findByText('Chat ID copied');
+  assert.equal(copy.mock.callCount(), 1);
+  assert.ok(!rtl.screen.queryByText('Could not copy to clipboard'));
+});
+
+test('Copy chat ID says so when the copy did not happen', async t => {
+  const copy = await copyChatIdWith(t, false);
+  await rtl.screen.findByText('Could not copy to clipboard');
+  assert.equal(copy.mock.callCount(), 1);
+  assert.ok(!rtl.screen.queryByText('Chat ID copied'));
 });
 
 test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {

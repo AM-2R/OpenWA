@@ -74,6 +74,7 @@ import { useContactStatuses } from '../hooks/useContactStatuses';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import { createTrailingCoalescer } from '../utils/trailingCoalescer';
 import { createReloadCoalescer, type ReloadCoalescer } from '../utils/reloadCoalescer';
+import { copyToClipboard } from '../utils/clipboard';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import KindIcon from '../components/chats/KindIcon';
@@ -1456,12 +1457,9 @@ export function Chats() {
   const handleCopyChatId = async () => {
     if (!activeChat) return;
     closeRoomMenu();
-    try {
-      await navigator.clipboard.writeText(activeChat.id);
-      showSuccessToast(t('chats.chatIdCopied'));
-    } catch (err) {
-      showErrorToast(t('chats.copyFailed'), err instanceof Error ? err.message : undefined);
-    }
+    // The house helper: over plain HTTP on a LAN address navigator.clipboard does not exist.
+    if (await copyToClipboard(activeChat.id)) showSuccessToast(t('chats.chatIdCopied'));
+    else showErrorToast(t('chats.copyFailed'));
   };
 
   // The overflow menu closes on a press outside it, on Escape, and with the chat it belongs to. Escape
