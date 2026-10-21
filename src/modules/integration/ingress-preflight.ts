@@ -14,6 +14,23 @@ export type PreflightRejection = { status: number; body: string; headers?: Recor
 const PREFLIGHT_RETRY_AFTER_SECONDS = 5;
 
 /**
+ * A refusal the provider is told to retry. Attached per rejection, not to every one: a future
+ * non-retryable check must not inherit a header that tells the provider to come back.
+ */
+const retryable503 = (body: string): PreflightRejection => ({
+  status: 503,
+  body,
+  headers: { 'Retry-After': String(PREFLIGHT_RETRY_AFTER_SECONDS) },
+});
+
+/**
+ * The refusal for a delivery whose plugin the boot restore has not finished with. No worker can take it
+ * yet, so an ack would only dead-letter it after the retry budget, and the provider would never send it
+ * again. IngressService answers it in the same stage as the preflight, so it leaves no dedup row either.
+ */
+export const pluginRestoringRejection = (): PreflightRejection => retryable503('plugin restoring');
+
+/**
  * Evaluates a route's host-side preflight checks. Returns null to PASS (proceed to dedup + ack + enqueue),
  * or a `{status, body}` to REJECT synchronously. Runs AFTER signature verify and BEFORE the dedup persist
  * (see IngressService.handle) — a rejection therefore writes no dedup row, so a provider retry on the 5xx
@@ -35,15 +52,7 @@ export function evaluatePreflight(
       if (!sessionScope || sessionScope === '*') continue; // wildcard: no single session to probe
       if (!sessionStatus) continue; // unwired (pure unit mode): skip rather than false-reject
       const status = sessionStatus(sessionScope);
-      if (status === undefined || status === EngineStatus.FAILED) {
-        // Attached at the return site, not to every rejection: a future non-retryable check must not
-        // inherit a header that tells the provider to come back.
-        return {
-          status: 503,
-          body: 'session not ready',
-          headers: { 'Retry-After': String(PREFLIGHT_RETRY_AFTER_SECONDS) },
-        };
-      }
+      if (status === undefined || status === EngineStatus.FAILED) return retryable503('session not ready');
     }
   }
   return null;

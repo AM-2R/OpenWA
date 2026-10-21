@@ -93,6 +93,9 @@ if (process.env.QUEUE_ENABLED === 'true') {
           // MUST stay cheap — never call engine.initialize() here (that is the slow/blocking path bounded
           // separately by the #667/#696 init-timeout). Undefined = no live engine (stopped/deleted).
           sessionStatus: (scope: string) => registry.get(scope)?.getStatus(),
+          // A plugin the boot restore has not reached has no worker to take a delivery: the door answers a
+          // retryable 503 before persisting it, as the port did by staying closed until the restore was done.
+          restorePending: (pluginId: string) => loader.isRestorePending(pluginId),
           // Audit sink for preflight rejections (they leave no dedup/DLQ row). The Prometheus counter is
           // a separate follow-up (see plan notes); the structured log is the MVP audit surface.
           log: (event, meta) => ingressLogger.warn(event, meta),

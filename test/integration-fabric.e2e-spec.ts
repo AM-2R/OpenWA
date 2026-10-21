@@ -169,6 +169,39 @@ describe('Integration Fabric ingress (e2e)', () => {
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
   });
 
+  it('refuses 503 with Retry-After and stores nothing while the plugin restore is pending, then accepts the retry', async () => {
+    const eventRepo = app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data'));
+    const failureRepo = app.get<Repository<IntegrationDeliveryFailure>>(
+      getRepositoryToken(IntegrationDeliveryFailure, 'data'),
+    );
+    const post = () =>
+      request(app.getHttpServer())
+        .post(INGRESS_PATH)
+        .set('X-Chatwoot-Signature', sig)
+        .set('X-Chatwoot-Delivery', 'delivery-restoring-1')
+        .set('Content-Type', 'application/json')
+        .send(raw);
+    const restoring = jest.spyOn(app.get(PluginLoaderService), 'isRestorePending').mockReturnValue(true);
+
+    try {
+      const refused = await post();
+
+      expect(refused.status).toBe(503);
+      expect(refused.headers['retry-after']).toBe('5');
+      expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+      // A stored row would answer the provider's retry with a 'duplicate' ack and lose the delivery.
+      expect(await eventRepo.countBy({ providerDeliveryId: 'delivery-restoring-1' })).toBe(0);
+      expect(await failureRepo.countBy({ deliveryId: 'delivery-restoring-1' })).toBe(0);
+    } finally {
+      restoring.mockRestore();
+    }
+
+    const retried = await post();
+
+    expect(retried.status).toBe(202);
+    expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+  });
+
   it('marks the persisted event dispatched once a successful inline dispatch is recorded', async () => {
     const eventRepo = app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data'));
     const res = await request(app.getHttpServer())

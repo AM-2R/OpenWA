@@ -729,6 +729,62 @@ describe('IngressService.handle — response contract', () => {
     expect(d.enqueue).toHaveBeenCalled();
   });
 
+  // While the boot restore is still bringing a plugin up, no worker can take its delivery: an ack would
+  // only dead-letter it once the retry budget is spent, and the provider would never send it again.
+  describe('a plugin that is still being restored after boot', () => {
+    it('refuses 503 with Retry-After BEFORE dedup or enqueue, so the retry is not swallowed as a duplicate', async () => {
+      const restorePending = jest.fn().mockReturnValue(true);
+      const d = depsWith({ restorePending });
+
+      const res = await new IngressService(d).handle(baseReq);
+
+      expect(res).toEqual({ status: 503, body: 'plugin restoring', headers: { 'Retry-After': '5' } });
+      expect(restorePending).toHaveBeenCalledWith('p');
+      expect(d.events.recordOrSkip).not.toHaveBeenCalled();
+      expect(d.enqueue).not.toHaveBeenCalled();
+      expect(d.log).toHaveBeenCalledWith(
+        'ingress_preflight_rejected',
+        expect.objectContaining({ status: 503, reason: 'plugin restoring', route: 'send-sms' }),
+      );
+    });
+
+    it('accepts the delivery once the restore is done with the plugin', async () => {
+      const restorePending = jest.fn().mockReturnValue(false);
+      const d = depsWith({ restorePending });
+
+      const res = await new IngressService(d).handle(baseReq);
+
+      expect(res.status).toBe(202);
+      expect(d.events.recordOrSkip).toHaveBeenCalledTimes(1);
+      expect(d.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('still answers a failed signature with 401, so an unauthenticated caller learns nothing', async () => {
+      const d = depsWith({
+        restorePending: jest.fn().mockReturnValue(true),
+        manifestRoute: jest.fn().mockReturnValue({
+          route: 'send-sms',
+          maxBodyBytes: 1024,
+          signature: { scheme: 'hmac-sha256', header: 'x-sig' },
+        }),
+      });
+
+      const res = await new IngressService(d).handle({ ...baseReq, headers: { 'x-sig': 'sha256=bad' } });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('charges the bucket before it refuses, so a signed provider that keeps retrying is still bounded', async () => {
+      const admitInstance = jest.fn().mockResolvedValue({ ok: false, headers: { 'Retry-After': '7' } });
+      const d = depsWith({ restorePending: jest.fn().mockReturnValue(true), admitInstance });
+
+      const res = await new IngressService(d).handle(baseReq);
+
+      expect(res.status).toBe(429);
+      expect(admitInstance).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('renders a declared ack status/body/headers', async () => {
     const d = depsWith({
       manifestRoute: jest.fn().mockReturnValue({

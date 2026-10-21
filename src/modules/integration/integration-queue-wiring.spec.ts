@@ -190,4 +190,27 @@ describe('IntegrationModule queue wiring (QUEUE_ENABLED conditional)', () => {
       await moduleRef.close();
     }
   });
+
+  // The ingress door refuses a delivery for a plugin the boot restore has not finished with. The
+  // refusal is a dependency of the pure pipeline, so only the real graph can show it is connected.
+  it('hands IngressService the restore state of the real plugin loader', async () => {
+    const { moduleRef } = await compileIntegrationModule('false');
+    try {
+      /* eslint-disable @typescript-eslint/no-require-imports */
+      const { IngressService } = require('./ingress.service') as typeof import('./ingress.service');
+      const { PluginLoaderService } =
+        require('../../core/plugins/plugin-loader.service') as typeof import('../../core/plugins/plugin-loader.service');
+      /* eslint-enable @typescript-eslint/no-require-imports */
+      const ingress = moduleRef.get(IngressService, { strict: false });
+      const loader = moduleRef.get(PluginLoaderService, { strict: false });
+      const { restorePending } = (ingress as unknown as { deps: { restorePending?: (id: string) => boolean } }).deps;
+
+      expect(restorePending?.('adapter')).toBe(false);
+      (loader as unknown as { restorePending: Set<string> }).restorePending.add('adapter');
+      expect(restorePending?.('adapter')).toBe(true);
+      expect(restorePending?.('other')).toBe(false);
+    } finally {
+      await moduleRef.close();
+    }
+  });
 });
