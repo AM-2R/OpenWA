@@ -72,6 +72,8 @@ let groupAdmin = true;
 let groupName = GROUP.name;
 let groupDescription = 'old description';
 let bobIsAdmin = false;
+// When true, GROUP also lists a member WhatsApp knows by a privacy id only, which carries no phone number.
+let groupHasLidMember = false;
 // When true, a membership write answers HTTP 200 with its participants refused in `results`, as the route does
 // for a batch WhatsApp turns down in part.
 let refuseMember = false;
@@ -160,6 +162,9 @@ function installFetchStub(): void {
           participants: [
             { id: `${SESSION.phone}@c.us`, number: SESSION.phone, isAdmin: groupAdmin, isSuperAdmin: false },
             { id: '15550002222@c.us', number: '15550002222', name: 'Bob', isAdmin: bobIsAdmin, isSuperAdmin: false },
+            ...(groupHasLidMember
+              ? [{ id: '262813461250071@lid', number: '262813461250071', isAdmin: false, isSuperAdmin: false }]
+              : []),
           ],
         }),
       );
@@ -283,6 +288,7 @@ afterEach(async () => {
   groupName = GROUP.name;
   groupDescription = 'old description';
   bobIsAdmin = false;
+  groupHasLidMember = false;
   refuseMember = false;
   blockedIds = [];
   window.sessionStorage.setItem('openwa_user_role', 'admin');
@@ -568,6 +574,20 @@ test('a group picture saved in the group dialog replaces the one on the sidebar 
     URL.createObjectURL = objectUrls.create;
     URL.revokeObjectURL = objectUrls.revoke;
   }
+});
+
+test('a member known only by a privacy id is not shown as a phone number', async () => {
+  const { fireEvent, within } = rtl;
+  listGroup = true;
+  groupHasLidMember = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+
+  const names = Array.from(dialog.querySelectorAll('.group-info-member .name')).map(name => name.textContent);
+  // The digits of a privacy id are no phone number, so they are shown as they are and never grouped like one.
+  assert.deepEqual(names, ['You', 'Bob', '262813461250071']);
+  assert.ok(!(dialog.textContent ?? '').includes('+262'), 'a privacy id was formatted as an international number');
 });
 
 test('a participant the gateway refuses is reported although the write answered 200', async () => {

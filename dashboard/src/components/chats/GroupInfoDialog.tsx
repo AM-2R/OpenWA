@@ -344,15 +344,17 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
           <ul className="group-info-list">
             {info.participants.map(p => {
               const own = isOwnAccount(p, session);
-              const label = own ? t('chats.you') : p.name || formatPhoneForDisplay(p.number) || p.number;
+              // Formatted from the id, not from `number`: a privacy id (@lid) has digits too, and they are no phone.
+              const phone = formatPhoneForDisplay(p.id);
+              const label = own ? t('chats.you') : p.name || phone || p.number;
               return (
                 <li key={p.id}>
                   <ChatAvatar kind="individual" />
                   <span className="group-info-member">
                     <bdi className="name">{label}</bdi>
-                    {p.name && (
+                    {p.name && phone && (
                       <bdi className="number" dir="ltr">
-                        {formatPhoneForDisplay(p.number) ?? p.number}
+                        {phone}
                       </bdi>
                     )}
                   </span>
