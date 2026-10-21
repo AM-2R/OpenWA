@@ -355,9 +355,9 @@ describe('IngressProcessor while the plugin is still being restored', () => {
     expect(moveToDelayed).toHaveBeenCalledTimes(1);
     const [when, token] = moveToDelayed.mock.calls[0] as [number, string];
     expect(token).toBe('tok-1');
-    // The retry delay (5 s by default) plus up to as much again of jitter.
-    expect(when - before).toBeGreaterThanOrEqual(5000);
-    expect(when - Date.now()).toBeLessThan(10_000);
+    // The retry delay, 5 s by default, with nothing added to it.
+    expect(when).toBeGreaterThanOrEqual(before + 5000);
+    expect(when).toBeLessThanOrEqual(Date.now() + 5000);
     expect(loader.dispatchWebhookForInstance).not.toHaveBeenCalled();
     expect(failures.save).not.toHaveBeenCalled();
     expect(hooks.execute).not.toHaveBeenCalled();
@@ -378,6 +378,51 @@ describe('IngressProcessor while the plugin is still being restored', () => {
       if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
       else process.env.INGRESS_RETRY_DELAY_MS = original;
     }
+  });
+
+  // BullMQ promotes delayed jobs in order of their due time, so jobs held for the same length of time come back in
+  // the order they were held. A random addition to each delay would put two deliveries of one conversation in a
+  // random order once the restore is over.
+  it('brings the jobs of one conversation back in the order they were held, whatever the random draw', async () => {
+    let restoring = true;
+    const dispatched: string[] = [];
+    const loader = {
+      isRestorePending: jest.fn(() => restoring),
+      dispatchWebhookForInstance: jest.fn((d: { deliveryId: string }) => {
+        dispatched.push(d.deliveryId);
+        return Promise.resolve();
+      }),
+    };
+    const proc = new IngressProcessor(loader as never, {} as never, {} as never, {} as never, {} as never);
+    const held: Array<{ id: string; when: number }> = [];
+    const heldJob = (id: string) =>
+      job({
+        data: {
+          pluginId: 'chatwoot',
+          instanceId: 'acct1',
+          route: 'chatwoot',
+          deliveryId: id,
+          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+        },
+        moveToDelayed: jest.fn((when: number) => {
+          held.push({ id, when });
+          return Promise.resolve();
+        }),
+      });
+    const [first, second] = [heldJob('a'), heldJob('b')];
+    // The first job draws the larger number, which is what would make it fall due after the second.
+    const random = jest.spyOn(Math, 'random').mockReturnValueOnce(0.9).mockReturnValueOnce(0.1);
+    try {
+      await expect(proc.process(first, 'tok-a')).rejects.toBeInstanceOf(DelayedError);
+      await expect(proc.process(second, 'tok-b')).rejects.toBeInstanceOf(DelayedError);
+      restoring = false;
+      // The restore is over: the jobs fall due in the order of their due time.
+      for (const { id } of [...held].sort((x, y) => x.when - y.when)) await proc.process(id === 'a' ? first : second);
+    } finally {
+      random.mockRestore();
+    }
+
+    expect(dispatched).toEqual(['a', 'b']);
   });
 
   it('dispatches as usual once the restore is done with the plugin', async () => {

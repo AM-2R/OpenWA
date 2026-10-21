@@ -102,9 +102,11 @@ export class IngressProcessor extends WorkerHost {
       // The plugin's worker does not exist until the boot restore reaches it, and a restore can outlast the
       // whole retry budget. Before the try below on purpose: this is not an attempt, so it must never be
       // logged as a failure or file a dead-letter row. moveToDelayed does not spend one of the job's attempts.
-      // At least a second: a job delayed to "now" is promoted straight back and would spin.
+      // At least a second: a job delayed to "now" is promoted straight back and would spin. No jitter: BullMQ
+      // promotes delayed jobs in order of their due time, so equal delays keep the order the jobs were held in,
+      // which two deliveries of one conversation need once the restore is over.
       const delay = Math.max(1000, resolveIngressJobOptions().backoff.delay);
-      await job.moveToDelayed(Date.now() + delay + Math.floor(Math.random() * delay), token);
+      await job.moveToDelayed(Date.now() + delay, token);
       throw new DelayedError();
     }
     try {
