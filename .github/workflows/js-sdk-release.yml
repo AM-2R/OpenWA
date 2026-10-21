@@ -125,7 +125,7 @@ jobs:
         # the Dockerfile uses: this npm runs while the job can mint a publish credential, so it must
         # not float to whatever version is current when the tag is pushed.
         run: |
-          npm install -g npm@12.1.0
+          npm install -g npm@12.2.1
           npm --version
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8

@@ -873,7 +873,12 @@ describe('a job that can mint a publish credential pins global npm installs and 
       oidcJobRuns('js-sdk-release.yml', executableLinesConservative).some(({ run }) => /^npm publish\b/m.test(run)),
     ).toBe(true);
     expect(outsideAllowList('js-sdk-release.yml')).toEqual([]);
-    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
+    // The workflow says it installs the npm the image does; nothing else holds the two pins together.
+    const imageNpm = /^RUN npm install -g (npm@\d+\.\d+\.\d+) /m.exec(
+      fs.readFileSync(path.join(__dirname, '..', '..', 'Dockerfile'), 'utf8'),
+    )?.[1];
+    expect(imageNpm).toBeDefined();
+    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: imageNpm }]);
   });
 
   // Every workflow is read against its own list, so an id-token job anywhere that has none (a new
