@@ -68,6 +68,11 @@
 #       staging copy is removed after a backup that succeeds and one that fails
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
+#   (am) restore refuses an OPENWA_DATA_DIR that is . or .., the working directory, a parent of it, a
+#       link to it or the home directory, before it reads the archive
+#   (an) restore refuses to empty a state dir that is ., the working directory, the data dir, the home
+#       directory or a directory around the workspace or the data dir, before anything is written
+#   (ao) restore refuses an archive member named ../x, a/../x or /x before it extracts anything
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2275,6 +2280,110 @@ if [ -n "$(ls -A "$AL/out" 2>/dev/null || true)" ]; then
   fail "(al) a truncated archive was left behind: $(ls -A "$AL/out")"
 fi
 pass "(al) a failed tar exits non-zero and leaves nothing in BACKUP_DIR"
+
+# tree_digest <dir>: every path and file checksum below <dir>, apart from the restore's own safety
+# snapshots (<name>.pre-restore-<time>), which a refusal may follow.
+tree_digest() {
+  (
+    cd "$1"
+    find . -name '*.pre-restore-*' -prune -o -print
+    find . -name '*.pre-restore-*' -prune -o -type f -exec cksum {} +
+  ) | LC_ALL=C sort | cksum
+}
+
+# refused_restore <root> <label> <message> <dir> <archive> [VAR=value ...]: restore.sh run from <dir>
+# with a home directory of its own and --force, so the live-target guard cannot be what refuses. It has
+# to exit 1 saying <message> and leave everything below <root> as it was.
+refused_restore() {
+  local root="$1" label="$2" message="$3" dir="$4" archive="$5" before
+  shift 5
+  before="$(tree_digest "$root")"
+  set +e
+  OUT="$(cd "$dir" && env HOME="$root/home" "$@" "$RESTORE" "$archive" --force 2>&1)"
+  RC=$?
+  set -e
+  if [ "$RC" -ne 1 ]; then
+    fail "($label) restore exited $RC instead of refusing: $OUT"
+  fi
+  if ! printf '%s' "$OUT" | grep -qF -- "$message"; then
+    fail "($label) the refusal does not say '$message': $OUT"
+  fi
+  if [ "$(tree_digest "$root")" != "$before" ]; then
+    fail "($label) the refused restore changed the files below $root"
+  fi
+}
+
+echo ""
+echo "==> (am) restore refuses an unsafe OPENWA_DATA_DIR before it reads the archive"
+# The data dir is replaced wholesale, so one that is the working directory, a parent of it, the home
+# directory or a bare relative spelling would take its neighbours with it. The checks compare resolved
+# paths: a link to the working directory is refused like the directory itself.
+AM="$WORK/am"
+mkdir -p "$AM/src/data/sessions/session-s1" "$AM/work" "$AM/home"
+make_fixture "$AM/src/data/main.sqlite" "am-main"
+make_fixture "$AM/src/data/openwa.sqlite" "am-data"
+printf 'am-session\n' >"$AM/src/data/sessions/session-s1/marker"
+(
+  cd "$AM/src"
+  BACKUP_DIR="$AM/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_AM="$(ls "$AM"/out/openwa-backup-*.tar.gz)"
+printf 'am-keep\n' >"$AM/work/keep.txt"
+ln -s work "$AM/alias"
+AM_WORKSPACE='must not be the workspace or one of its parent directories'
+refused_restore "$AM" "am: ." 'refusing unsafe OPENWA_DATA_DIR target: .' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=.
+refused_restore "$AM" "am: .." 'refusing unsafe OPENWA_DATA_DIR target: ..' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=..
+refused_restore "$AM" "am: working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/work"
+refused_restore "$AM" "am: parent of the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM"
+refused_restore "$AM" "am: link to the working directory" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/alias"
+refused_restore "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
+pass "(am) an OPENWA_DATA_DIR that is ., .., the workspace, a parent of it, a link to it or the home directory is refused"
+
+echo ""
+echo "==> (an) restore refuses to empty a broad state directory, before anything is written"
+# A state dir is emptied before it is refilled. One setting that names the working directory, the data
+# dir, the home directory or a directory around the workspace or the data dir would take unrelated
+# files with it, so the snapshot pass refuses each. The checks overlap, so each case pins the message
+# of its own check: a check that was deleted would otherwise be covered by its neighbour.
+AN="$WORK/an"
+mkdir -p "$AN/work/data" "$AN/home" "$AN/vol/data"
+for keep in "$AN/work" "$AN/work/data" "$AN/home" "$AN/vol/data"; do
+  printf 'an-keep\n' >"$keep/keep.txt"
+done
+AN_BROAD='refusing to replace broad whatsapp-web.js sessions target'
+refused_restore "$AN" "an: working directory" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work"
+refused_restore "$AN" "an: data dir" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work/data"
+refused_restore "$AN" "an: home directory" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/home"
+refused_restore "$AN" "an: around the workspace" 'whatsapp-web.js sessions target that contains the workspace' \
+  "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN"
+refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target that contains the data directory' \
+  "$AN/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AN/vol/data" SESSION_DATA_PATH="$AN/vol"
+refused_restore "$AN" "an: ." 'refusing to replace unsafe whatsapp-web.js sessions target: .' \
+  "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=.
+pass "(an) a state dir that is ., the workspace, the data dir, the home directory or around the workspace or the data dir is refused"
+
+echo ""
+echo "==> (ao) restore refuses an archive member that could land outside the staging directory"
+# backup.sh never writes such a name, so one in an archive is hand-made. The listing is checked before
+# anything is extracted, because a restore must not rest on what tar happens to do with the name: GNU
+# tar and bsdtar both refuse a .. member and strip a leading /.
+AO="$WORK/ao"
+mkdir -p "$AO/stage/a" "$AO/work" "$AO/home" "$AO/abs"
+tar -xzf "$ARCHIVE_AM" -C "$AO/stage"
+printf 'ao-escape\n' >"$AO/escape.txt"
+printf 'ao-inner\n' >"$AO/stage/b.txt"
+printf 'ao-abs\n' >"$AO/abs/member.txt"
+# -P keeps the names as given, which is how a hostile archive carries them.
+(
+  cd "$AO/stage"
+  tar -czPf "$AO/dotdot.tar.gz" . ../escape.txt
+  tar -czPf "$AO/inner.tar.gz" . a/../b.txt
+  tar -czPf "$AO/abs.tar.gz" . "$AO/abs/member.txt"
+)
+refused_restore "$AO" "ao: ../x" 'unsafe path in backup archive: ../escape.txt' "$AO/work" "$AO/dotdot.tar.gz"
+refused_restore "$AO" "ao: a/../x" 'unsafe path in backup archive: a/../b.txt' "$AO/work" "$AO/inner.tar.gz"
+refused_restore "$AO" "ao: /x" "unsafe path in backup archive: $AO/abs/member.txt" "$AO/work" "$AO/abs.tar.gz"
+pass "(ao) an archive member named ../x, a/../x or /x is refused from the listing"
 
 echo ""
 echo "All smoke tests passed!"
