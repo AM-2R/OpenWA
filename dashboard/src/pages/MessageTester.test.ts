@@ -1225,3 +1225,22 @@ test('an old lookup cannot complete a new operation after signing in with the sa
   client.clear();
   sessionStorage.removeItem('openwa_api_key');
 });
+
+// A phone number or chat id typed into a plain text field is laid out right to left in an Arabic or Hebrew
+// page: "+62 812 3456 7890" reads "7890 3456 812 62+" and "15550001111@c.us" splits around the at sign. The
+// dashboard forces left to right on tel inputs only, so a phone field is a tel input and the fields that
+// take a chat id or a mixed list say dir="ltr" themselves.
+test('phone fields are tel inputs and id fields are left to right', async () => {
+  stubGateway();
+  renderTesterAsWriter();
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  const attr = (id: string, name: string): string | null => byId(id).getAttribute(name);
+
+  assert.equal(attr('mt-13', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Contact' }));
+  assert.equal(attr('mt-7', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+  for (const id of ['mt-17', 'mt-9', 'mt-10']) assert.equal(attr(id, 'dir'), 'ltr', id);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+  assert.equal(attr('mt-11', 'dir'), 'ltr');
+});

@@ -816,7 +816,7 @@ export function MessageTester() {
                     <label htmlFor="mt-13">{t('messageTester.recipientPhone')}</label>
                     <input
                       id="mt-13"
-                      type="text"
+                      type="tel"
                       value={recipient}
                       onChange={e => setRecipient(e.target.value)}
                       placeholder="+62812345678"
@@ -975,7 +975,7 @@ export function MessageTester() {
                   <label htmlFor="mt-7">{t('messageTester.contactNumber')}</label>
                   <input
                     id="mt-7"
-                    type="text"
+                    type="tel"
                     value={contactNumber}
                     onChange={e => setContactNumber(e.target.value)}
                     placeholder="+62812345678"
@@ -1054,6 +1054,7 @@ export function MessageTester() {
                   <input
                     id="mt-17"
                     type="text"
+                    dir="ltr"
                     value={forwardFrom}
                     onChange={e => setForwardFrom(e.target.value)}
                     placeholder={
@@ -1068,6 +1069,7 @@ export function MessageTester() {
                   <input
                     id="mt-9"
                     type="text"
+                    dir="ltr"
                     value={forwardTo}
                     onChange={e => setForwardTo(e.target.value)}
                     placeholder={t('messageTester.forwardToPlaceholder')}
@@ -1078,6 +1080,7 @@ export function MessageTester() {
                   <input
                     id="mt-10"
                     type="text"
+                    dir="ltr"
                     value={forwardMessageId}
                     onChange={e => setForwardMessageId(e.target.value)}
                   />
@@ -1113,6 +1116,7 @@ export function MessageTester() {
                   </div>
                   <textarea
                     id="mt-11"
+                    dir="ltr"
                     value={bulkRecipients}
                     onChange={e => setBulkRecipients(e.target.value)}
                     placeholder={t('messageTester.bulkRecipientsPlaceholder')}
