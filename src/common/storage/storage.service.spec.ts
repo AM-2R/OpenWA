@@ -400,6 +400,20 @@ describe('StorageService.createExportStream enumerates the whole store', () => {
     expect(count).toBe(2); // the iterator's items are what was counted, not an unrelated walk
   });
 
+  it('counts only what the export carries: a folder placeholder and an unsafe key are left out', async () => {
+    const { service } = makeService();
+    jest.spyOn(service, 'iterateFiles').mockImplementation(async function* () {
+      yield await Promise.resolve('sess1/');
+      yield 'sess1/a.bin';
+      yield 'media/../x.bin';
+    });
+    jest.spyOn((service as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+
+    const { count } = await service.getFileCount();
+
+    expect(count).toBe(1);
+  });
+
   /**
    * The size loop under the whole-store walk must not stat every file synchronously: on a large store
    * that holds the event loop for the whole walk, and health checks, webhooks and every in-flight

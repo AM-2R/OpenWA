@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { ConfigService } from '@nestjs/config';
 
 // Mock the AWS SDK so no real network call is made. Each test drives `mockSend`: HeadBucket probes
@@ -33,6 +33,7 @@ import {
   S3_PROBE_TIMEOUT_MS,
   StorageService,
 } from './storage.service';
+import * as transfer from './storage-transfer';
 
 const ENV_KEYS = [
   'S3_ENDPOINT',
@@ -478,6 +479,40 @@ describe('StorageService S3 re-probe and recovery', () => {
     const result = await svc.getFileCount();
     expect(result.count).toBe(3);
     expect(result.sizeBytes).toBe(1000 + 10 + 500);
+  });
+
+  // The count is the pre-check an operator runs before the export, so it must promise exactly the files the
+  // archive will hold: not a console-made folder placeholder, and not a key the export cannot open.
+  it('getFileCount counts the files the export carries, not folder placeholders or unsafe keys', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({
+          Contents: [
+            { Key: 'media/a.bin', Size: 1000 },
+            { Key: 'media/sess1/', Size: 0 },
+            { Key: 'media/sess1/b.bin', Size: 2000 },
+            { Key: 'media/empty.bin', Size: 0 },
+            { Key: 'media/../outside.bin', Size: 7 },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    warnSpyOf(svc);
+    await flush();
+    fs.writeFileSync(path.join(localPath, 'local-only.bin'), Buffer.alloc(500));
+    fs.writeFileSync(path.join(localPath, 'bad\u0001name.bin'), Buffer.alloc(9));
+    const exported = jest.spyOn(transfer, 'createExportStream').mockResolvedValue(new PassThrough());
+
+    const { count, sizeBytes } = await svc.getFileCount();
+    await svc.createExportStream();
+    const carried = await exported.mock.calls[0][0]();
+    exported.mockRestore();
+
+    expect(carried.sort()).toEqual(['empty.bin', 'local-only.bin', 'a.bin', 'sess1/b.bin'].sort());
+    expect(count).toBe(carried.length);
+    expect(sizeBytes).toBe(1000 + 2000 + 500);
   });
 
   it('iterateFiles paginates S3 and unions the local fallback dir (each key once)', async () => {
