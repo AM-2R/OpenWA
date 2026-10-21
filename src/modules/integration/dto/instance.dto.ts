@@ -174,6 +174,6 @@ export class RedriveResultDto {
   @ApiProperty({ description: 'Dead-lettered deliveries still retained after this batch.', example: 75 })
   remaining!: number;
 
-  @ApiProperty({ description: 'The bounded batch size this call processed.', example: 25 })
+  @ApiProperty({ description: 'The bounded batch size this call processed.', example: 100 })
   batchSize!: number;
 }

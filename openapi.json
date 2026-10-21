@@ -25445,7 +25445,7 @@
           "batchSize": {
             "type": "number",
             "description": "The bounded batch size this call processed.",
-            "example": 25
+            "example": 100
           }
         },
         "required": [
