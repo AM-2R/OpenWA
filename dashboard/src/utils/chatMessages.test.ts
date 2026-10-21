@@ -381,6 +381,15 @@ test('applyMessageEdit updates a live row by id', () => {
   assert.equal(after[0].body, '');
 });
 
+test('applyMessageEdit does not label a message whose text the event repeats', () => {
+  const before = [msg({ id: 'm-1', waMessageId: 'WA_EDIT_2', body: 'same', metadata: { reactions: { me: 'x' } } })];
+  const after = applyMessageEdit(before, { messageId: 'WA_EDIT_2', body: 'same' });
+  // The same list, so nothing renders again; compared as a boolean, since a failed deepEqual of rows is slow to print.
+  assert.ok(after === before, 'an unchanged text produced a new list');
+  assert.equal(after[0].metadata?.edited, undefined);
+  assert.deepEqual(after[0].metadata?.reactions, { me: 'x' });
+});
+
 test('applyMessageEdit is a referential no-op for an empty or unknown target id', () => {
   const before = [msg({ id: 'm-1', body: 'old' })];
   assert.equal(applyMessageEdit(before, { messageId: '', body: 'new' }), before);

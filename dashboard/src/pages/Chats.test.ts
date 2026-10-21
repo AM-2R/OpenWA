@@ -3013,6 +3013,35 @@ function receiveEvent(event: string, data: Record<string, unknown>, sessionId: s
   });
 }
 
+test('a live edit labels the message it changed, and not one whose text it repeats', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('hello from alice');
+  const labels = () => room.querySelectorAll('.message-edited').length;
+  assert.equal(labels(), 0);
+
+  // The backend announces an edit that repeats the stored text but no longer stores a marker for it.
+  receiveEvent('message.edited', {
+    messageId: DB_MESSAGE.waMessageId,
+    chatId: CHAT.id,
+    body: DB_MESSAGE.body,
+    timestamp: 1_700_003_001,
+  });
+  await flush();
+  assert.equal(labels(), 0, 'a repeated text was labelled as edited');
+
+  receiveEvent('message.edited', {
+    messageId: DB_MESSAGE.waMessageId,
+    chatId: CHAT.id,
+    body: 'hello from alice, edited',
+    timestamp: 1_700_003_002,
+  });
+  await waitFor(() => assert.equal(labels(), 1, 'a changed text was not labelled as edited'));
+  await within(room).findByText('hello from alice, edited');
+});
+
 test('an edit arriving after the newest message was deleted for everyone does not refill the sidebar preview', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   const { container } = renderChats();

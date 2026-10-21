@@ -462,7 +462,8 @@ export function findRevokedIndex(list: ChatMessageView[], event: { id: string; r
 /**
  * Replace the displayed body of a cached WhatsApp message after a `message.edited` event. Both id
  * candidates are matched, for the reason given on findRevokedIndex. Returns the original array on
- * a miss.
+ * a miss, and when the event repeats the text the message already has: the gateway announces such an
+ * event but stores no edited marker for it, so labelling it here would show what a reload does not.
  */
 export function applyMessageEdit(
   list: ChatMessageView[],
@@ -470,7 +471,7 @@ export function applyMessageEdit(
 ): ChatMessageView[] {
   if (!event.messageId) return list;
   const idx = list.findIndex(byMessageId(event.messageId));
-  if (idx === -1 || list[idx].type === 'revoked') return list;
+  if (idx === -1 || list[idx].type === 'revoked' || list[idx].body === event.body) return list;
   const next = list.slice();
   next[idx] = { ...next[idx], body: event.body, metadata: { ...next[idx].metadata, edited: true } };
   return next;
