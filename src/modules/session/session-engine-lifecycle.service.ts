@@ -557,8 +557,8 @@ export class SessionEngineLifecycle {
   /**
    * True while this process still has anything alive for the session: a registered engine, an
    * in-flight start(), reconnect state whose armed/executing attempt will re-register one, or a
-   * delete still removing its rows (its engine is gone by then, but a peer that adopted the lapsed
-   * lease would start the session being deleted).
+   * delete still running (its engine is gone by then, but a peer that adopted the lapsed lease
+   * would start the session being deleted).
    * The ownership heartbeat consults this so a claim that no longer covers an engine stops being
    * renewed and can lapse for a peer to adopt; the service-level release paths consult it so an
    * "already starting/started" refusal never releases a session this node genuinely runs.

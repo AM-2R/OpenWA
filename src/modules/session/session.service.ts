@@ -963,7 +963,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.releaseUnlessEngineActive(id);
   }
 
-  /** Hand the claim back unless something still runs here (engine, in-flight start, pending reconnect). */
+  /**
+   * Hand the claim back unless something still runs here (engine, in-flight start, pending reconnect,
+   * delete in flight).
+   */
   private async releaseUnlessEngineActive(id: string): Promise<void> {
     if (!this.ownership || this.engineLifecycle.isEngineActive(id)) {
       return;

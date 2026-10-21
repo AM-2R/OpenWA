@@ -199,7 +199,10 @@ export class SessionEngineControls {
     this.initializingSessions = host.initializingSessions;
   }
 
-  /** True while a delete of the session runs, from its engine teardown until its rows are gone or it failed. */
+  /**
+   * True while a delete of the session runs: from just before its engine teardown until it returns or
+   * throws, credential purge included.
+   */
   isDeleting(id: string): boolean {
     return this.deleting.has(id);
   }

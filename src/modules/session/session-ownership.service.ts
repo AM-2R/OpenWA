@@ -317,8 +317,8 @@ export class SessionOwnershipService {
 
   /**
    * Register the probe renew() consults before extending a lease. Wired by SessionService to the
-   * engine lifecycle (engine registered, start in flight, or reconnect pending). Optional like the
-   * lease-loss handler: without it every held claim renews unconditionally.
+   * engine lifecycle (engine registered, start in flight, reconnect pending, or delete in flight).
+   * Optional like the lease-loss handler: without it every held claim renews unconditionally.
    */
   setEngineLiveness(probe: (sessionId: string) => boolean): void {
     this.engineLiveness = probe;
