@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
@@ -383,6 +385,30 @@ describe('assertNoDefaultSecretsInProduction', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({ nodeEnv: 'production', redisPassword: 'a-strong-unique-redis-secret' }),
     ).not.toThrow();
+  });
+
+  // The scrape endpoint is public and this token is its only credential, so the value .env.example ships
+  // (a copy-paste away from production) and the known weak values must not boot. There is no length floor:
+  // a short token that is not a known default keeps booting.
+  it('refuses the METRICS_TOKEN that .env.example ships, and known weak values, in production', () => {
+    const example = readFileSync(join(__dirname, '..', '..', '.env.example'), 'utf8');
+    const shipped = /^#?\s*METRICS_TOKEN=(.+)$/m.exec(example)?.[1];
+    expect(shipped).toBeTruthy();
+    for (const metricsToken of [shipped, ` ${shipped?.toUpperCase()} `, 'change-me', 'test', 'Secret']) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', metricsToken })).toThrow(
+        /METRICS_TOKEN/,
+      );
+    }
+  });
+
+  it('allows an unset, blank or non-default METRICS_TOKEN in production, and checks none outside it', () => {
+    // Unset or blank leaves the endpoint disabled, so there is no credential to be weak.
+    for (const metricsToken of [undefined, '', '   ', 'prom-scrape', 'k'.repeat(40)]) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', metricsToken })).not.toThrow();
+    }
+    for (const nodeEnv of ['development', 'test', undefined]) {
+      expect(() => assertNoDefaultSecretsInProduction({ nodeEnv, metricsToken: 'test' })).not.toThrow();
+    }
   });
 
   it('allows the default sqlite + local-storage prod setup (no secrets needed)', () => {

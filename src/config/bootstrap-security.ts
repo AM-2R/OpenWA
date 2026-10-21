@@ -151,6 +151,13 @@ const FORBIDDEN_PROD_SECRETS = new Set([
 ]);
 
 /**
+ * The METRICS_TOKEN value .env.example ships (commented out). Kept apart from the list above, which is
+ * shared by every secret: this string is a placeholder only for the scrape token, and is a publicly known
+ * credential for the endpoint once someone uncomments the line unchanged.
+ */
+const METRICS_TOKEN_PLACEHOLDER = 'change-me-to-a-long-random-string';
+
+/**
  * Whether to warn that API_KEY_PEPPER is unset in production. Without a pepper, stored API-key hashes
  * fall back to plain SHA-256 (still functional). Advisory only: enabling a pepper on an install with keys
  * locks every key out (see api-key-hash.ts), so it stays opt-in and must never be enforced.
@@ -210,6 +217,8 @@ export interface SecretCheckEnv {
   allowDevApiKey?: string;
   /** REDIS_PASSWORD — optional; passwordless private-network Redis is supported, so only a known placeholder is rejected. */
   redisPassword?: string;
+  /** METRICS_TOKEN: optional (unset disables the scrape endpoint), so only a known placeholder is rejected. */
+  metricsToken?: string;
 }
 
 /**
@@ -274,6 +283,13 @@ export function assertNoDefaultSecretsInProduction(env: SecretCheckEnv): void {
   // DATABASE_PASSWORD this rejects only a known placeholder VALUE — never an empty/unset password.
   if (env.redisPassword && FORBIDDEN_PROD_SECRETS.has(env.redisPassword.trim().toLowerCase())) {
     problems.push('REDIS_PASSWORD');
+  }
+  // METRICS_TOKEN is optional too (unset leaves the public scrape endpoint disabled) and has no length
+  // floor, so only a known placeholder is refused: the .env.example value or a shared weak value. Trimmed
+  // like MetricsService trims it before comparing.
+  const metricsToken = env.metricsToken?.trim().toLowerCase();
+  if (metricsToken && (metricsToken === METRICS_TOKEN_PLACEHOLDER || FORBIDDEN_PROD_SECRETS.has(metricsToken))) {
+    problems.push('METRICS_TOKEN');
   }
   // ALLOW_DEV_API_KEY=true seeds the publicly-documented `dev-admin-key` as an ADMIN credential
   // (when no API_MASTER_KEY is set) — never allow that opt-in to be carried into production.
