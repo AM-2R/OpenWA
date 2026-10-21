@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session, Chat } from '../services/api';
-import { resetSocketDouble } from '../test-helpers/socket-io-double.ts';
+import { lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 
 const SESSION: Session = {
   id: 'session-1',
@@ -1089,6 +1089,85 @@ test('Mark as unread waits for an automatic read already sent, so the unread mar
   const readIndex = fetchCalls.indexOf(readsOf(CHAT.id)[0]);
   assert.ok(readIndex < unreadIndex(CHAT.id), 'the read was not ordered before the unread mark');
   assert.equal(readsOf(CHAT.id).length, 1, 'another automatic read followed the unread mark');
+});
+
+/** Make the document read as hidden (a background tab) or visible again, as the browser does before `visibilitychange`. */
+function setTabHidden(hidden: boolean): void {
+  if (hidden) {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+  } else {
+    delete (document as unknown as Record<string, unknown>).visibilityState;
+    delete (document as unknown as Record<string, unknown>).hidden;
+  }
+}
+
+/** A message from Alice, delivered the way the gateway's socket delivers one. */
+function receiveFromAlice(id: string, body: string): void {
+  rtl.act(() =>
+    lastSocket()?.receive('message', {
+      type: 'event',
+      timestamp: new Date(1_700_002_000_000).toISOString(),
+      payload: {
+        event: 'message.received',
+        sessionId: SESSION.id,
+        data: {
+          id,
+          chatId: CHAT.id,
+          from: CHAT.id,
+          to: 'me',
+          body,
+          type: 'text',
+          fromMe: false,
+          timestamp: 1_700_001_900,
+        },
+      },
+    }),
+  );
+}
+
+test('a message that reaches the open chat while the tab is hidden is marked read once the tab is visible', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+  fetchCalls.length = 0;
+
+  setTabHidden(true);
+  try {
+    receiveFromAlice('wamid.hidden.1', 'are you there?');
+    await screen.findAllByText('are you there?');
+    // Past the quiet window the read would have gone out.
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.deepEqual(readsOf(CHAT.id), [], 'a hidden tab sent a read receipt');
+  } finally {
+    setTabHidden(false);
+  }
+  rtl.act(() => {
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'the withheld read did not follow'), { timeout: 3_000 });
+  assert.ok(!screen.queryByLabelText(/unread message/), 'the open chat was badged');
+});
+
+test('a tab that was hidden but sees no message owes no read when it is visible again', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1), { timeout: 3_000 });
+  fetchCalls.length = 0;
+
+  setTabHidden(true);
+  setTabHidden(false);
+  rtl.act(() => {
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  assert.deepEqual(readsOf(CHAT.id), []);
 });
 
 test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {

@@ -534,12 +534,19 @@ export function Chats() {
   // A chat marked unread takes no automatic read until it is opened again, and Mark as unread waits for a
   // read already sent: otherwise a read queued from the open room lands after the unread and undoes it.
   // Keyed by session and chat, since a session switch still flushes the previous session's reads.
+  // A read due while the tab is hidden is withheld, since nobody has seen what it would acknowledge: it goes out
+  // when the tab is visible again (see sendWithheldRead).
   const [readsInFlight] = useState(() => new Map<string, Promise<void>>());
   const [keptUnread] = useState(() => new Set<string>());
+  const [withheldReads] = useState(() => new Set<string>());
   const markReadCoalescer = useMemo(
     () =>
       createTrailingCoalescer<string>(chatId => {
         const key = readKey(selectedSessionId, chatId);
+        if (document.visibilityState === 'hidden') {
+          withheldReads.add(key);
+          return;
+        }
         const read = sessionApi.markChatRead(selectedSessionId, chatId).then(
           () => undefined,
           err => {
@@ -551,7 +558,7 @@ export function Chats() {
           if (readsInFlight.get(key) === read) readsInFlight.delete(key);
         });
       }, MARK_READ_DEBOUNCE_MS),
-    [selectedSessionId, t, showWarningToast, readsInFlight],
+    [selectedSessionId, t, showWarningToast, readsInFlight, withheldReads],
   );
 
   // Flush pending trailing calls on unmount / session switch: the mark-as-read POST is
@@ -600,6 +607,20 @@ export function Chats() {
     },
     [],
   );
+
+  // The read withheld from a hidden tab is sent when the tab is visible again, if its chat is still the open one.
+  useEffect(() => {
+    const sendWithheldRead = () => {
+      if (document.visibilityState === 'hidden') return;
+      const open = activeChatIdRef.current;
+      const withheld = open !== undefined && withheldReads.has(readKey(selectedSessionId, open));
+      withheldReads.clear();
+      if (withheld) markChatRead(open);
+    };
+    document.addEventListener('visibilitychange', sendWithheldRead);
+    return () => document.removeEventListener('visibilitychange', sendWithheldRead);
+  }, [selectedSessionId, markChatRead, withheldReads]);
+
   const handleIncomingMessage = useCallback(
     (event: { sessionId: string; message: Record<string, unknown> }) => {
       if (event.sessionId !== selectedSessionId) return;
