@@ -1,5 +1,5 @@
 import type { GroupMetadata } from '@whiskeysockets/baileys';
-import { resolveNonNegativeIntEnv } from '../../config/configuration';
+import { MAX_TIMER_MS, resolveNonNegativeIntEnv } from '../../config/configuration';
 
 /** How long a group's participant list is reused before Baileys reads it again; 0 switches the cache off. */
 const DEFAULT_GROUP_METADATA_CACHE_TTL_MS = 5 * 60_000;
@@ -35,6 +35,8 @@ export class GroupMetadataCache {
    * it is not kept and no later read waits on it.
    */
   private readonly inFlight = new Map<string, Promise<GroupMetadata>>();
+  /** The pending timer that drops expired entries; armed while the cache holds any. */
+  private expiryTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly ttlMs: number,
@@ -113,6 +115,8 @@ export class GroupMetadataCache {
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
+    clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
   }
 
   /**
@@ -135,5 +139,25 @@ export class GroupMetadataCache {
       const [oldest] = this.entries.keys();
       this.entries.delete(oldest);
     }
+    this.scheduleExpiry();
+  }
+
+  /**
+   * Expiry is otherwise checked only when a group is read, so a group nobody sends to again would keep
+   * its participant list for as long as the socket lives. One timer drops what has expired, and runs
+   * again only while the cache still holds entries.
+   */
+  private scheduleExpiry(): void {
+    if (this.expiryTimer) return;
+    const dropExpired = (): void => {
+      this.expiryTimer = undefined;
+      const now = this.now();
+      for (const [jid, cached] of this.entries) {
+        if (now - cached.storedAt >= this.ttlMs) this.entries.delete(jid);
+      }
+      if (this.entries.size > 0) this.scheduleExpiry();
+    };
+    this.expiryTimer = setTimeout(dropExpired, Math.min(this.ttlMs, MAX_TIMER_MS));
+    this.expiryTimer.unref();
   }
 }

@@ -14,6 +14,10 @@ describe('GroupMetadataCache', () => {
 
   beforeEach(() => {
     clock = 1_000_000;
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   describe('reading through', () => {
@@ -168,6 +172,62 @@ describe('GroupMetadataCache', () => {
       await cache.read(GROUP, () => fetch(GROUP));
       await cache.read(OTHER, () => fetch(OTHER));
       expect(fetch.mock.calls.map(([jid]) => jid)).toEqual([OTHER]);
+    });
+  });
+
+  // The TTL is checked when a group is read, so without a timer a group nobody sends to again would keep
+  // its participant list in memory for as long as the socket lives. The manual clock does not move with the
+  // fake timers, so each step advances both.
+  describe('expiry', () => {
+    const elapse = (ms: number): void => {
+      clock += ms;
+      jest.advanceTimersByTime(ms);
+    };
+
+    it('drops an entry whose TTL ran out without its group being read again', async () => {
+      const cache = build();
+      await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+      await cache.read(OTHER, () => Promise.resolve(group(OTHER)));
+
+      elapse(1000);
+
+      expect(cache.size).toBe(0);
+    });
+
+    it('keeps an entry still within its TTL when the timer fires, drops it at the next, then stops', async () => {
+      const cache = build();
+      await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+      elapse(600);
+      await cache.read(OTHER, () => Promise.resolve(group(OTHER)));
+
+      elapse(400); // GROUP is due, OTHER is 400 ms old
+      expect(cache.size).toBe(1);
+
+      elapse(1000);
+      expect(cache.size).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('stops its timer when the cache is cleared', async () => {
+      const cache = build();
+      await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+      expect(jest.getTimerCount()).toBe(1);
+
+      cache.clear();
+
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('never waits longer than a Node timer accepts, whatever the TTL', async () => {
+      const arm = jest.spyOn(global, 'setTimeout');
+      try {
+        const cache = build(2 ** 40);
+        await cache.read(GROUP, () => Promise.resolve(group(GROUP)));
+
+        expect(arm).toHaveBeenLastCalledWith(expect.any(Function), 2 ** 31 - 1);
+      } finally {
+        arm.mockRestore();
+      }
     });
   });
 
