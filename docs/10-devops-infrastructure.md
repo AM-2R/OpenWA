@@ -445,8 +445,9 @@ LOG_FORMAT=json
 # CACHE_ENABLED=true
 # QUEUE_ENABLED=true   # process webhooks/ingress through the BullMQ queue
 # Deployments that use the queue on one shared Redis need a distinct QUEUE_PREFIX each (default bull; up
-# to 64 letters, digits, dots, underscores or hyphens). A queue is named only by its prefix and name, so
-# two deployments on the same prefix take each other's webhook jobs and complete them without delivering.
+# to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit). A queue is named
+# only by its prefix and name, so two deployments on the same prefix take each other's webhook jobs and
+# complete them without delivering.
 # Replicas of one deployment share a value; changing it on a live deployment leaves the jobs queued under
 # the old prefix unprocessed. The prefix covers the queues only: with REDIS_ENABLED=true the rate-limit
 # counters and the WebSocket fan-out channel are shared as well, and events reach the clients of every
