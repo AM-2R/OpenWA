@@ -33,6 +33,8 @@ function hold(name: string): () => void {
 // When true, the chat and contact writes answer HTTP 200 with `{ success: false }`, as an engine that
 // declined to act does.
 let declineWrites = false;
+// The profile pictures the batch route serves, by chat id; an id with none answers null.
+const pictureFor: Record<string, string> = {};
 
 const CHAT: Chat = {
   id: '15550001111@c.us',
@@ -174,7 +176,12 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
     }
     if (method === 'GET' && path.startsWith(`${base}/contacts/profile-pictures`)) {
-      return Promise.resolve(jsonResponse({ pictures: {} }));
+      const ids = decodeURIComponent(path.split('ids=')[1] ?? '')
+        .split(',')
+        .filter(Boolean);
+      return Promise.resolve(
+        jsonResponse({ pictures: Object.fromEntries(ids.map(id => [id, pictureFor[id] ?? null])) }),
+      );
     }
     if (method === 'GET' && /\/contacts\/[^/]+\/profile-picture$/.test(path)) {
       return Promise.resolve(jsonResponse({ url: null }));
@@ -241,6 +248,7 @@ afterEach(async () => {
   listExtra = false;
   listDuplicateContact = false;
   declineWrites = false;
+  for (const id of Object.keys(pictureFor)) delete pictureFor[id];
   gates.clear();
   listGroup = false;
   groupAdmin = true;
@@ -423,6 +431,42 @@ test('the group dialog saves a new name through the subject route and renames th
   fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
   assert.ok(within(dialog).getByText('Bob'));
   assert.ok(within(dialog).getByRole('button', { name: 'Remove: Bob' }), 'an admin was offered no member actions');
+});
+
+test('a group picture saved in the group dialog replaces the one on the sidebar row', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const objectUrls = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  URL.createObjectURL = () => 'blob:picked';
+  URL.revokeObjectURL = () => undefined;
+  try {
+    listGroup = true;
+    pictureFor[GROUP.id] = 'https://cdn.example/old.jpg';
+    const { container } = renderPage();
+    await screen.findByText('Team');
+    const rowPicture = () =>
+      within(container.querySelector('.chats-list') as HTMLElement)
+        .getByText('Team')
+        .closest('.chat-item-card')
+        ?.querySelector('img')
+        ?.getAttribute('src');
+    await waitFor(() => assert.equal(rowPicture(), 'https://cdn.example/old.jpg'));
+
+    pickRowAction('Team', 'Group info');
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText(`Managed via ${SESSION.name}`);
+    const file = new (window as unknown as { File: typeof File }).File(['x'], 'team.png', { type: 'image/png' });
+    fireEvent.change(dialog.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [file] } });
+    const save = within(dialog).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+    await waitFor(() => assert.equal(save.disabled, false, 'the picked picture was not taken'));
+
+    pictureFor[GROUP.id] = 'https://cdn.example/new.jpg';
+    fireEvent.click(save);
+    await waitFor(() => assert.ok(fetchCalls.some(c => c.method === 'PUT' && c.path.endsWith('/picture'))));
+    await waitFor(() => assert.equal(rowPicture(), 'https://cdn.example/new.jpg', 'the row kept the old picture'));
+  } finally {
+    URL.createObjectURL = objectUrls.create;
+    URL.revokeObjectURL = objectUrls.revoke;
+  }
 });
 
 test('a participant the gateway refuses is reported although the write answered 200', async () => {

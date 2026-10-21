@@ -23,7 +23,8 @@ interface ResolvedPicture {
  * only the ids not held yet are asked for: every answer is kept per session with the time it arrived,
  * ids that came back null (hidden or no picture) included, and reused for an hour. The data returned
  * covers the requested ids, and the previous data of the same session stays while a smaller batch is
- * out, so the rows keep their pictures instead of dropping to the generic icon.
+ * out, so the rows keep their pictures instead of dropping to the generic icon. An invalidated batch (a
+ * picture was changed) asks for every id again, held or not.
  *
  * Caching mirrors useProfilePicture: 1h stale (signed CDN URLs rotate), 30min gc, no retry — an
  * id that comes back null just keeps the icon fallback.
@@ -36,7 +37,7 @@ export function useProfilePictures(sessionId: string | undefined, contactIds: st
   const sortedKey = [...requestIds].sort().join(',');
   return useQuery<Record<string, string | null>, Error>({
     queryKey: ['profilePictures', sessionId, sortedKey] as const,
-    queryFn: async () => {
+    queryFn: async ({ client, queryKey }) => {
       const held = resolvedRef.current.get(sessionId!) ?? new Map<string, ResolvedPicture>();
       resolvedRef.current.set(sessionId!, held);
       const view = () => {
@@ -48,9 +49,10 @@ export function useProfilePictures(sessionId: string | undefined, contactIds: st
         return pictures;
       };
       const now = Date.now();
+      const invalidated = client.getQueryState(queryKey)?.isInvalidated ?? false;
       const missing = requestIds.filter(id => {
         const entry = held.get(id);
-        return !entry || now - entry.at >= PICTURE_TTL_MS;
+        return invalidated || !entry || now - entry.at >= PICTURE_TTL_MS;
       });
       if (missing.length > 0) {
         try {

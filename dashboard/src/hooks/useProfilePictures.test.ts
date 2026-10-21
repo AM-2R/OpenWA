@@ -311,6 +311,20 @@ test('a first batch that fails reports the error', async () => {
   assert.equal(result.current.data, undefined);
 });
 
+test('an invalidated batch asks again for every id it holds, so a changed picture shows', async () => {
+  const { result } = renderPictures('s1', ['a', 'b']);
+  await rtl.waitFor(() => assert.equal(Object.keys(result.current.data ?? {}).length, 2));
+
+  answer = (sessionId, ids) =>
+    Promise.resolve(json({ pictures: Object.fromEntries(ids.map(id => [id, `${urlFor(sessionId, id)}?v=2`])) }));
+  await rtl.act(() => clients[clients.length - 1].invalidateQueries({ queryKey: ['profilePictures', 's1'] }));
+  await rtl.waitFor(() => assert.equal(result.current.data?.b, `${urlFor('s1', 'b')}?v=2`));
+  assert.deepEqual(asked(), [
+    ['a', 'b'],
+    ['a', 'b'],
+  ]);
+});
+
 test('asks for nothing without a session or without ids', async () => {
   const none = renderPictures(undefined, ['a']);
   const empty = renderPictures('s1', []);
