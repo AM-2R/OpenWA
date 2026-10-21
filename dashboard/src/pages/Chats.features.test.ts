@@ -2074,6 +2074,36 @@ test('the address book is not read again when the window regains focus, unless t
   assert.equal(contactReads().length, 3);
 });
 
+test('Save contact is offered again for the open privacy-id chat once the engine knows its phone, with no reload', async t => {
+  const { screen, fireEvent, act, waitFor, within } = rtl;
+  let clock = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => clock);
+  listExtra = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Lia'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  // The route answers null for an id it found no phone for and for a lookup that failed alike.
+  await waitFor(() => assert.ok(phoneRequests().length >= 1, 'the phone was not asked for'));
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  const saveEntry = () =>
+    within(container.querySelector('.room-menu-popover') as HTMLElement).getByRole('button', {
+      name: /^Save contact/,
+    }) as HTMLButtonElement;
+  assert.equal(saveEntry().disabled, true, 'Save contact is offered without a phone to save under');
+
+  // The engine answers a minute later, and the open menu follows once the window is focused again.
+  lidPhones[LID_CHAT.id] = '15550004444';
+  clock += 61_000;
+  act(() => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+  });
+  // The check reads the page and changes nothing: a callback that touched the DOM would re-run itself forever.
+  await waitFor(() =>
+    assert.equal(saveEntry().disabled, false, 'Save contact stayed disabled after the engine answered'),
+  );
+});
+
 test('a chat keyed by a privacy id offers Save contact disabled, with the reason, and sends nothing', async () => {
   const { screen, fireEvent } = rtl;
   listExtra = true;
