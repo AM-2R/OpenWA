@@ -135,3 +135,19 @@ test('the collapse chevron is mirrored once, by the icon Layout.tsx picks', () =
     assert.equal(decl(r.body, 'transform'), undefined, `${r.selectors.join(', ')} flips the chevron again`);
   }
 });
+
+// A selector's weight as classes, attributes and pseudo-classes: the selectors under test carry no ids.
+const weight = (selector: string): number =>
+  (selector.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+(?:\([^)]*\))?/g) ?? []).length;
+
+test('no rule outweighs the RTL one that moves the collapse toggle to the sidebar inner edge', () => {
+  const mirror = "[dir='rtl'] .collapse-toggle";
+  assert.equal(find(mirror).length, 1, 'no RTL rule for the collapse toggle');
+  // A heavier rule that sets `right` (the collapsed sidebar once repeated the base value) wins under
+  // RTL and pushes the toggle half off the screen.
+  const heavier = all
+    .filter(r => decl(r.body, 'right') !== undefined)
+    .flatMap(r => r.selectors)
+    .filter(s => /\.collapse-toggle$/.test(s) && weight(s) >= weight(mirror) && s !== mirror);
+  assert.deepEqual(heavier, []);
+});

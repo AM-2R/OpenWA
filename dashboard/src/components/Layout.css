@@ -122,10 +122,6 @@
   height: 16px;
 }
 
-.sidebar.collapsed .collapse-toggle {
-  right: -14px;
-}
-
 .sidebar-nav {
   flex: 1;
   padding: 1rem 0.75rem;
