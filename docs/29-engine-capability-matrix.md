@@ -749,7 +749,7 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 | `getBlockedContacts`           | ✅ `getBlockedContacts`                                          |
 | `getContactById`               | ✅ `getContactById`, `blockContact`, `unblockContact`            |
 | `getContactDeviceCount`        | ❌ **not exposed**                                               |
-| `getContactLidAndPhone`        | ✅ `resolveContactPhone`                                         |
+| `getContactLidAndPhone`        | ✅ `resolveContactPhone`, `getNumberId`                          |
 | `getContacts`                  | ⚙️ read via a direct page walk, not `Client.getContacts` (#1501) |
 | `getCountryCode`               | ❌ **not exposed**                                               |
 | `getFormattedNumber`           | ❌ **not exposed**                                               |
