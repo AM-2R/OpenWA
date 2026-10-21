@@ -366,6 +366,26 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
     await finish();
   });
 
+  it('lets a forward go on when the read of its destination chat merely fails', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+    const destination = { fetchMessages: () => Promise.reject(new Error('Evaluation failed: boom')) };
+    const { adapter } = readyAdapter({
+      getNumberId: () => Promise.resolve(found(CHAT)),
+      getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+
+    await expect(adapter.forwardMessage('src@c.us', CHAT, 'M1')).resolves.toEqual({
+      id: '',
+      timestamp: expect.any(Number) as unknown,
+    });
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+  });
+
   it('keeps a send that was already on the wire an outcome-unknown failure', async () => {
     const onWire = gate();
     const sendMessage = jest.fn(() =>
@@ -439,6 +459,38 @@ const DEATH_CASES: DeathCase[] = [
       const source = { fetchMessages: () => Promise.reject(closedTarget()) };
       return {
         client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.resolve(source) },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+  {
+    // A failed destination read never blocks a forward by itself, but a page that died under it does.
+    name: 'the destination chat lookup of a forward',
+    build: () => {
+      const forward = jest.fn();
+      const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+      return {
+        client: {
+          getNumberId: () => Promise.resolve(found(CHAT)),
+          getChatById: (id: string) => (id === 'src@c.us' ? Promise.resolve(source) : Promise.reject(closedTarget())),
+        },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+  {
+    name: 'the destination history read of a forward',
+    build: () => {
+      const forward = jest.fn();
+      const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+      const destination = { fetchMessages: () => Promise.reject(closedTarget()) };
+      return {
+        client: {
+          getNumberId: () => Promise.resolve(found(CHAT)),
+          getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
+        },
         unreached: forward,
       };
     },

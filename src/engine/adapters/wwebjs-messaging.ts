@@ -783,7 +783,7 @@ export class WwebjsMessaging {
       // The ids already in that chat are read first, on every attempt, so the recovery below can tell
       // the forwarded copy from an earlier send with the same whole-second timestamp. Only messages
       // WhatsApp Web already holds are read, so this never pages the chat's history in ahead of the
-      // send. A failed read never blocks the forward; it only leaves the copy unidentified.
+      // send. A read that merely fails never blocks the forward; it only leaves the copy unidentified.
       // The newest timestamp it saw is kept too: a concurrent call on the destination chat can page
       // older history in before the second read, and those messages are older than every one loaded.
       let resolvedTo = toChatId;
@@ -798,9 +798,13 @@ export class WwebjsMessaging {
             newest: snapshot.reduce((newest, m) => Math.max(newest, m.timestamp), 0),
           };
         } catch (error) {
+          // A page that died under the read is not a read that merely failed. Chromium stopped from
+          // outside rejects this call before any death listener runs, so report it for the check below.
+          this.host.reportIfPageTransportError(error, 'forwardMessage');
           this.host.logger.warn(`Could not read the destination chat before forwarding: ${String(error)}`);
         }
-        // The read above is a page round trip a teardown can land in, and its failure is only logged.
+        // The read above is a page round trip a teardown can land in. Its failure only leaves the copy
+        // unidentified, unless it shows the page is gone, which this check then refuses.
         this.host.ensureReady();
         return msgToForward.forward(to);
       });
