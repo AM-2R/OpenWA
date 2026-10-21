@@ -261,6 +261,31 @@ test('NumberChecker: CSV export neutralizes error formulas and releases its obje
   assert.equal(document.querySelector('a[download]'), null);
 });
 
+test('NumberChecker: the CSV carries each check as an ISO instant while the table shows the time of day', async t => {
+  const downloads: Blob[] = [];
+  t.mock.method(URL, 'createObjectURL', (blob: Blob) => {
+    downloads.push(blob);
+    return 'blob:number-checker-csv';
+  });
+  t.mock.method(URL, 'revokeObjectURL');
+  t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
+  stubLookups(registered);
+
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '919999999999' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+  await rtl.screen.findByText('+919999999999');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Export Results/i }));
+
+  const [, row] = (await downloads[0].text()).split('\n');
+  const checkedAt = row.split(',').at(-1) ?? '';
+  assert.match(checkedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+  assert.equal(Number.isNaN(Date.parse(checkedAt)), false);
+  const shown = container.querySelector('.nc-history-table tbody td:last-child')?.textContent;
+  assert.equal(shown, new Date(checkedAt).toLocaleTimeString());
+});
+
 test('NumberChecker: a rejected lookup is recorded as failed with error status, not as unregistered', async t => {
   t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
   const recordedDownloads: Blob[] = [];

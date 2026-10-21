@@ -73,8 +73,11 @@ export interface CheckResultItem extends CheckNumberResponse {
   status: CheckStatus;
   error?: string | null;
   avatarUrl?: string | null;
+  // ISO instant of the check: the CSV carries it as is, the tables show the time of day.
   timestamp: string;
 }
+
+const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
 
 export function NumberChecker() {
   const { t } = useTranslation();
@@ -229,7 +232,7 @@ export function NumberChecker() {
         status: res.exists ? 'registered' : 'unregistered',
         error: null,
         avatarUrl: avatar,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date().toISOString(),
       };
 
       setSingleResult(item);
@@ -289,7 +292,7 @@ export function NumberChecker() {
           ...res,
           status: res.exists ? 'registered' : 'unregistered',
           error: null,
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: new Date().toISOString(),
         };
         results.push(item);
         setBatchResults([...results]);
@@ -303,7 +306,7 @@ export function NumberChecker() {
           whatsappId: null,
           status: 'failed',
           error: errorMsg,
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: new Date().toISOString(),
         });
         setBatchResults([...results]);
 
@@ -599,7 +602,7 @@ export function NumberChecker() {
                     <div className="nc-detail-row">
                       <span className="nc-detail-label">{t('numberChecker.result.checkedAt')}</span>
                       <span className="nc-detail-value" style={{ fontFamily: 'inherit', fontWeight: 'normal' }}>
-                        <bdi>{singleResult.timestamp}</bdi>
+                        <bdi>{timeOfDay(singleResult.timestamp)}</bdi>
                       </span>
                     </div>
                   </div>
@@ -678,7 +681,7 @@ export function NumberChecker() {
                         <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
                       </td>
                       <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{item.timestamp}</bdi>
+                        <bdi>{timeOfDay(item.timestamp)}</bdi>
                       </td>
                     </tr>
                   ))}
@@ -970,7 +973,7 @@ export function NumberChecker() {
                         <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
                       </td>
                       <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{item.timestamp}</bdi>
+                        <bdi>{timeOfDay(item.timestamp)}</bdi>
                       </td>
                     </tr>
                   ))}
