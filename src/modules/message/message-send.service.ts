@@ -636,7 +636,13 @@ export class MessageSendService {
         button: { id: finalDto.buttonId, text: result.body },
       };
     }
-    return this.persistSentState(message, result, result.body ? { body: result.body } : undefined);
+    return this.persistSentState(
+      message,
+      result,
+      result.body
+        ? { body: result.body, metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>> }
+        : undefined,
+    );
   }
 
   async forward(
@@ -859,7 +865,9 @@ export class MessageSendService {
     result: MessageResult,
     // Columns a sender changed in memory after its PENDING insert. The write below is an UPDATE of
     // fixed columns, so anything not listed here (the resolved button label, for one) is never stored.
-    changed: Pick<QueryDeepPartialEntity<Message>, 'body'> = {},
+    // `metadata` is listed only when it changed: the insert already stored it, and a base64 media
+    // payload inside it would otherwise be written a second time on every send.
+    changed: Pick<QueryDeepPartialEntity<Message>, 'body' | 'metadata'> = {},
   ): Promise<MessageResponseDto> {
     // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
     // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
@@ -879,7 +887,6 @@ export class MessageSendService {
           waMessageId: message.waMessageId,
           status: message.status,
           timestamp: message.timestamp,
-          metadata: message.metadata as QueryDeepPartialEntity<Record<string, unknown>>,
         },
       );
       if (!updated.affected) return { messageId: result.id, timestamp: result.timestamp };

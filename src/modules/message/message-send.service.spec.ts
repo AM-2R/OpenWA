@@ -744,6 +744,18 @@ describe('MessageSendService', () => {
       );
     });
 
+    // The payload is stored once, by the PENDING insert. Writing it again on every SENT update would
+    // double the WAL and the table growth of a base64 send for no change in what the row holds.
+    it('marks the row SENT without writing the media payload a second time', async () => {
+      await service.sendImage('sess-1', { chatId: '628123456789@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      const update = repository.update as jest.Mock<unknown, [unknown, Record<string, unknown>]>;
+      expect(update).toHaveBeenCalledTimes(1);
+      const [, patch] = update.mock.calls[0];
+      expect(patch).toMatchObject({ status: MessageStatus.SENT, waMessageId: 'wa-msg-1' });
+      expect(patch).not.toHaveProperty('metadata');
+    });
+
     it('threads media mentions into the MediaInput (#530)', async () => {
       await service.sendImage('sess-1', {
         chatId: '120@g.us',
