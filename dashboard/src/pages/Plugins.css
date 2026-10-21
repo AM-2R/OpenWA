@@ -837,21 +837,30 @@
 }
 
 /* When the tabs sit INSIDE the install modal header (between the title and the close button), drop
-   the standalone-row margins so they don't push the title up / leave a gap. Pin them to the true
-   horizontal center of the header with absolute positioning — justify-content:space-between only
-   centers them approximately because the title (left) and close button (right) have different widths,
-   leaving the pill visibly off-center. The header carries position:relative so this is self-contained. */
+   the standalone-row margins so they don't push the title up / leave a gap. On a narrow viewport they
+   take a row of their own under the title and the close button (flex-wrap on the header). */
 .plugins-page .install-modal .modal-header .install-tabs {
   margin: 0;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  order: 3;
+  width: 100%;
 }
 
-/* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill;
-   flex-wrap keeps it from overflowing horizontally on a narrow viewport (mobile bottom-sheet width),
-   wrapping to a second row instead. */
+/* Where the header has room beside the longest title, pin the tabs to its true horizontal center with
+   absolute positioning: justify-content:space-between only centers them approximately because the
+   title (left) and close button (right) have different widths, leaving the pill visibly off-center. An
+   absolutely positioned box takes no part in wrapping, so below this width it would cover the title. */
+@media (min-width: 700px) {
+  .plugins-page .install-modal .modal-header .install-tabs {
+    order: 0;
+    width: auto;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill. */
 .plugins-page .install-modal .modal-header {
   position: relative;
   flex-wrap: wrap;
