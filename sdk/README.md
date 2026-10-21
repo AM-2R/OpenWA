@@ -279,7 +279,11 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   builder refuses it. The JavaScript, PHP, Go and Java clients bound the whole call,
   response body included. The Python client's is per network operation
   (connect, read, write, pool), so a response that keeps trickling bytes is not
-  cut off. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  cut off. On PHP, Guzzle's stream handler (a host without `ext-curl`) differs: a
+  gateway that stays silent past the timeout surfaces as a Guzzle exception, not
+  `OpenWATimeoutException`, and on Guzzle 7 a `0` still leaves PHP's
+  `default_socket_timeout` (60s by default) before the response headers; see the
+  PHP README. Path segments (chat / message ids) are percent-encoded; a base-URL path
   prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development
