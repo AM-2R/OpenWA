@@ -390,3 +390,77 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
     expect(sentNothing(error)).toBe(false);
   });
 });
+
+/**
+ * Chromium stopped from outside OpenWA's own teardown (a SIGTERM to the browser, a page closed on its own)
+ * rejects the call that is pending under it BEFORE the page 'close' and browser 'disconnected' listeners
+ * run, so the session still reads READY when the rejection is observed. Nothing has flagged it yet: the
+ * operation has to report the death itself before it re-checks readiness, or that check passes and the
+ * operation goes on against the dead page.
+ */
+interface DeathCase {
+  name: string;
+  /** The client whose failing call rejects with the closed-target error; `unreached` must stay uncalled. */
+  build: () => { client: Record<string, unknown>; unreached?: jest.Mock };
+  run: (adapter: WhatsAppWebJsAdapter) => Promise<unknown>;
+}
+
+const DEATH_CASES: DeathCase[] = [
+  {
+    name: 'the chat lookup of a reply',
+    build: () => ({
+      client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.reject(closedTarget()) },
+    }),
+    run: adapter => adapter.replyToMessage(CHAT, 'Q1', 'hi'),
+  },
+  {
+    name: 'the history read of a reply',
+    build: () => {
+      const reply = jest.fn();
+      const chat = { fetchMessages: () => Promise.reject(closedTarget()) };
+      return {
+        client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.resolve(chat) },
+        unreached: reply,
+      };
+    },
+    run: adapter => adapter.replyToMessage(CHAT, 'Q1', 'hi'),
+  },
+  {
+    name: 'the source chat lookup of a forward',
+    build: () => ({
+      client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.reject(closedTarget()) },
+    }),
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+  {
+    name: 'the source history read of a forward',
+    build: () => {
+      const forward = jest.fn();
+      const source = { fetchMessages: () => Promise.reject(closedTarget()) };
+      return {
+        client: { getNumberId: () => Promise.resolve(found(CHAT)), getChatById: () => Promise.resolve(source) },
+        unreached: forward,
+      };
+    },
+    run: adapter => adapter.forwardMessage('src@c.us', CHAT, 'M1'),
+  },
+];
+
+describe('whatsapp-web.js operations whose page dies on its own', () => {
+  it.each(DEATH_CASES)('reports the death and answers the not-ready 409 when $name fails', async testCase => {
+    const { client, unreached } = testCase.build();
+    const { adapter } = readyAdapter(client);
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+
+    const result = await outcomeOf(testCase.run(adapter));
+
+    if (unreached) expect(unreached).not.toHaveBeenCalled();
+    expect(result).toEqual({ error: expect.any(EngineNotReadyError) as unknown });
+    const { error } = result as { error: unknown };
+    expect(countsTowardSendBreaker(error)).toBe(false);
+    expect(sentNothing(error)).toBe(true);
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+});
