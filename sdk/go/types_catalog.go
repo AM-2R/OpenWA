@@ -2,7 +2,7 @@ package openwa
 
 import "net/url"
 
-// CatalogInfo describes a business catalog.
+// CatalogInfo describes a business catalog. ProductCount counts at most the first 51 products on Baileys.
 type CatalogInfo struct {
 	ID           string  `json:"id"`
 	Name         string  `json:"name"`

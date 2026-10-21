@@ -40,7 +40,8 @@ MessageDirection = Literal["incoming", "outgoing"]
 DeliveryStatus = Literal["pending", "sent", "delivered", "read", "failed"]
 # The three windows WhatsApp accepts for a pinned message: 24 hours, 7 days, 30 days.
 PinDurationSeconds = Literal[86400, 604800, 2592000]
-# WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10.
+# WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10. whatsapp-web.js honors only
+# 0 to 7 and posts 8, 9 and 10 in the default font.
 StatusFont = Literal[0, 1, 2, 6, 7, 8, 9, 10]
 BulkMessageType = Literal["text", "image", "video", "audio", "document"]
 BatchMessageStatus = Literal["pending", "sent", "failed", "cancelled"]
@@ -284,7 +285,8 @@ class UpdateSessionProxyRequest(TypedDict, total=False):
 class SessionConfig(TypedDict):
     """A session's effective runtime configuration.
 
-    ``None`` on ``maxReconnectAttempts`` means unlimited -- not unset.
+    ``None`` on ``maxReconnectAttempts`` means unlimited -- not unset. ``autoRejectCalls`` works on
+    Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there.
     """
 
     autoRejectCalls: bool
@@ -296,7 +298,8 @@ class UpdateSessionConfigRequest(TypedDict, total=False):
     """Partial update of a session's config, in any state -- no re-link, no QR scan.
 
     Send ``None`` for ``maxReconnectAttempts`` to restore unlimited retries, which no in-range number
-    can express.
+    can express. ``autoRejectCalls`` works on Baileys only: whatsapp-web.js stores the flag but cannot
+    reject a call, so calls keep ringing there.
     """
 
     autoRejectCalls: bool | None
@@ -754,6 +757,9 @@ class ContactRecord(TypedDict, total=False):
     ``isBlocked`` reflects the account's real blocklist on both engines. When the blocklist query
     fails the field stays at its default rather than reporting "nobody is blocked", and the gateway
     logs a warning — so a ``False`` is not proof the contact is unblocked if the link is unhealthy.
+
+    ``profilePicUrl`` is a cached URL that only Baileys can fill (whatsapp-web.js never sets it) and it
+    is often absent there too, so its absence does not say whether the contact has a picture.
     """
 
     id: Jid
@@ -1372,7 +1378,7 @@ class ChannelMessageRecord(TypedDict, total=False):
 
 
 class ChannelMessageQuery(TypedDict, total=False):
-    """Max messages to return (default 50)."""
+    """Max messages to return (default 50, max 100: a larger value is cut to 100)."""
 
     limit: int
 
@@ -1388,6 +1394,7 @@ class CatalogInfo(TypedDict, total=False):
     id: str
     name: str
     description: str | None
+    # Counts at most the first 51 products on Baileys.
     productCount: int
     url: str
 
@@ -1448,7 +1455,9 @@ class SendProductRequest(TypedDict):
 # keyword, so the optional keys are declared via the functional TypedDict form
 # (mirrors ListMessagesQuery / MessageRecord). `dateFrom` / `dateTo` are
 # epoch-ms; the backend binds them against messages.timestamp (epoch-seconds),
-# dividing by 1000 internally.
+# dividing by 1000 internally. `q` holds at most 1000 characters and 32 words (400 above either).
+# `limit` defaults to 50 and is capped at the server's SEARCH_LIMIT_MAX (100 by default); `offset` is
+# at most 100000 (400 above).
 class _SearchQueryRequired(TypedDict):
     q: str
 

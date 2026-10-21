@@ -3,7 +3,9 @@ package openwa
 import "net/url"
 
 // SearchQuery is the query for GET /search. Q is required; all else optional.
-// DateFrom/DateTo are epoch-ms.
+// DateFrom/DateTo are epoch-ms. Q holds at most 1000 characters and 32 words (the server answers 400
+// above either). Limit defaults to 50 and is capped at the server's SEARCH_LIMIT_MAX (100 by default);
+// Offset is at most 100000 (400 above).
 type SearchQuery struct {
 	Q         string
 	SessionID *string

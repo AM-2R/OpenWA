@@ -171,6 +171,7 @@ export interface GroupJoinInfo {
  * server always reports a concrete `reconnectBaseDelay` and `autoRejectCalls`.
  */
 export interface SessionConfig {
+  /** Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there. */
   autoRejectCalls: boolean;
   maxReconnectAttempts: number | null;
   reconnectBaseDelay: number;
@@ -182,6 +183,7 @@ export interface SessionConfig {
  * number can express.
  */
 export interface UpdateSessionConfigRequest {
+  /** Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there. */
   autoRejectCalls?: boolean | null;
   maxReconnectAttempts?: number | null;
   reconnectBaseDelay?: number | null;
@@ -765,6 +767,10 @@ export interface ContactRecord {
    * unblocked if the link is unhealthy.
    */
   isBlocked?: boolean;
+  /**
+   * A cached picture URL. Only Baileys can fill it (whatsapp-web.js never sets it) and it is often
+   * absent there too, so its absence does not say whether the contact has a picture.
+   */
   profilePicUrl?: string | null;
 }
 
@@ -1217,7 +1223,10 @@ export interface SendTextStatusRequest {
   recipients?: string[];
   /** Hex background color, e.g. `#25D366`. */
   backgroundColor?: string;
-  /** WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10. */
+  /**
+   * WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10. whatsapp-web.js honors only
+   * 0 to 7 and posts 8, 9 and 10 in the default font.
+   */
   font?: 0 | 1 | 2 | 6 | 7 | 8 | 9 | 10;
 }
 
@@ -1364,7 +1373,7 @@ export interface ChannelMessageRecord {
 }
 
 export interface ChannelMessageQuery {
-  /** Max messages to return (default 50). */
+  /** Max messages to return (default 50, max 100: a larger value is cut to 100). */
   limit?: number;
 }
 
@@ -1379,6 +1388,7 @@ export interface CatalogInfo {
   id: string;
   name: string;
   description?: string | null;
+  /** Counts at most the first 51 products on Baileys. */
   productCount: number;
   url: string;
 }
@@ -1432,7 +1442,10 @@ export interface SendProductRequest {
 
 /** Query parameters for `GET /search`. Only `q` is required; all filters are optional. */
 export interface SearchParams {
-  /** Search term (required, non-empty — the server rejects empty/whitespace with 400). */
+  /**
+   * Search term (required, non-empty — the server rejects empty/whitespace with 400). At most 1000
+   * characters and 32 words, punctuation included; the server answers 400 above either.
+   */
   q: string;
   /** Restrict to a single session. */
   sessionId?: string;
@@ -1448,9 +1461,9 @@ export interface SearchParams {
   dateFrom?: number;
   /** Epoch-ms upper bound (inclusive). */
   dateTo?: number;
-  /** Max hits to return. */
+  /** Max hits to return (default 50; capped at the server's SEARCH_LIMIT_MAX, 100 by default). */
   limit?: number;
-  /** Pagination offset. */
+  /** Pagination offset (at most 100000; the server answers 400 above). */
   offset?: number;
 }
 

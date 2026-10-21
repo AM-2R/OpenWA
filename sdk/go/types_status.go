@@ -47,7 +47,8 @@ type StatusMedia struct {
 	ContentType string
 }
 
-// StatusFont is a WhatsApp status font family.
+// StatusFont is a WhatsApp status font family. whatsapp-web.js honors only 0 to 7 and posts 8, 9 and
+// 10 in the default font.
 type StatusFont int
 
 const (

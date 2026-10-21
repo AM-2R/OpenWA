@@ -7,6 +7,9 @@ import "net/url"
 // IsBlocked reflects the account's real blocklist on both engines. When the blocklist query fails
 // the field stays at its default rather than reporting "nobody is blocked", and the gateway logs a
 // warning — so a false is not proof the contact is unblocked if the session's link is unhealthy.
+//
+// ProfilePicURL is a cached URL that only Baileys can fill (whatsapp-web.js never sets it) and it is
+// often absent there too, so its absence does not say whether the contact has a picture.
 type ContactRecord struct {
 	ID            string  `json:"id"`
 	Name          *string `json:"name,omitempty"`
