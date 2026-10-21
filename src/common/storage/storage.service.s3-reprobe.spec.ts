@@ -33,6 +33,7 @@ import {
   S3_PROBE_TIMEOUT_MS,
   StorageService,
 } from './storage.service';
+import { sweepOrphanedFiles } from './orphan-sweep';
 import * as transfer from './storage-transfer';
 
 const ENV_KEYS = [
@@ -513,6 +514,59 @@ describe('StorageService S3 re-probe and recovery', () => {
     expect(carried.sort()).toEqual(['empty.bin', 'local-only.bin', 'a.bin', 'sess1/b.bin'].sort());
     expect(count).toBe(carried.length);
     expect(sizeBytes).toBe(1000 + 2000 + 500);
+  });
+
+  // An S3 store is walked in two parts: the bucket, then the local fallback dir. A sweep only acts on the files it
+  // is shown, so a directory it cannot read or a link in that fallback dir has to be skipped there as well, or
+  // every pass aborts and reclaims nothing. The count and the export are the other way round and still refuse.
+  it('the orphan sweep of an S3 store skips what it cannot read in the local fallback dir, which the count refuses', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({ Contents: [{ Key: 'media/statuses/s3-only.bin', Size: 10 }] });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    const warn = warnSpyOf(svc);
+    await flush();
+    for (const file of ['statuses/local/readable.bin', 'statuses/locked/hidden.bin', 'elsewhere/behind.bin']) {
+      fs.mkdirSync(path.dirname(path.join(localPath, file)), { recursive: true });
+      fs.writeFileSync(path.join(localPath, file), 'x');
+    }
+    fs.symlinkSync(path.join(localPath, 'elsewhere'), path.join(localPath, 'statuses', 'linked'));
+    // A mode-000 directory is still readable by root, so the failure is injected for the one path.
+    const readdir = fs.promises.readdir.bind(fs.promises) as (...args: unknown[]) => Promise<unknown>;
+    const readdirSpy = jest
+      .spyOn(fs.promises, 'readdir')
+      .mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+        String(target).endsWith(path.join('statuses', 'locked'))
+          ? Promise.reject(Object.assign(new Error('EACCES: permission denied, scandir'), { code: 'EACCES' }))
+          : readdir(target, ...rest)) as never);
+    try {
+      const deleteFile = jest.fn().mockResolvedValue(undefined);
+
+      const removed = await sweepOrphanedFiles({
+        storage: { iterateFiles: (prefix, options) => svc.iterateFiles(prefix, options), deleteFile },
+        prefix: 'statuses/',
+        graceMs: 0,
+        now: 1000,
+        firstSeenAt: new Map(),
+        referencedAmong: () => Promise.resolve(new Set<string | undefined>()),
+        onDeleteFailed: jest.fn(),
+      });
+
+      expect(removed).toBe(2);
+      expect(deleteFile.mock.calls.map(([file]: [string]) => file).sort()).toEqual([
+        'statuses/local/readable.bin',
+        'statuses/s3-only.bin',
+      ]);
+      const skipped = warn.mock.calls.map(([line]: [string]) => line).join('\n');
+      expect(skipped).toContain('"statuses/linked"');
+      expect(skipped).toContain('"statuses/locked"');
+      await expect(svc.getFileCount()).rejects.toThrow(/symbolic link.*statuses\/linked/);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it('iterateFiles paginates S3 and unions the local fallback dir (each key once)', async () => {
