@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record plugin install, update, uninstall, enable, disable and configuration changes in the audit log.
 - Add `QUEUE_PREFIX` to set the Redis key prefix of the BullMQ queues, so deployments that share a Redis stop taking each other's webhook jobs.
 - `QUEUE_PREFIX` does not separate the rate-limit store or the WebSocket fan-out.
+- Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list. Thanks @rjsebening.
+- Add a New chat panel to the dashboard Chats page that opens a chat with a saved contact or a number WhatsApp confirms, and on Baileys creates a group. Thanks @rjsebening.
+- Add chat and contact menus to the dashboard Chats page: pin, mute, archive, mark unread, save, rename and block a contact, leave a group, and clear or delete a chat on whatsapp-web.js only until #1891 is fixed. Thanks @rjsebening.
+- Add an Archived view to the dashboard chat list. Thanks @rjsebening.
+- Add a group info dialog to the dashboard Chats page that edits a group and manages its participants. Thanks @rjsebening.
 
 ### Changed
 
