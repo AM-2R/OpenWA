@@ -645,49 +645,51 @@ export function NumberChecker() {
                 </button>
               </div>
 
-              <table className="nc-history-table">
-                <thead>
-                  <tr>
-                    <th>{t('numberChecker.table.phone')}</th>
-                    <th>{t('numberChecker.table.status')}</th>
-                    <th>{t('numberChecker.table.id')}</th>
-                    <th>{t('numberChecker.table.time')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentChecks.map((item, idx) => (
-                    <tr key={`${item.number}-${idx}`}>
-                      <td style={{ fontWeight: 600 }}>
-                        <bdi dir="ltr">+{item.number}</bdi>
-                      </td>
-                      <td>
-                        {item.status === 'registered' ? (
-                          <span className="nc-status-badge registered">
-                            <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
-                          </span>
-                        ) : item.status === 'failed' ? (
-                          <span
-                            className="nc-status-badge error"
-                            title={item.error || t('numberChecker.status.failed')}
-                          >
-                            <AlertCircle size={13} /> {t('numberChecker.status.failed')}
-                          </span>
-                        ) : (
-                          <span className="nc-status-badge unregistered">
-                            <XCircle size={13} /> {t('numberChecker.status.unregistered')}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{timeOfDay(item.timestamp)}</bdi>
-                      </td>
+              <div className="nc-table-wrap">
+                <table className="nc-history-table">
+                  <thead>
+                    <tr>
+                      <th>{t('numberChecker.table.phone')}</th>
+                      <th>{t('numberChecker.table.status')}</th>
+                      <th>{t('numberChecker.table.id')}</th>
+                      <th>{t('numberChecker.table.time')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {recentChecks.map((item, idx) => (
+                      <tr key={`${item.number}-${idx}`}>
+                        <td style={{ fontWeight: 600 }}>
+                          <bdi dir="ltr">+{item.number}</bdi>
+                        </td>
+                        <td>
+                          {item.status === 'registered' ? (
+                            <span className="nc-status-badge registered">
+                              <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
+                            </span>
+                          ) : item.status === 'failed' ? (
+                            <span
+                              className="nc-status-badge error"
+                              title={item.error || t('numberChecker.status.failed')}
+                            >
+                              <AlertCircle size={13} /> {t('numberChecker.status.failed')}
+                            </span>
+                          ) : (
+                            <span className="nc-status-badge unregistered">
+                              <XCircle size={13} /> {t('numberChecker.status.unregistered')}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                          <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
+                        </td>
+                        <td style={{ color: 'var(--text-muted)' }}>
+                          <bdi>{timeOfDay(item.timestamp)}</bdi>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
@@ -922,65 +924,67 @@ export function NumberChecker() {
                 </div>
               </div>
 
-              <table className="nc-history-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>{t('numberChecker.table.phone')}</th>
-                    <th>{t('numberChecker.table.status')}</th>
-                    <th>{t('numberChecker.table.id')}</th>
-                    <th>{t('numberChecker.table.time')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredBatchResults.map((item, idx) => (
-                    <tr key={`${item.number}-${idx}`}>
-                      <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
-                      <td style={{ fontWeight: 600 }}>
-                        <bdi dir="ltr">+{item.number}</bdi>
-                      </td>
-                      <td>
-                        {item.status === 'registered' ? (
-                          <span className="nc-status-badge registered">
-                            <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
-                          </span>
-                        ) : item.status === 'failed' ? (
-                          <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem' }}>
-                            <span
-                              className="nc-status-badge error"
-                              title={item.error || t('numberChecker.toast.lookupFailed')}
-                            >
-                              <AlertCircle size={13} /> {t('numberChecker.status.failed')}
-                            </span>
-                            {item.error && (
-                              <span
-                                style={{
-                                  fontSize: '0.75rem',
-                                  color: 'var(--error-text)',
-                                  maxWidth: '240px',
-                                  wordBreak: 'break-word',
-                                }}
-                              >
-                                {item.error}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="nc-status-badge unregistered">
-                            <XCircle size={13} /> {t('numberChecker.status.unregistered')}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
-                        <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
-                      </td>
-                      <td style={{ color: 'var(--text-muted)' }}>
-                        <bdi>{timeOfDay(item.timestamp)}</bdi>
-                      </td>
+              <div className="nc-table-wrap">
+                <table className="nc-history-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>{t('numberChecker.table.phone')}</th>
+                      <th>{t('numberChecker.table.status')}</th>
+                      <th>{t('numberChecker.table.id')}</th>
+                      <th>{t('numberChecker.table.time')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredBatchResults.map((item, idx) => (
+                      <tr key={`${item.number}-${idx}`}>
+                        <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          <bdi dir="ltr">+{item.number}</bdi>
+                        </td>
+                        <td>
+                          {item.status === 'registered' ? (
+                            <span className="nc-status-badge registered">
+                              <CheckCircle2 size={13} /> {t('numberChecker.status.registered')}
+                            </span>
+                          ) : item.status === 'failed' ? (
+                            <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <span
+                                className="nc-status-badge error"
+                                title={item.error || t('numberChecker.toast.lookupFailed')}
+                              >
+                                <AlertCircle size={13} /> {t('numberChecker.status.failed')}
+                              </span>
+                              {item.error && (
+                                <span
+                                  style={{
+                                    fontSize: '0.75rem',
+                                    color: 'var(--error-text)',
+                                    maxWidth: '240px',
+                                    wordBreak: 'break-word',
+                                  }}
+                                >
+                                  {item.error}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="nc-status-badge unregistered">
+                              <XCircle size={13} /> {t('numberChecker.status.unregistered')}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}>
+                          <bdi dir="ltr">{item.whatsappId || '-'}</bdi>
+                        </td>
+                        <td style={{ color: 'var(--text-muted)' }}>
+                          <bdi>{timeOfDay(item.timestamp)}</bdi>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </div>

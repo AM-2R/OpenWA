@@ -97,13 +97,14 @@
 .number-checker /* Main Grid */
 .nc-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, ...) lets a track shrink below its content, which a plain 1fr never does. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1.5rem;
 }
 
 @media (max-width: 900px) {
   .number-checker .nc-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .number-checker .nc-card {
@@ -140,6 +141,7 @@
 
 .number-checker .nc-input-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -147,6 +149,12 @@
 .number-checker .nc-input-row .nc-btn {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* Wide enough to show a whole number; on a narrow card the button wraps below it. */
+.number-checker .nc-input-row .nc-input {
+  flex: 1 1 12rem;
+  min-width: 0;
 }
 
 .number-checker .nc-input {
@@ -311,6 +319,8 @@
 
 .number-checker .nc-result-header-text {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .number-checker .nc-result-phone {
@@ -360,8 +370,10 @@
 
 .number-checker .nc-detail-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 0.25rem 0.75rem;
   font-size: 0.875rem;
 }
 
@@ -375,8 +387,11 @@
   font-weight: 600;
   font-family: monospace;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .number-checker .nc-copy-btn {
@@ -411,6 +426,11 @@
   padding: 1.5rem;
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--border);
+}
+
+/* A table wider than a narrow card scrolls inside it; the page clips anything that sticks out. */
+.number-checker .nc-table-wrap {
+  overflow-x: auto;
 }
 
 .number-checker .nc-history-table {
@@ -494,6 +514,7 @@
 
 .number-checker .nc-filter-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 

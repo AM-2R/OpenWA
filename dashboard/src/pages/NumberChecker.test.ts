@@ -217,6 +217,24 @@ test('NumberChecker: the number field and the bulk list are typed left to right,
   assert.equal(container.querySelector('.nc-textarea')?.getAttribute('dir'), 'ltr');
 });
 
+test('NumberChecker: both result tables sit in a scroll container, so a narrow card does not clip them', async () => {
+  stubLookups(registered);
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '919876543210' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+  assert.equal(container.querySelectorAll('.nc-history-table').length, 1);
+  assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
+
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '911111111111' } });
+  startBatch();
+  await rtl.screen.findByText('+911111111111');
+  assert.equal(container.querySelectorAll('.nc-history-table').length, 1);
+  assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
