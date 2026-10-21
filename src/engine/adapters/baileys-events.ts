@@ -358,11 +358,14 @@ export class BaileysEvents {
     { announce: Array<() => void>; timer: ReturnType<typeof setTimeout> }
   >();
 
-  /**
-   * How many changes wait for a delivery, its outcome (see parkUntil) or its emit (see changesAwaitingEmit); the
-   * rest are judged, or announced, at once.
-   */
+  /** How many changes wait for a delivery or its outcome (see parkUntil); the rest are judged at once. */
   private changesParked = 0;
+
+  /**
+   * How many changes wait in changesAwaitingEmit; the rest are announced at once. Counted apart from the parks,
+   * so changes waiting for their message cannot make a change that has to wait for an outcome be dropped.
+   */
+  private changesAwaiting = 0;
 
   private static readonly CHANGES_PARKED_LIMIT = 64;
 
@@ -902,7 +905,8 @@ export class BaileysEvents {
    * right after the emit instead, in the order the changes arrived, when the session holds the message. A delete
    * (`behindChangesOnly`) never waits for the message: it waits only behind the changes already waiting, so they
    * are announced in the order they arrived. A change waits at most the three media deadlines a change aimed at a
-   * delivery in flight waits (see targetsForeignMessage), and no more than CHANGES_PARKED_LIMIT wait at once.
+   * delivery in flight waits (see targetsForeignMessage), and no more than CHANGES_PARKED_LIMIT wait at once, the
+   * limit of those changes.
    */
   private announceWhenHandedOn(
     messageId: string | null | undefined,
@@ -912,11 +916,11 @@ export class BaileysEvents {
   ): void {
     const waiting = messageId && !ticket ? this.changesAwaitingEmit.get(messageId) : undefined;
     const waits = !!waiting || (!behindChangesOnly && !ticket && !!messageId && this.inboundInFlight.has(messageId));
-    if (!messageId || !waits || this.changesParked >= BaileysEvents.CHANGES_PARKED_LIMIT) {
+    if (!messageId || !waits || this.changesAwaiting >= BaileysEvents.CHANGES_PARKED_LIMIT) {
       announce();
       return;
     }
-    this.changesParked++;
+    this.changesAwaiting++;
     if (waiting) {
       waiting.announce.push(announce);
       return;
@@ -932,7 +936,7 @@ export class BaileysEvents {
     if (!messageId || !waiting) return;
     this.changesAwaitingEmit.delete(messageId);
     clearTimeout(waiting.timer);
-    this.changesParked -= waiting.announce.length;
+    this.changesAwaiting -= waiting.announce.length;
     for (const announce of waiting.announce) {
       try {
         announce();

@@ -1422,6 +1422,32 @@ describe('Baileys inbound messages held for storage', () => {
       expect(internals(events)).toEqual({ waiting: 0, queued: 0 });
     });
 
+    // The limit is the one of the changes that wait for an outcome, but counted apart: a change that has to wait for
+    // the answer of the session is held, not dropped, whatever number of others wait for their message.
+    it('keeps a change that waits for the answer of the session held while 64 others wait for their message', async () => {
+      const OTHER = '628222@s.whatsapp.net';
+      const h = heldProjector({ unique: true, sqlite: true });
+      h.rows.push({ waMessageId: 'X', chatId: CHAT, direction: 'incoming', body: 'the real one' });
+      const answer = h.stall('X'); // the row of the delivery of X waits, so the session has not answered yet
+      const { events } = build(4, h.callbacks, memoryStore());
+      const release = download();
+      upsert(events, media('M', CHAT), text('X', OTHER));
+      await flush();
+      upsert(events, ...Array.from({ length: 64 }, (_, i) => reaction(`R${i}`, 'M', `r${i}`)));
+      await flush();
+      expect(h.announcedAs('message.reaction')).toEqual([]);
+
+      // The real edit of X reads as foreign to the copy the delivery stored, and waits for the answer.
+      upsert(events, edit('E', 'X', 'fixed'));
+      await flush();
+      answer();
+      release();
+      await flush();
+
+      expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(expect.objectContaining({ chatId: CHAT, body: 'fixed' }));
+      expect(h.announcedAs('message.reaction')).toHaveLength(64);
+    });
+
     it('announces the other changes, and does not process the message again, when a consumer throws', async () => {
       jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const h = heldProjector({ unique: true, sqlite: true });
@@ -1459,8 +1485,8 @@ describe('Baileys inbound messages held for storage', () => {
 
     /** How many changes wait, and for how many messages. */
     const internals = (events: BaileysEvents) => {
-      const state = events as unknown as { changesParked: number; changesAwaitingEmit: Map<string, unknown> };
-      return { waiting: state.changesParked, queued: state.changesAwaitingEmit?.size ?? 0 };
+      const state = events as unknown as { changesAwaiting: number; changesAwaitingEmit: Map<string, unknown> };
+      return { waiting: state.changesAwaiting, queued: state.changesAwaitingEmit?.size ?? 0 };
     };
   });
 });
