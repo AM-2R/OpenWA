@@ -106,6 +106,8 @@ const DUPLICATE_CONTACT = { ...CONTACT, number: '262813461250071' };
 let listDuplicateContact = false;
 // When true, the address book answers 503, as it does while the engine is busy.
 let failContacts = false;
+// What the chat list reports for Alice, which a test changes to stand for the phone changing her chat.
+const aliceNow: Partial<Chat> = {};
 // The number the new-chat tests type, and the id the gateway resolves it to.
 const TYPED_NUMBER = '+1 555 000 9999';
 const RESOLVED_ID = '15550009999@c.us';
@@ -141,7 +143,7 @@ function installFetchStub(): void {
     if (method === 'GET' && path.startsWith(`${base}/chats?`)) {
       return Promise.resolve(
         jsonResponse([
-          CHAT,
+          { ...CHAT, ...aliceNow },
           ...(listGroup ? [GROUP] : []),
           ...(listExtra ? [PUSH_ONLY_CHAT, LID_CHAT, NUMBER_NAMED_CHAT] : []),
         ]),
@@ -272,6 +274,7 @@ afterEach(async () => {
   listExtra = false;
   listDuplicateContact = false;
   failContacts = false;
+  for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
   declineWrites = false;
   for (const id of Object.keys(pictureFor)) delete pictureFor[id];
   gates.clear();
@@ -1329,6 +1332,39 @@ test('a tab that was hidden but sees no message owes no read when it is visible 
   });
   await new Promise(resolve => setTimeout(resolve, 1_000));
   assert.deepEqual(readsOf(CHAT.id), []);
+});
+
+test("the open room's menu offers Mark as unread for a chat that was opened with unread messages", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  aliceNow.unreadCount = 2;
+  const { container } = renderPage();
+  await screen.findByLabelText('2 unread messages');
+  fireEvent.click(screen.getByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  const menu = container.querySelector('.room-menu-popover') as HTMLElement;
+  assert.ok(within(menu).getByRole('button', { name: 'Mark as unread' }), 'the room menu lacks Mark as unread');
+});
+
+test("the open room's menu follows the chat list when a reload brings a change made elsewhere", async () => {
+  const { screen, fireEvent, act, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  // The phone pins the chat, and a reconnect reloads the list.
+  aliceNow.pinned = true;
+  const socket = lastSocket();
+  assert.ok(socket, 'the page opened no socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+  await screen.findByRole('img', { name: 'Pinned' });
+
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  const menu = container.querySelector('.room-menu-popover') as HTMLElement;
+  assert.ok(within(menu).getByRole('button', { name: 'Unpin chat' }), 'the room menu kept offering Pin chat');
 });
 
 test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {

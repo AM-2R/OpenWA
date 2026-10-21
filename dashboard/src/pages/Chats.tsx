@@ -1666,8 +1666,14 @@ export function Chats() {
                           keys, and the role would promise them. */}
                       {roomMenuOpen && (
                         <div className="room-menu-popover">
-                          {/* The row's actions, then what only an open room needs. */}
-                          <ChatActions chat={activeChat} actions={rowActions} onPicked={closeRoomMenu} />
+                          {/* The row's actions, then what only an open room needs. The chat comes from the list,
+                              which opening it, a reload and the page's own actions keep current, not from the
+                              snapshot taken when its row was clicked. */}
+                          <ChatActions
+                            chat={chats.find(c => c.id === activeChat.id) ?? activeChat}
+                            actions={rowActions}
+                            onPicked={closeRoomMenu}
+                          />
                           <hr />
                           <button type="button" onClick={() => void handleCopyChatId()}>
                             <Copy size={16} />
