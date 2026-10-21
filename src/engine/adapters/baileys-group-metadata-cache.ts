@@ -29,10 +29,12 @@ interface CachedGroup {
  */
 export class GroupMetadataCache {
   private readonly entries = new Map<string, CachedGroup>();
-  /** Reads under way, so concurrent sends to one group share a single query. */
+  /**
+   * Reads under way, so concurrent sends to one group share a single query. A read that an invalidation
+   * or a clear overtook is dropped from here: its answer still reaches the callers that joined it, but
+   * it is not kept and no later read waits on it.
+   */
   private readonly inFlight = new Map<string, Promise<GroupMetadata>>();
-  /** In-flight reads that an invalidation overtook: their answer is returned but not kept. */
-  private readonly overtaken = new Set<string>();
 
   constructor(
     private readonly ttlMs: number,
@@ -72,16 +74,22 @@ export class GroupMetadataCache {
     if (hit) return Promise.resolve(hit);
     const joined = this.inFlight.get(jid);
     if (joined) return joined;
-    const pending = (async (): Promise<GroupMetadata> => {
-      try {
-        const metadata = await fetch();
-        if (!this.overtaken.has(jid)) this.store(jid, metadata);
+    // Gives up the group's slot and says whether this read still held it: an invalidation or a clear takes it away.
+    const settle = (): boolean => {
+      const held = this.inFlight.get(jid) === pending;
+      if (held) this.inFlight.delete(jid);
+      return held;
+    };
+    const pending: Promise<GroupMetadata> = fetch().then(
+      metadata => {
+        if (settle()) this.store(jid, metadata);
         return metadata;
-      } finally {
-        this.overtaken.delete(jid);
-        this.inFlight.delete(jid);
-      }
-    })();
+      },
+      (error: unknown) => {
+        settle();
+        throw error;
+      },
+    );
     this.inFlight.set(jid, pending);
     return pending;
   }
@@ -98,13 +106,13 @@ export class GroupMetadataCache {
   invalidate(jid: string | undefined): void {
     if (!jid) return;
     this.entries.delete(jid);
-    if (this.inFlight.has(jid)) this.overtaken.add(jid);
+    this.inFlight.delete(jid);
   }
 
   /** Forget everything, for a connection change or a teardown. */
   clear(): void {
     this.entries.clear();
-    for (const jid of this.inFlight.keys()) this.overtaken.add(jid);
+    this.inFlight.clear();
   }
 
   /**

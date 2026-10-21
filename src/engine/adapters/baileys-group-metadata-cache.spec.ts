@@ -112,6 +112,34 @@ describe('GroupMetadataCache', () => {
       expect(fresh).toHaveBeenCalledTimes(1);
     });
 
+    // A query out on a socket that has been replaced may never be answered, so a read that follows the
+    // change has to ask again rather than wait on it, and the old answer must leave the new read alone.
+    it.each([
+      ['an invalidation', (cache: GroupMetadataCache) => cache.invalidate(GROUP)],
+      ['a clear', (cache: GroupMetadataCache) => cache.clear()],
+    ])('asks again for a read that follows %s while a query is out', async (_label, forget) => {
+      const cache = build();
+      let answerOld!: (metadata: GroupMetadata) => void;
+      const old = cache.read(GROUP, () => new Promise<GroupMetadata>(resolve => (answerOld = resolve)));
+
+      forget(cache);
+      let answerNew!: (metadata: GroupMetadata) => void;
+      const fresh = jest.fn(() => new Promise<GroupMetadata>(resolve => (answerNew = resolve)));
+      const next = cache.read(GROUP, fresh);
+      expect(fresh).toHaveBeenCalledTimes(1);
+
+      answerOld(group(GROUP, ['628111@s.whatsapp.net']));
+      await old;
+      expect(cache.size).toBe(0); // the old answer is not kept
+      const joiner = jest.fn();
+      void cache.read(GROUP, joiner);
+      expect(joiner).not.toHaveBeenCalled(); // and it did not release the new query's slot
+
+      answerNew(group(GROUP, ['628111@s.whatsapp.net', '628222@s.whatsapp.net']));
+      await expect(next).resolves.toMatchObject({ participants: [{}, {}] });
+      expect(cache.size).toBe(1);
+    });
+
     it('clears every group, and an answer in flight is not kept either', async () => {
       const cache = build();
       await cache.read(GROUP, () => Promise.resolve(group(GROUP)));

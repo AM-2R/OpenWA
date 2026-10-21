@@ -10588,6 +10588,24 @@ describe('BaileysAdapter group metadata cache', () => {
     await adapter.destroy();
   });
 
+  it('asks a new socket for a group whose query never came back on the previous one', async () => {
+    const adapter = await ready();
+    // A socket ended on a silent connection loss leaves a query still out on it unanswered.
+    fakeSock.groupMetadata.mockReturnValueOnce(new Promise(() => undefined));
+    void socketConfig().cachedGroupMetadata(GROUP);
+
+    jest.useFakeTimers();
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await jest.runAllTimersAsync();
+    void socketConfig().cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+    await adapter.destroy();
+  });
+
   it.each([
     ['disconnect', (a: BaileysAdapter) => a.disconnect()],
     ['destroy', (a: BaileysAdapter) => a.destroy()],
