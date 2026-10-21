@@ -103,7 +103,7 @@ export class GroupMetadataCache {
   }
 
   /** Forget one group: its membership or settings changed, so the next send reads it again. */
-  invalidate(jid: string | undefined): void {
+  invalidate(jid: string | null | undefined): void {
     if (!jid) return;
     this.entries.delete(jid);
     this.inFlight.delete(jid);

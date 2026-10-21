@@ -540,6 +540,12 @@ export class BaileysLifecycle {
         event: 'update',
         count: updates?.length ?? 0,
       });
+      // A disappearing-messages timer changed on the phone (or turned off, which reads null) reaches us as a
+      // chat update only, and the cached list's timer is what a group send stamps on its stanza. The same
+      // own key makes upsertChats take the new timer.
+      for (const update of updates ?? []) {
+        if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
+      }
       this.host.upsertChats(updates);
     });
     sock.ev.on('chats.delete', ids => {

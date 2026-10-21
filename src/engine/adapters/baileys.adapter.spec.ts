@@ -10506,6 +10506,10 @@ describe('BaileysAdapter group metadata cache', () => {
     ['a participant is added or removed', 'group-participants.update', { id: GROUP, action: 'add', participants: [] }],
     ['the group changes a setting', 'groups.update', [{ id: GROUP, announce: true }]],
     ['the account is added to the group again', 'groups.upsert', [{ id: GROUP, participants: [] }]],
+    // Baileys reports a disappearing-messages change made on the phone as a chat update only, and the
+    // timer on the cached list is what a group send stamps on its stanza.
+    ['its disappearing-messages timer is changed', 'chats.update', [{ id: GROUP, ephemeralExpiration: 86400 }]],
+    ['its disappearing-messages timer is switched off', 'chats.update', [{ id: GROUP, ephemeralExpiration: null }]],
   ])('reads the group again after %s', async (_label, event, payload) => {
     await ready();
     const { cachedGroupMetadata } = socketConfig();
@@ -10515,6 +10519,17 @@ describe('BaileysAdapter group metadata cache', () => {
     await cachedGroupMetadata(GROUP);
 
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a cached group through the chat updates that every message raises', async () => {
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    fakeSock.fire('chats.update', [{ id: GROUP, unreadCount: 3, conversationTimestamp: 1_700_000_000 }]);
+    await cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes a cached group from a whole snapshot without another query', async () => {
