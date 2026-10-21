@@ -110,7 +110,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
       name: 'MessageHistory',
       chatScope: ['chatId'],
       description:
-        'Fetch live chat history from WhatsApp for a specific chat. Bypasses the local DB — useful for messages that arrived before the gateway started.',
+        'Fetch live chat history from WhatsApp for a specific chat. Bypasses the local DB — useful for messages that arrived before the gateway started. ' +
+        'Requires the whatsapp-web.js engine; Baileys answers 501 and a retry cannot succeed, so use MessageList for stored messages.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({
@@ -132,7 +133,9 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
     defineTool({
       name: 'MessageGetReactions',
       chatScope: ['chatId'],
-      description: 'Get reactions for a specific message, including which contacts sent which emoji.',
+      description:
+        'Get reactions for a specific message, including which contacts sent which emoji. ' +
+        'Requires the whatsapp-web.js engine; Baileys answers 501 and a retry cannot succeed.',
       tier: 'read',
       sessionScoped: true,
       inputSchema: z.object({

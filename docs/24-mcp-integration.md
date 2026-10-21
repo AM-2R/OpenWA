@@ -155,6 +155,10 @@ code is a transferable join capability, so it sits at OPERATOR like the QR endpo
 > a transient failure and retry something that cannot succeed on that engine. Labels are a WhatsApp
 > Business feature throughout.
 
+> **Three more tools answer `501` on one engine**, and their descriptions say so. `MessageHistory`
+> and `MessageGetReactions` need whatsapp-web.js; on Baileys use `MessageList` for stored messages.
+> `GroupCreate` needs Baileys; whatsapp-web.js cannot create a group.
+
 **Deliberately excluded from the surface** (not exposed as tools): session lifecycle
 (create/delete/start/stop/logout/force-kill), chat delete, bulk send, message delete, message edit,
 group
