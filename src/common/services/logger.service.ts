@@ -28,13 +28,30 @@ export interface LogContext {
 // (case-insensitive), never the value's content, to avoid false positives on innocuous fields.
 const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key/i;
 
-/** Return a copy of `value` with secret-named keys' values replaced by `[REDACTED]` (recursive, depth-bounded). */
-function redactSecrets(value: unknown, depth = 0): unknown {
-  if (value === null || typeof value !== 'object' || depth > 4) return value;
-  if (Array.isArray(value)) return value.map(v => redactSecrets(v, depth + 1));
+// Metadata is copied whole down to this depth, which is where it normally lives. Below it one log call copies at
+// most REDACT_DEEP_NODES more objects and arrays and writes the rest as [Truncated], never raw, so a densely
+// linked object graph cannot make a single log call walk it for long.
+const REDACT_FULL_DEPTH = 5;
+const REDACT_DEEP_NODES = 1000;
+
+/**
+ * Return a copy of `value` with secret-named keys' values replaced by `[REDACTED]` (recursive). The copy always
+ * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
+ * whatever lies beyond the deep node budget `[Truncated]`.
+ */
+function redactSecrets(value: unknown, path: object[] = [], budget = { nodes: REDACT_DEEP_NODES }): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (path.includes(value)) return '[Circular]';
+  if (path.length >= REDACT_FULL_DEPTH && --budget.nodes < 0) return '[Truncated]';
+  const parents = [...path, value];
+  const copy = (child: unknown): unknown =>
+    typeof child === 'bigint' ? child.toString() : redactSecrets(child, parents, budget);
+  if (Array.isArray(value)) return value.map(copy);
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = SECRET_KEY_PATTERN.test(key) ? '[REDACTED]' : redactSecrets(val, depth + 1);
+    // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
+    if (key === 'toJSON' && typeof val === 'function') continue;
+    out[key] = SECRET_KEY_PATTERN.test(key) ? '[REDACTED]' : copy(val);
   }
   return out;
 }
@@ -44,7 +61,11 @@ function stringifyMessage(message: unknown): string {
   try {
     return JSON.stringify(redactSecrets(message)) ?? String(message);
   } catch {
-    return String(message);
+    try {
+      return String(message);
+    } catch {
+      return '[Unprintable]';
+    }
   }
 }
 
@@ -144,30 +165,37 @@ export class LoggerService implements NestLoggerService {
 
     const timestamp = new Date().toISOString();
     const contextName = typeof context === 'string' ? context : this.context;
-    const metadata =
-      typeof context === 'object' && context !== null ? (redactSecrets(context) as Record<string, unknown>) : {};
 
     // Stamp every log line with the active request id (set by requestContextMiddleware) so a request
     // can be traced across logs. Absent outside a request scope (boot, workers, cron).
     const requestId = getRequestId();
-    // Caller metadata never replaces the structural fields: a plugin's ctx.logger meta arrives here
-    // verbatim, and a `level`, `context` or `message` key in it would otherwise forge the whole line.
-    const logEntry = {
-      timestamp,
-      level,
-      context: contextName,
-      message,
-      ...Object.fromEntries(
-        Object.entries(metadata).filter(([key]) => !STRUCTURAL_KEYS.has(key) && key !== 'requestId'),
-      ),
-      ...(trace !== undefined ? { trace } : {}),
-      ...(requestId ? { requestId } : {}),
-    };
-
-    const output =
-      LoggerService.resolveFormat() === LogFormat.PRETTY
+    const render = (metadata: Record<string, unknown>): string => {
+      // Caller metadata never replaces the structural fields: a plugin's ctx.logger meta arrives here
+      // verbatim, and a `level`, `context` or `message` key in it would otherwise forge the whole line.
+      const logEntry = {
+        timestamp,
+        level,
+        context: contextName,
+        message,
+        ...Object.fromEntries(
+          Object.entries(metadata).filter(([key]) => !STRUCTURAL_KEYS.has(key) && key !== 'requestId'),
+        ),
+        ...(trace !== undefined ? { trace } : {}),
+        ...(requestId ? { requestId } : {}),
+      };
+      return LoggerService.resolveFormat() === LogFormat.PRETTY
         ? this.formatPretty(level, logEntry)
         : JSON.stringify(logEntry);
+    };
+    let output: string;
+    try {
+      output = render(
+        typeof context === 'object' && context !== null ? (redactSecrets(context) as Record<string, unknown>) : {},
+      );
+    } catch {
+      // A getter or proxy trap in the caller's metadata threw. The line is still worth writing, without that metadata.
+      output = render({ metadata: '[Unreadable]' });
+    }
 
     switch (level) {
       case LogLevel.ERROR:

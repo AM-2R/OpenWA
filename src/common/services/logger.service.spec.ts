@@ -119,6 +119,157 @@ describe('LoggerService', () => {
       expect(output.config.redisPassword).toBe('[REDACTED]');
       expect(output.config.host).toBe('h');
     });
+
+    it('redacts a secret-named key however deep it sits', () => {
+      let deep: Record<string, unknown> = { password: 'value-deep', visible: 'v' };
+      for (let i = 0; i < 12; i++) deep = { level: deep };
+      logger.log('cfg', { config: deep });
+
+      const line = getRawOutput(consoleSpy);
+      expect(line).not.toContain('value-deep');
+      expect(line).toContain('"password":"[REDACTED]","visible":"v"');
+    });
+
+    it('never writes what lies beyond the bounded amount of deep metadata it copies', () => {
+      let chain: Record<string, unknown> = { password: 'value-far' };
+      for (let i = 0; i < 1500; i++) chain = { next: chain };
+      logger.log('cfg', { chain, sessionId: 's1' });
+
+      const output = getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+      expect(getRawOutput(consoleSpy)).not.toContain('value-far');
+      expect(getRawOutput(consoleSpy)).toContain('"[Truncated]"');
+      expect(output.sessionId).toBe('s1');
+    });
+
+    // The first five levels were always copied whole, however wide, and still are.
+    it('writes a wide structure in full at the levels metadata normally has', () => {
+      logger.log('cfg', { items: Array.from({ length: 1500 }, (_, id) => ({ id, tags: [id] })) });
+
+      const { items } = getLogOutput(consoleSpy) as unknown as { items: unknown[] };
+      expect(items).toHaveLength(1500);
+      expect(items[0]).toEqual({ id: 0, tags: [0] });
+      expect(items[1499]).toEqual({ id: 1499, tags: [1499] });
+    });
+
+    it('truncates a wide structure that sits deep in the metadata after the bound', () => {
+      logger.log('cfg', { a: { b: { c: { d: { items: Array.from({ length: 1500 }, (_, id) => ({ id })) } } } } });
+
+      const { items } = (getLogOutput(consoleSpy) as unknown as { a: { b: { c: { d: { items: unknown[] } } } } }).a.b.c
+        .d;
+      expect(items).toHaveLength(1500);
+      expect(items[0]).toEqual({ id: 0 });
+      expect(items[1499]).toBe('[Truncated]');
+    });
+  });
+
+  // Plugin ctx.logger spreads its caller's metadata in verbatim, so the metadata is whatever the plugin holds.
+  describe('metadata the logger cannot take as is', () => {
+    const entityWithCycle = (): Record<string, unknown> => {
+      const entity: Record<string, unknown> = { id: 1 };
+      entity.self = entity;
+      return entity;
+    };
+    const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+
+    it('writes a circular reference as [Circular] and keeps the rest of the line', () => {
+      logger.log('saved', { sessionId: 's1', entity: entityWithCycle() });
+
+      expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', entity: { id: 1, self: '[Circular]' } });
+    });
+
+    it('does not mistake a repeated, non-circular reference for a cycle', () => {
+      const shared = { id: 1 };
+      logger.log('saved', { a: shared, list: [shared, shared] });
+
+      expect(parsed()).toMatchObject({ a: { id: 1 }, list: [{ id: 1 }, { id: 1 }] });
+    });
+
+    it('writes a BigInt as its decimal text', () => {
+      logger.log('saved', { total: 10n, nested: { ids: [1n, 2n] } });
+
+      expect(parsed()).toMatchObject({ total: '10', nested: { ids: ['1', '2'] } });
+    });
+
+    it('writes ordinary nested metadata exactly as given, apart from its secrets', () => {
+      const metadata = {
+        sessionId: 's1',
+        counts: [1, 2, 3],
+        none: null,
+        flag: false,
+        nested: { a: { b: { c: 'x' } } },
+      };
+      logger.log('saved', { ...metadata, nested: { ...metadata.nested, token: 't' } });
+
+      const { timestamp, ...line } = parsed();
+      expect(timestamp).toEqual(expect.any(String));
+      expect(JSON.stringify(line)).toBe(
+        JSON.stringify({
+          level: 'info',
+          context: 'TestContext',
+          message: 'saved',
+          ...metadata,
+          nested: { ...metadata.nested, token: '[REDACTED]' },
+        }),
+      );
+    });
+
+    const throwingGetter = () => ({
+      get boom(): string {
+        throw new Error('getter');
+      },
+    });
+    const throwingProxy = () => ({
+      unreadable: new Proxy(
+        {},
+        {
+          ownKeys: (): never => {
+            throw new Error('ownKeys');
+          },
+        },
+      ),
+    });
+    const throwingToJson = () => ({
+      entity: {
+        id: 1,
+        toJSON: (): never => {
+          throw new Error('toJSON');
+        },
+      },
+    });
+
+    it.each([
+      ['a getter that throws', throwingGetter],
+      ['a proxy whose traps throw', throwingProxy],
+    ])('keeps the line, without its metadata, for %s', (_name, metadata) => {
+      expect(() => logger.log('saved', metadata())).not.toThrow();
+
+      expect(parsed()).toMatchObject({ message: 'saved', metadata: '[Unreadable]' });
+    });
+
+    it('never calls a toJSON on the metadata, so it cannot write what the redaction removed', () => {
+      logger.log('saved', { entity: { id: 1, toJSON: () => ({ password: 'value-json' }) } });
+
+      expect(getRawOutput(consoleSpy)).not.toContain('value-json');
+      expect(parsed().entity).toEqual({ id: 1 });
+    });
+
+    describe.each([LogFormat.JSON, LogFormat.PRETTY])('in %s output', format => {
+      beforeEach(() => {
+        LoggerService.setLogFormat(format);
+      });
+
+      it.each([
+        ['a circular reference', () => ({ entity: entityWithCycle() })],
+        ['a BigInt', () => ({ total: 10n })],
+        ['a getter that throws', throwingGetter],
+        ['a proxy whose traps throw', throwingProxy],
+        ['a toJSON that throws', throwingToJson],
+      ])('does not throw on %s in the metadata', (_name, metadata) => {
+        expect(() => logger.log('saved', metadata())).not.toThrow();
+
+        expect(getRawOutput(consoleSpy)).toContain('saved');
+      });
+    });
   });
 
   describe('error', () => {
@@ -278,6 +429,46 @@ describe('LoggerService', () => {
 
       expect(() => logger.log(circular)).not.toThrow();
       expect(typeof getLogOutput(consoleSpy).message).toBe('string');
+    });
+
+    it('writes a circular object message with the cycle marked', () => {
+      const circular: Record<string, unknown> = { id: 1 };
+      circular.self = circular;
+
+      logger.log(circular);
+
+      expect(getLogOutput(consoleSpy).message).toBe('{"id":1,"self":"[Circular]"}');
+    });
+
+    it('does not throw on a circular message that has no prototype', () => {
+      const bare = Object.create(null) as Record<string, unknown>;
+      bare.self = bare;
+
+      expect(() => logger.log(bare)).not.toThrow();
+      expect(getLogOutput(consoleSpy).message).toBe('{"self":"[Circular]"}');
+    });
+
+    it('writes a BigInt message as its decimal text', () => {
+      logger.log(10n);
+
+      expect(getLogOutput(consoleSpy).message).toBe('10');
+    });
+
+    it('does not throw on a message that cannot be read at all', () => {
+      const unreadable = new Proxy(
+        {},
+        {
+          ownKeys: (): never => {
+            throw new Error('ownKeys');
+          },
+          get: (): never => {
+            throw new Error('get');
+          },
+        },
+      );
+
+      expect(() => logger.log(unreadable)).not.toThrow();
+      expect(getLogOutput(consoleSpy).message).toBe('[Unprintable]');
     });
 
     it('writes fatal() at error level', () => {
