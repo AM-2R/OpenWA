@@ -607,7 +607,7 @@ CREATE UNIQUE INDEX "IDX_api_keys_keyHash" ON api_keys("keyHash");
 
 ### 5.3.6 audit_logs
 
-Consolidated audit trail for API-key, session, send-pacing, rate-limit, queue-dashboard, integration-instance and infrastructure events. This is the **only** audit table — there are no separate `session_logs`, `webhook_logs`, or `api_key_logs` tables. Lives on the **main** (always-SQLite) connection.
+Consolidated audit trail for API-key, session, send-pacing, rate-limit, queue-dashboard, integration-instance, plugin-management and infrastructure events. This is the **only** audit table — there are no separate `session_logs`, `webhook_logs`, or `api_key_logs` tables. Lives on the **main** (always-SQLite) connection.
 
 ```sql
 CREATE TABLE audit_logs (
@@ -667,7 +667,7 @@ id, version, the host of the requested download URL and config field names, neve
 Eight of these are reserved and never emitted, so no row ever carries them: `api_key_used`,
 `session_connected`, `message_sent`, `message_failed`, `webhook_created`, `webhook_deleted`,
 `webhook_triggered` and `webhook_failed`. `src/modules/audit/intentionally-unemitted-actions.ts` is the
-authoritative list, with the reason for each.
+authoritative list, with the reason for each. The `error` severity is reserved too: nothing writes it, so every row carries `info` or `warn`, and `GET /api/audit?severity=error` returns zero rows.
 
 > [!NOTE]
 > Audit-log retention is automatic: see [§5.7 Data Retention](#57-data-retention). Other event types (session logs, API access logs) are surfaced via structured application logging, not dedicated database tables. The one exception is a webhook delivery that exhausts every retry — that lands in the `webhook_delivery_failures` table (§5.3.8), not just the log stream.

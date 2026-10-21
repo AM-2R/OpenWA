@@ -157,7 +157,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | Rate Limiting       | ✅     | Configurable request limits                                                                                                                                                  |
 | CIDR Whitelisting   | ✅     | IP-based access control                                                                                                                                                      |
 | Chat Scoping        | ✅     | Per-key `allowedChats` allowlist (groups and contacts): a key reaches only those chats, and routes not marked safe for it refuse it                                          |
-| Audit Logging       | ✅     | Audit trail for API-key, session, integration-instance, and infra admin operations (message sends and webhook deliveries are tracked in their own tables, not the audit log) |
+| Audit Logging       | ✅     | Audit trail for API-key, session, integration-instance, plugin and infra admin operations (message sends and webhook deliveries have tables of their own, not the audit log) |
 
 ### Infrastructure
 

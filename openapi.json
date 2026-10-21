@@ -41,6 +41,7 @@
             "name": "severity",
             "required": false,
             "in": "query",
+            "description": "`error` is reserved: nothing writes it, so that filter returns no rows.",
             "schema": {
               "enum": [
                 "info",
