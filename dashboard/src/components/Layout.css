@@ -389,11 +389,12 @@
   .sidebar.mobile {
     transform: translateX(-100%);
     width: 280px;
-    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
+  /* The shadow belongs to the open drawer: on the closed one it would reach past the screen edge. */
   .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   .sidebar-overlay {
@@ -468,10 +469,10 @@
 
   [dir='rtl'] .sidebar.mobile {
     transform: translateX(100%);
-    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   [dir='rtl'] .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 }

@@ -61,12 +61,25 @@ test('the closed mobile sidebar slides off the right edge under RTL, and opens b
   const closed = find("[dir='rtl'] .sidebar.mobile").filter(r => r.media);
   assert.equal(closed.length, 1, 'no RTL transform for the closed mobile sidebar');
   assert.equal(decl(closed[0].body, 'transform'), 'translateX(100%)');
-  // The shadow falls on the content side, which under RTL is the left.
-  assert.match(decl(closed[0].body, 'box-shadow') ?? '', /^-2px /);
   // Same specificity as the rule above, so the open state has to be scoped to RTL as well.
   const open = find("[dir='rtl'] .sidebar.mobile.open").filter(r => r.media === closed[0].media);
   assert.equal(open.length, 1, 'the RTL closed rule would also hide the open sidebar');
   assert.equal(decl(open[0].body, 'transform'), 'translateX(0)');
+  // The shadow falls on the content side, which under RTL is the left.
+  assert.match(decl(open[0].body, 'box-shadow') ?? '', /^-2px /);
+});
+
+// A shadow on the closed drawer reaches about 20px past its off-screen edge and showed as a grey band along the
+// edge of every phone page.
+test('the mobile sidebar casts its shadow only while it is open', () => {
+  for (const dir of ['', "[dir='rtl'] "]) {
+    const closed = find(`${dir}.sidebar.mobile`).filter(r => r.media);
+    assert.equal(closed.length, 1, `${dir}.sidebar.mobile`);
+    assert.equal(decl(closed[0].body, 'box-shadow'), undefined, `${dir}.sidebar.mobile shadows the screen edge`);
+  }
+  const open = find('.sidebar.mobile.open').filter(r => r.media);
+  assert.equal(open.length, 1, 'no open rule for the mobile sidebar');
+  assert.match(decl(open[0].body, 'box-shadow') ?? '', /^2px /);
 });
 
 // The Plugins page pins its status rail with position: sticky. overflow-x: hidden makes .main-content a scroll
