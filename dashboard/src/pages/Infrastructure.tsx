@@ -234,8 +234,8 @@ export function Infrastructure() {
               <Database size={20} />
               <h2>{t('infrastructure.database.title')}</h2>
             </div>
-            <span className={`status-indicator ${configForm.dbConfig.type === 'postgres' ? 'connected' : 'sqlite'}`}>
-              ● {configForm.dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
+            <span className={`status-indicator ${infraStatus.database.type === 'postgres' ? 'connected' : 'sqlite'}`}>
+              ● {infraStatus.database.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
             </span>
           </div>
           {settingNote('DATABASE_TYPE', infraStatus.database.type, savedConfig?.database.type)}
@@ -518,11 +518,11 @@ export function Infrastructure() {
             </div>
             <span
               className={`status-indicator ${
-                configForm.redisEnabled && configForm.redisConfig.connected ? 'connected' : 'disconnected'
+                infraStatus.redis.enabled && configForm.redisConfig.connected ? 'connected' : 'disconnected'
               }`}
             >
               ●{' '}
-              {configForm.redisEnabled
+              {infraStatus.redis.enabled
                 ? configForm.redisConfig.connected
                   ? t('infrastructure.statusLabels.connected')
                   : t('infrastructure.statusLabels.disconnected')
@@ -623,6 +623,7 @@ export function Infrastructure() {
                   <span className="toggle-slider"></span>
                 </label>
               </div>
+              {settingNote('QUEUE_ENABLED', infraStatus.queue.enabled, savedConfig.queue.enabled)}
 
               {configForm.queueEnabled && (
                 <div className="queue-stats">
@@ -690,15 +691,13 @@ export function Infrastructure() {
               <h2>{t('infrastructure.storage.title')}</h2>
             </div>
             {(() => {
-              // S3 selected but the backend isn't reachable → warn instead of a misleading green.
-              const s3Unreachable =
-                configForm.storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
-              const cls =
-                configForm.storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
+              // S3 running but the backend isn't reachable → warn instead of a misleading green.
+              const s3Unreachable = infraStatus.storage.type === 's3' && infraStatus.storage.s3Available === false;
+              const cls = infraStatus.storage.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
               return (
                 <span className={`status-indicator ${cls}`}>
                   ●{' '}
-                  {configForm.storageConfig.type === 's3'
+                  {infraStatus.storage.type === 's3'
                     ? s3Unreachable
                       ? t('infrastructure.storage.s3Unreachable')
                       : 'S3'

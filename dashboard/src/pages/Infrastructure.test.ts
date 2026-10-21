@@ -18,11 +18,10 @@ import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpe
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
-// database.host is kept IDENTICAL between /status and /config on purpose: both the live-seed
-// effect (from infraStatus) and the saved-config hydrate effect write dbConfig.host, and which one
-// wins depends on which query settles last — a race this test does not want to pin. username,
-// database name, schema and pool size are written ONLY by the saved-config effect, so asserting on
-// those (not host) is what actually proves /config hydration without being timing-sensitive.
+// The form is seeded from /config, and from /status only for the built-in flags and for a host, port or
+// path nothing has saved. database.host is the same in both here, so the stock fixtures do not say which
+// one supplied it: username, database name, schema and pool size, which only /config carries, are what
+// prove /config hydration.
 const INFRA_STATUS: InfraStatus = {
   database: { connected: true, type: 'postgres', host: 'shared-db-host', builtIn: false },
   redis: { enabled: false, connected: false, host: 'localhost', port: 6379, builtIn: false },
@@ -266,13 +265,12 @@ test('Infrastructure renders and the config form hydrates from /status and /conf
   await screen.findByText('Database Configuration');
 
   await waitFor(() => {
-    // dbConfig.type comes ONLY from /status (the live-seed effect) — sqlite is the useState default,
-    // so a checked Postgres radio here proves /status actually hydrated the form.
+    // dbConfig.type is seeded from the saved config: sqlite is the useState default, so a checked
+    // Postgres radio here proves the form was hydrated.
     const dbRadios = container.querySelectorAll('input[name="dbType"]');
     assert.equal((dbRadios[1] as HTMLInputElement).checked, true, 'expected the Postgres radio to be selected');
 
-    // These fields are written ONLY by the saved-config hydrate effect (never by the /status
-    // effect), so they pin /config hydration specifically, without the host/port race.
+    // Only /config carries these fields, so they pin /config hydration specifically.
     assert.equal(fieldInput(container, 'Username').value, 'openwa_admin');
     assert.equal(fieldInput(container, 'Database Name').value, 'openwa_prod');
     assert.equal(fieldInput(container, 'Schema').value, 'appschema');
@@ -506,9 +504,9 @@ function engineRadios(container: HTMLElement): HTMLInputElement[] {
   return Array.from(container.querySelectorAll('input[name="engineType"]'));
 }
 
-// Waits for the /config hydrate effect, which is the last of the two seeding effects to land. Uses a
-// DATABASE field on purpose: the engine detail fields render only for whatsapp-web.js, so waiting on
-// one of those would vanish the moment a test seeds the radio to baileys.
+// Waits for the form to be seeded, which happens once both reads are in. Uses a DATABASE field on
+// purpose: the engine detail fields render only for whatsapp-web.js, so waiting on one of those would
+// vanish the moment a test seeds the radio to baileys.
 async function awaitConfigHydrated(container: HTMLElement): Promise<void> {
   await rtl.waitFor(() => assert.equal(fieldInput(container, 'Username').value, 'openwa_admin'));
 }
@@ -570,6 +568,109 @@ test('an operator selection wins over the seed and is what gets saved', async ()
     const body = call!.body as { engine?: { type?: string } };
     assert.equal(body.engine?.type, 'baileys');
   });
+});
+
+// ── A switch saved and not restarted for ─────────────────────────────────────
+// The operator saved PostgreSQL, Redis with the queue, and S3, chose Restart Later, and reloaded: the
+// gateway still runs SQLite, local media and no Redis. The form is the saved choice (a save of anything
+// else must not write the running one back over it); the card badges report what runs.
+
+const RUNNING_SQLITE: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: true, type: 'sqlite', host: 'localhost', builtIn: false },
+};
+const SAVED_SWITCH: SavedConfig = {
+  ...SAVED_CONFIG,
+  redis: { enabled: true, builtIn: false, host: 'redis.internal', port: '6380', passwordSet: true },
+  queue: { enabled: true },
+  storage: { ...SAVED_CONFIG.storage, type: 's3', s3Bucket: 'media', s3CredentialsSet: true },
+};
+
+// The saved headless flag is false and the useState default is true, so it reads false only once the form is seeded.
+async function awaitSeeded(container: HTMLElement): Promise<void> {
+  await rtl.waitFor(() => assert.equal(toggleInput(container, 'Headless Mode').checked, false));
+}
+
+function cardBadge(container: HTMLElement, heading: string): string | null | undefined {
+  const card = Array.from(container.querySelectorAll('.infra-card')).find(
+    c => c.querySelector('h2')?.textContent === heading,
+  );
+  return card?.querySelector('.card-header .status-indicator')?.textContent;
+}
+
+test('saving an unrelated field after a reload keeps a switch that was saved and is waiting for a restart', async () => {
+  const { screen, waitFor, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_SQLITE, saved: SAVED_SWITCH };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  // The stored headless flag is false; flipping it is the only edit.
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => {
+    const call = findFetchCall('PUT', '/api/infra/config');
+    assert.ok(call, 'expected a PUT to /infra/config');
+    const body = call!.body as {
+      database?: { type?: string };
+      redis?: { enabled?: boolean };
+      queue?: { enabled?: boolean };
+      storage?: { type?: string };
+      engine?: { headless?: boolean };
+    };
+    assert.deepEqual(
+      {
+        database: body.database?.type,
+        redis: body.redis?.enabled,
+        queue: body.queue?.enabled,
+        storage: body.storage?.type,
+        headless: body.engine?.headless,
+      },
+      { database: 'postgres', redis: true, queue: true, storage: 's3', headless: true },
+    );
+  });
+});
+
+test('the card badges report what runs while the form shows what was saved', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_SQLITE, saved: SAVED_SWITCH };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(cardBadge(container, 'Database Configuration'), '● SQLite');
+  assert.equal(cardBadge(container, 'Redis'), '● Disabled');
+  assert.equal(cardBadge(container, 'Storage Configuration'), '● Local Filesystem');
+  const selected = (name: string) =>
+    container.querySelector(`input[name="${name}"]:checked`)?.closest('label')?.querySelector('span')?.textContent;
+  assert.equal(selected('dbType'), 'PostgreSQL');
+  assert.equal(toggleInput(container, 'Enable Redis').checked, true);
+  assert.equal(selected('storageType'), 'Amazon S3');
+});
+
+test('a queue switch saved and left for a restart shows the pending-restart note', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  // Redis already runs, so the only difference between running and saved is the queue.
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      redis: { enabled: true, connected: true, host: 'redis.internal', port: 6380, builtIn: false },
+    },
+    saved: { ...SAVED_CONFIG, redis: { ...SAVED_SWITCH.redis }, queue: { enabled: true } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+
+  const queueRow = toggleInput(container, 'Enable BullMQ Queue System').closest('.toggle-row');
+  assert.equal(queueRow?.nextElementSibling?.textContent?.trim(), PENDING_RESTART_NOTE);
+  assert.equal(screen.getAllByText(PENDING_RESTART_NOTE).length, 1, 'the note belongs to the queue alone');
 });
 
 test('the pending-restart note survives a successful save', async () => {
