@@ -1,6 +1,8 @@
 import { DataSource, Repository } from 'typeorm';
 import { AuditService } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
+import type { ApiKey } from '../auth/entities/api-key.entity';
+import { runWithRequestId, setRequestActor } from '../../common/services/request-context';
 
 describe('AuditService', () => {
   let service: AuditService;
@@ -56,6 +58,57 @@ describe('AuditService', () => {
     );
   });
 
+  // Most call sites fire from deep services that do not have the key in scope, so log() takes the key, the
+  // client IP and the request id from the active request. Explicit context values still win (a worker that
+  // stamps a system key, or an auth failure that only has an IP).
+  describe('log() request context', () => {
+    const storedRow = () => (repo.create.mock.calls as unknown[][])[0][0] as Partial<AuditLog>;
+
+    it('stamps the key, client IP and request id of the active request', async () => {
+      await runWithRequestId('req-1', async () => {
+        setRequestActor({ apiKeyId: 'key-1', apiKeyName: 'dashboard', ipAddress: '203.0.113.7' });
+        await service.log(AuditAction.SESSION_STARTED, { sessionId: 's1' });
+      });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({
+          apiKeyId: 'key-1',
+          apiKeyName: 'dashboard',
+          ipAddress: '203.0.113.7',
+          metadata: { requestId: 'req-1' },
+        }),
+      );
+    });
+
+    it('lets explicit context values win, and keeps caller metadata beside the request id', async () => {
+      await runWithRequestId('req-2', async () => {
+        setRequestActor({ apiKeyId: 'key-1', apiKeyName: 'dashboard', ipAddress: '203.0.113.7' });
+        await service.log(AuditAction.SESSION_STARTED, {
+          apiKey: { id: 'key-2', name: 'worker' } as ApiKey,
+          ipAddress: '198.51.100.9',
+          metadata: { reason: 'manual' },
+        });
+      });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({
+          apiKeyId: 'key-2',
+          apiKeyName: 'worker',
+          ipAddress: '198.51.100.9',
+          metadata: { reason: 'manual', requestId: 'req-2' },
+        }),
+      );
+    });
+
+    it('stamps nothing outside a request: no actor columns and no metadata blob', async () => {
+      await service.log(AuditAction.SESSION_STARTED, { sessionId: 's1' });
+
+      expect(storedRow()).toEqual(
+        expect.objectContaining({ apiKeyId: null, apiKeyName: null, ipAddress: null, metadata: null }),
+      );
+    });
+  });
+
   it('logInfo/logWarn map to the right severity', async () => {
     await service.logInfo(AuditAction.API_KEY_USED);
     await service.logWarn(AuditAction.API_KEY_AUTH_FAILED);
@@ -73,6 +126,11 @@ describe('AuditService', () => {
         skip: 0,
       }),
     );
+  });
+
+  it('findAll narrows to one acting key when apiKeyId is given', async () => {
+    await service.findAll({ apiKeyId: 'key-1' });
+    expect(repo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ where: { apiKeyId: 'key-1' } }));
   });
 
   it('findAll breaks createdAt ties by id, so offset pages over rows written in one second cannot overlap', async () => {
