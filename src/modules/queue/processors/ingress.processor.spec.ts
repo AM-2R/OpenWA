@@ -1,3 +1,4 @@
+import { DelayedError } from 'bullmq';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { IngressProcessor } from './ingress.processor';
 
@@ -40,7 +41,7 @@ describe('IngressProcessor', () => {
 
   it('dispatches the event into the worker via dispatchWebhook', async () => {
     const dispatchWebhook = jest.fn().mockResolvedValue({ ok: true, status: 200 });
-    const loader = { dispatchWebhookForInstance: dispatchWebhook };
+    const loader = { isRestorePending: () => false, dispatchWebhookForInstance: dispatchWebhook };
     const failures = { save: jest.fn() };
     const proc = new IngressProcessor(
       loader as never,
@@ -54,7 +55,10 @@ describe('IngressProcessor', () => {
   });
 
   it('records a DLQ failure row and fires ingress:error on the final attempt', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
@@ -69,7 +73,10 @@ describe('IngressProcessor', () => {
   // payload on 'queued' and removeOnFail prunes the failed job. A data database that is down for the
   // whole retry window refuses the row too, so the delivery goes back on the queue instead.
   it('re-queues the delivery when the final-attempt DLQ write fails, and still rethrows the dispatch error', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockRejectedValue(new Error('db down')), count: jest.fn().mockResolvedValue(0) };
     const queue = { add: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(1) };
     const proc = new IngressProcessor(
@@ -112,7 +119,10 @@ describe('IngressProcessor', () => {
   // The original job of a re-queued delivery stays 'failed', which the reconciler reads as dead-lettered:
   // it may write a DLQ row and mark the event 'failed' before or after the re-queued copy runs.
   it('records a re-queued delivery that succeeds as dispatched and retires its open DLQ row', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockResolvedValue({ ok: true, status: 200 }) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockResolvedValue({ ok: true, status: 200 }),
+    };
     const failures = { update: jest.fn().mockResolvedValue(undefined) };
     const events = { update: jest.fn().mockResolvedValue(undefined) };
     const proc = new IngressProcessor(
@@ -143,7 +153,10 @@ describe('IngressProcessor', () => {
   });
 
   it('does not add a second DLQ row when one is already open for the delivery', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(1) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const queue = { add: jest.fn() };
@@ -167,7 +180,10 @@ describe('IngressProcessor', () => {
   });
 
   it('rethrows on a non-final attempt without recording a DLQ row or firing ingress:error', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
@@ -180,6 +196,7 @@ describe('IngressProcessor', () => {
     const started: string[] = [];
     const finished: string[] = [];
     const loader = {
+      isRestorePending: () => false,
       dispatchWebhookForInstance: jest.fn(async (d: { deliveryId: string }) => {
         started.push(d.deliveryId);
         await new Promise(r => setTimeout(r, d.deliveryId === 'same-1' ? 20 : 1));
@@ -215,6 +232,7 @@ describe('IngressProcessor', () => {
     let concurrent = 0;
     let maxConcurrent = 0;
     const loader = {
+      isRestorePending: () => false,
       dispatchWebhookForInstance: jest.fn(async () => {
         concurrent++;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
@@ -306,5 +324,69 @@ describe('IngressProcessor stall exhaustion (worker failed event)', () => {
     failures.save.mockRejectedValue(new Error('db down'));
     queue.add.mockRejectedValue(new Error('redis down'));
     await expect(proc.onWorkerFailed(job({ id: 'ing-abc', name: 'ingress' }), STALLED)).resolves.toBeUndefined();
+  });
+});
+
+// The plugin's worker does not exist until the boot restore reaches it, and a restore can outlast the whole
+// retry budget (3 attempts, 5 s apart, by default), so a job taken meanwhile would end in the dead-letter
+// table for a plugin that is about to be up. It goes back to the delayed set instead, which spends no attempt.
+describe('IngressProcessor while the plugin is still being restored', () => {
+  const build = (restoring: boolean) => {
+    const loader = {
+      isRestorePending: jest.fn().mockReturnValue(restoring),
+      dispatchWebhookForInstance: jest.fn().mockResolvedValue(undefined),
+    };
+    const failures = { save: jest.fn(), count: jest.fn() };
+    const hooks = { execute: jest.fn() };
+    const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
+    return { proc, loader, failures, hooks };
+  };
+
+  it('delays the delivery without dispatching it or spending an attempt, even on the last one', async () => {
+    const { proc, loader, failures, hooks } = build(true);
+    const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+    const before = Date.now();
+
+    await expect(
+      proc.process(job({ attemptsMade: 2, opts: { attempts: 3 }, moveToDelayed }), 'tok-1'),
+    ).rejects.toBeInstanceOf(DelayedError);
+
+    expect(loader.isRestorePending).toHaveBeenCalledWith('chatwoot');
+    expect(moveToDelayed).toHaveBeenCalledTimes(1);
+    const [when, token] = moveToDelayed.mock.calls[0] as [number, string];
+    expect(token).toBe('tok-1');
+    // The retry delay (5 s by default) plus up to as much again of jitter.
+    expect(when - before).toBeGreaterThanOrEqual(5000);
+    expect(when - Date.now()).toBeLessThan(10_000);
+    expect(loader.dispatchWebhookForInstance).not.toHaveBeenCalled();
+    expect(failures.save).not.toHaveBeenCalled();
+    expect(hooks.execute).not.toHaveBeenCalled();
+  });
+
+  it('waits at least a second even when the retry delay is configured as 0', async () => {
+    const original = process.env.INGRESS_RETRY_DELAY_MS;
+    process.env.INGRESS_RETRY_DELAY_MS = '0';
+    try {
+      const { proc } = build(true);
+      const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+      const before = Date.now();
+
+      await expect(proc.process(job({ moveToDelayed }), 'tok-2')).rejects.toBeInstanceOf(DelayedError);
+
+      expect((moveToDelayed.mock.calls[0] as [number])[0] - before).toBeGreaterThanOrEqual(1000);
+    } finally {
+      if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+      else process.env.INGRESS_RETRY_DELAY_MS = original;
+    }
+  });
+
+  it('dispatches as usual once the restore is done with the plugin', async () => {
+    const { proc, loader } = build(false);
+    const moveToDelayed = jest.fn();
+
+    await proc.process(job({ moveToDelayed }), 'tok-3');
+
+    expect(loader.dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+    expect(moveToDelayed).not.toHaveBeenCalled();
   });
 });

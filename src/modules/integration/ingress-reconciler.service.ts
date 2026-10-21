@@ -237,6 +237,13 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             stats.skipped++;
             continue;
           }
+          // The door answers a plugin the boot restore has not reached with a 503, because no worker can take
+          // the delivery yet. A replay is that delivery arriving later: it would only spend an attempt of the
+          // row's budget on the same refusal, so the row waits, untouched, for a pass after the restore.
+          if (this.loader.isRestorePending(row.pluginId)) {
+            stats.skipped++;
+            continue;
+          }
           stats.scanned++;
           const outcome = await this.reconcileRow(row, opts.maxAttempts, now);
           if (outcome === 'replayed') stats.replayed++;

@@ -22,6 +22,7 @@ describe('IngressReconcilerService.sweep', () => {
   let failures: Repository<IntegrationDeliveryFailure>;
   let enqueue: jest.Mock;
   let getPlugin: jest.Mock;
+  let restorePending: jest.Mock;
   let resolveInstance: jest.Mock;
   let service: IngressReconcilerService;
   let seq: number;
@@ -42,12 +43,13 @@ describe('IngressReconcilerService.sweep', () => {
       .save({ id: 'plug:inst', pluginId: 'plug', instanceId: 'inst', secret: 's', enabled: true });
     enqueue = jest.fn().mockResolvedValue({ outcome: 'queued' });
     getPlugin = jest.fn().mockReturnValue(undefined);
+    restorePending = jest.fn().mockReturnValue(false);
     resolveInstance = jest.fn().mockResolvedValue({ enabled: true });
     service = new IngressReconcilerService(
       events,
       failures,
       { enqueue, existingJobState: jest.fn().mockResolvedValue(undefined) } as unknown as IngressEnqueueService,
-      { getPlugin } as unknown as PluginLoaderService,
+      { getPlugin, isRestorePending: restorePending } as unknown as PluginLoaderService,
       { resolve: resolveInstance } as unknown as PluginInstanceService,
     );
   });
@@ -559,7 +561,7 @@ describe('IngressReconcilerService.sweep', () => {
         events,
         failures,
         realEnqueue,
-        { getPlugin } as unknown as PluginLoaderService,
+        { getPlugin, isRestorePending: restorePending } as unknown as PluginLoaderService,
         { resolve: resolveInstance } as unknown as PluginInstanceService,
       );
     });
@@ -798,6 +800,29 @@ describe('IngressReconcilerService.sweep', () => {
     expect((await stored(id)).dispatchState).toBe('dispatched');
   });
 
+  // The door answers a delivery for a plugin the boot restore has not reached with a 503 (no worker can take
+  // it yet). A replay is the same delivery arriving later, and would only spend one of the row's attempts on
+  // the same refusal.
+  it('leaves a row whose plugin is still being restored untouched, and replays it once that is done', async () => {
+    const id = await insertEvent();
+    restorePending.mockReturnValue(true);
+
+    const stats = await service.sweep(OPTS);
+
+    expect(restorePending).toHaveBeenCalledWith('plug');
+    expect(stats).toMatchObject({ scanned: 0, replayed: 0, skipped: 1 });
+    expect(enqueue).not.toHaveBeenCalled();
+    const held = await stored(id);
+    expect(held.dispatchState).toBe('pending');
+    expect(held.dispatchAttempts).toBe(0);
+    expect(await failures.count()).toBe(0);
+
+    restorePending.mockReturnValue(false);
+    const stats2 = await service.sweep(OPTS);
+    expect(stats2).toMatchObject({ scanned: 1, replayed: 1 });
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+  });
+
   it('skips a row whose instance was deleted after persist', async () => {
     await insertEvent();
     resolveInstance.mockResolvedValue(null);
@@ -912,7 +937,7 @@ describe('IngressReconcilerService.sweep', () => {
           waitUntilReady: jest.fn().mockResolvedValue(undefined),
         } as never,
       ),
-      { getPlugin } as unknown as PluginLoaderService,
+      { getPlugin, isRestorePending: restorePending } as unknown as PluginLoaderService,
       { resolve: resolveInstance } as unknown as PluginInstanceService,
     );
 
@@ -969,7 +994,7 @@ describe('IngressReconcilerService.sweep', () => {
         { get: jest.fn().mockReturnValue(true) } as unknown as ConfigService,
         queue as never,
       ),
-      { getPlugin } as unknown as PluginLoaderService,
+      { getPlugin, isRestorePending: restorePending } as unknown as PluginLoaderService,
       { resolve: resolveInstance } as unknown as PluginInstanceService,
     );
 
