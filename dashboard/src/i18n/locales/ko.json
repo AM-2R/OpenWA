@@ -1094,6 +1094,7 @@
       "reasonOther": "게이트웨이가 조회를 거부했습니다",
       "partial": "{{reason}} (HTTP {{status}}). {{total}}개 중 {{attempted}}번째 번호에서 중지되었으며, 나머지 {{count}}개는 확인하지 못했습니다. 나중에 다시 시도하세요.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}}개 중 {{attempted}}번째 번호에서 중지되었으며, 나머지 {{count}}개는 확인하지 못했습니다. 나중에 다시 시도하세요.",
+      "noAnswer": "게이트웨이가 응답하지 않았습니다. {{total}}개 중 {{attempted}}번째 번호에서 중지되었습니다. 나중에 다시 시도하세요.",
       "last": "{{reason}} (HTTP {{status}}). 마지막 조회에 실패했습니다. 나중에 다시 시도하세요."
     },
     "toast": {

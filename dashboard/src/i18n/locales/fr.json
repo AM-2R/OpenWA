@@ -1102,6 +1102,7 @@
       "partial": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéro n'a pas été vérifié. Réessayez plus tard.",
       "partial_other": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
       "partial_many": "{{reason}} (HTTP {{status}}). Arrêt au numéro {{attempted}} sur {{total}} ; {{count}} numéros n'ont pas été vérifiés. Réessayez plus tard.",
+      "noAnswer": "La passerelle n'a pas répondu. Arrêt au numéro {{attempted}} sur {{total}}. Réessayez plus tard.",
       "last": "{{reason}} (HTTP {{status}}). La dernière requête a échoué. Réessayez plus tard."
     },
     "toast": {

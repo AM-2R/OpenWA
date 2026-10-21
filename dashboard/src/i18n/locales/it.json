@@ -1102,6 +1102,7 @@
       "partial": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numero non è stato inviato. Riprova più tardi.",
       "partial_other": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",
       "partial_many": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",
+      "noAnswer": "Il gateway non ha risposto. Verifica interrotta al numero {{attempted}} di {{total}}. Riprova più tardi.",
       "last": "{{reason}} (HTTP {{status}}). L'ultima verifica non è riuscita. Riprova più tardi."
     },
     "toast": {

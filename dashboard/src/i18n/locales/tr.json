@@ -1094,6 +1094,7 @@
       "reasonOther": "Ağ geçidi bir sorguyu reddetti",
       "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
+      "noAnswer": "Ağ geçidi yanıt vermedi. {{total}} numaradan {{attempted}}. numarada durduruldu. Daha sonra tekrar deneyin.",
       "last": "{{reason}} (HTTP {{status}}). Son sorgu başarısız oldu. Daha sonra tekrar deneyin."
     },
     "toast": {

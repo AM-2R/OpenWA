@@ -1111,6 +1111,7 @@
       "partial_many": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
       "partial_other": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; {{count}} מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
       "partial_two": "{{reason}} (HTTP {{status}}). הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}; שני מספרים לא נשלחו. יש לנסות שוב מאוחר יותר.",
+      "noAnswer": "השער לא השיב. הבדיקה נעצרה במספר {{attempted}} מתוך {{total}}. יש לנסות שוב מאוחר יותר.",
       "last": "{{reason}} (HTTP {{status}}). השאילתה האחרונה נכשלה. יש לנסות שוב מאוחר יותר."
     },
     "toast": {

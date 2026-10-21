@@ -1102,6 +1102,7 @@
       "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
       "partial_many": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
+      "noAnswer": "La puerta de enlace no respondió. La verificación se detuvo en el número {{attempted}} de {{total}}. Inténtalo de nuevo más tarde.",
       "last": "{{reason}} (HTTP {{status}}). Falló la última consulta. Inténtalo de nuevo más tarde."
     },
     "toast": {

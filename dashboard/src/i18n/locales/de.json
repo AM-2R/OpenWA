@@ -1094,6 +1094,7 @@
       "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
       "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
       "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",
+      "noAnswer": "Das Gateway hat nicht geantwortet. Gestoppt bei Nummer {{attempted}} von {{total}}. Versuche es später erneut.",
       "last": "{{reason}} (HTTP {{status}}). Die letzte Abfrage ist fehlgeschlagen. Versuche es später erneut."
     },
     "toast": {

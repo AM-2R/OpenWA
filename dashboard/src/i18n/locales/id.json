@@ -1094,6 +1094,7 @@
       "reasonOther": "Gateway menolak pemeriksaan",
       "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
       "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
+      "noAnswer": "Gateway tidak merespons. Berhenti di nomor {{attempted}} dari {{total}}. Coba lagi nanti.",
       "last": "{{reason}} (HTTP {{status}}). Pemeriksaan terakhir gagal. Coba lagi nanti."
     },
     "toast": {

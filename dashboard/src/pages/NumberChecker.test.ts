@@ -496,12 +496,13 @@ test('NumberChecker: a gateway refusal stops the batch and the numbers never rea
 });
 
 const STOP_REASON: Record<number, RegExp> = {
+  400: /The session is not connected \(HTTP 400\)/,
   409: /The session is not connected \(HTTP 409\)/,
   429: /The gateway rate limit was reached \(HTTP 429\)/,
   503: /WhatsApp did not answer a lookup \(HTTP 503\)/,
 };
 
-for (const status of [409, 429, 503]) {
+for (const status of [400, 409, 429, 503]) {
   test(`NumberChecker: HTTP ${status} on the first lookup stops the batch before the second`, async () => {
     const lookups = stubLookups(() => jsonResponse({ message: `refused ${status}` }, status));
     const { container } = renderComponent();
@@ -518,6 +519,28 @@ for (const status of [409, 429, 503]) {
     assert.equal(rtl.screen.queryByText(/Completed checking/), null);
   });
 }
+
+test('NumberChecker: a lookup that gets no answer at all stops the batch before the second', async () => {
+  const lookups: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/')) {
+      lookups.push(url.split('/contacts/check/')[1]);
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
+    return defaultFetch(input);
+  }) as typeof fetch;
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+
+  await rtl.screen.findByText('Batch stopped', { selector: 'strong' });
+  const notice = container.querySelector('.nc-batch-stopped')?.textContent ?? '';
+  assert.match(notice, /The gateway did not answer\. Stopped at number 1 of 2\./);
+  assert.deepEqual(lookups, ['911111111111']);
+  assert.equal(rtl.screen.queryByText(/Completed checking/), null);
+});
 
 test('NumberChecker: a refusal on the last number says so instead of counting numbers left unsent', async () => {
   const lookups = stubLookups(number =>
@@ -550,6 +573,20 @@ test('NumberChecker: a lookup error that is not a gateway refusal fails that num
   assert.ok(rtl.screen.getByText('engine hiccup'));
   assert.ok(rtl.screen.getByText('+912222222222'));
   assert.equal(statValue('Failed'), '1');
+  assert.equal(container.querySelector('.nc-batch-stopped'), null);
+});
+
+test('NumberChecker: a run in which every lookup failed is not reported as completed', async () => {
+  const lookups = stubLookups(() => jsonResponse({ message: 'engine hiccup' }, 500));
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+
+  await rtl.screen.findByText('Check failed', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['911111111111', '912222222222']);
+  assert.equal(statValue('Failed'), '2');
+  assert.equal(rtl.screen.queryByText(/Completed checking/), null);
   assert.equal(container.querySelector('.nc-batch-stopped'), null);
 });
 

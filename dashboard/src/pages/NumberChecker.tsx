@@ -36,20 +36,32 @@ export type CheckStatus = 'registered' | 'unregistered' | 'failed';
 export const NUMBER_CHECK_BATCH_MAX = 100;
 
 interface BatchStop {
+  // 0 when the lookup got no HTTP answer at all.
   status: number;
   attempted: number;
   total: number;
 }
 
 // What each stopping status means, so a single unanswered lookup is not reported as the gateway refusing.
+// The check route answers 400 only for a session that is not started, the same condition as a 409.
 const STOP_REASON_KEYS: Record<number, string> = {
+  400: 'numberChecker.stopped.reason409',
   409: 'numberChecker.stopped.reason409',
   429: 'numberChecker.stopped.reason429',
   503: 'numberChecker.stopped.reason503',
 };
 
+// The status of a lookup that fails every number after it alike, or undefined when only that number failed.
+// A rejected fetch carries no status: the gateway never answered.
+function lookupStopStatus(err: unknown): number | undefined {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number') return 0;
+  return status === 400 || isGatewayRefusal(err) ? status : undefined;
+}
+
 // `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
 function batchStopMessage(t: TFunction, { status, attempted, total }: BatchStop): string {
+  if (status === 0) return t('numberChecker.stopped.noAnswer', { attempted, total });
   const reason = t(STOP_REASON_KEYS[status] ?? 'numberChecker.stopped.reasonOther');
   const unsent = total - attempted;
   return unsent > 0
@@ -291,10 +303,12 @@ export function NumberChecker() {
         });
         setBatchResults([...results]);
 
-        // The gateway keeps refusing this route for the rest of its window, so every number after this one
-        // would only become a false "Failed" row (and spend more of the limit).
-        if (isGatewayRefusal(err)) {
-          refusedWith = (err as { status: number }).status;
+        // The gateway keeps refusing this route for the rest of its window, a stopped session or an unreachable
+        // gateway fails every later number too, so each would only become a false "Failed" row (and spend more
+        // of the limit).
+        const stopStatus = lookupStopStatus(err);
+        if (stopStatus !== undefined) {
+          refusedWith = stopStatus;
           setBatchProgress({ current: i + 1, total: numbers.length });
           break;
         }
@@ -315,6 +329,10 @@ export function NumberChecker() {
       const stop = { status: refusedWith, attempted: results.length, total: numbers.length };
       setBatchStop(stop);
       toast.error(t('numberChecker.bulk.stoppedTitle'), batchStopMessage(t, stop));
+      return;
+    }
+    if (results.every(r => r.status === 'failed')) {
+      toast.error(t('numberChecker.toast.checkFailed'), results[results.length - 1].error ?? undefined);
       return;
     }
     toast.success(t('numberChecker.toast.completed', { count: results.length }));

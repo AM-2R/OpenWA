@@ -1094,6 +1094,7 @@
       "reasonOther": "The gateway refused a lookup",
       "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
       "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",
+      "noAnswer": "The gateway did not answer. Stopped at number {{attempted}} of {{total}}. Try again later.",
       "last": "{{reason}} (HTTP {{status}}). The last lookup failed. Try again later."
     },
     "toast": {

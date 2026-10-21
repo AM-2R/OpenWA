@@ -1127,6 +1127,7 @@
       "partial_few": "{{reason}} (HTTP {{status}}). توقف الفحص عند الرقم {{attempted}} من أصل {{total}}؛ لم يُرسَل {{count}} أرقام. حاول مرة أخرى لاحقًا.",
       "partial_many": "{{reason}} (HTTP {{status}}). توقف الفحص عند الرقم {{attempted}} من أصل {{total}}؛ لم يُرسَل {{count}} رقمًا. حاول مرة أخرى لاحقًا.",
       "partial_zero": "{{reason}} (HTTP {{status}}). توقف الفحص عند الرقم {{attempted}} من أصل {{total}}؛ لم يُرسَل {{count}} رقم. حاول مرة أخرى لاحقًا.",
+      "noAnswer": "لم تردّ البوابة. توقف الفحص عند الرقم {{attempted}} من أصل {{total}}. حاول مرة أخرى لاحقًا.",
       "last": "{{reason}} (HTTP {{status}}). فشل آخر استعلام. حاول مرة أخرى لاحقًا."
     },
     "toast": {

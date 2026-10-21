@@ -1094,6 +1094,7 @@
       "reasonOther": "网关拒绝了一次查询",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
+      "noAnswer": "网关未响应。已在第 {{attempted}} 个号码处停止（共 {{total}} 个）。请稍后重试。",
       "last": "{{reason}}（HTTP {{status}}）。最后一次查询失败。请稍后重试。"
     },
     "toast": {

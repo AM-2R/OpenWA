@@ -1102,6 +1102,7 @@
       "partial": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} número não foi enviado. Tente novamente mais tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} números não foram enviados. Tente novamente mais tarde.",
       "partial_many": "{{reason}} (HTTP {{status}}). A verificação parou no número {{attempted}} de {{total}}; {{count}} números não foram enviados. Tente novamente mais tarde.",
+      "noAnswer": "O gateway não respondeu. A verificação parou no número {{attempted}} de {{total}}. Tente novamente mais tarde.",
       "last": "{{reason}} (HTTP {{status}}). A última consulta falhou. Tente novamente mais tarde."
     },
     "toast": {
