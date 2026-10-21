@@ -1716,17 +1716,18 @@ by stored sends lasts until the next UTC day. Do not retry a `SEND_PACING_LIMITE
 `retryAfterSeconds`, and read it rather than assume a day-long wait.
 
 A chat send (not an edit) also counts toward both caps before its row lands, so parallel sends cannot
-together pass them. A single send, which writes its row before WhatsApp is asked, is held for 10 seconds
-from its admission. A bulk item or product send is held while it is in flight (at most 5 minutes) and
-for 10 seconds after. A held send also stays held for as long as any send admitted after it is still
+together pass them. A single send, which writes its row before WhatsApp is asked, is held from its
+admission until that row is written, however long the `message:sending` hooks take and across the UTC
+day change, and for 10 seconds after. A bulk item or product send is held while it is in flight (at
+most 5 minutes) and for 10 seconds after. A held send also stays held for as long as any send admitted after it is still
 held; for the cold-reachout cap, only a later cold send keeps an earlier one held. A send that fails
 before WhatsApp may have taken it hands its place back at once. A daily or
 cold-reachout refusal can therefore come while the stored count is still under the cap; when only such
 held sends push it over, including for the group participant adds below, its `retryAfterSeconds` is 10
 or less instead of the time to the next UTC day; while a held send is still in flight or holding, a
 retry at that hint can be refused again. The hold is best-effort at two edges: a message sent from the
-linked phone while API sends are in flight, and a send still in flight when the UTC day changes, can
-each let one extra API send past a cap.
+linked phone while API sends are in flight, and a bulk item or product send still in flight when the
+UTC day changes, can each let one extra API send past a cap.
 
 Inside a bulk batch a refusal fails just that item (honouring `stopOnError`), not the batch — the
 allowance may free up, and a batch killed outright could not be resumed.
