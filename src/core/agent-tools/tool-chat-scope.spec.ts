@@ -73,6 +73,22 @@ describe('chat-restricted tool calls', () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it('refuses a tool declared with an empty chat scope and never calls its handler', async () => {
+    const handler = jest.fn();
+    const descriptor = defineTool({
+      name: 'AccountWideByMistake',
+      description: 'Declares a chat scope that names no chat field',
+      tier: 'read',
+      chatScope: [],
+      inputSchema: z.object({}),
+      handler,
+    });
+    await expect(call(descriptor, {})).rejects.toThrow(
+      new ForbiddenException('API key is restricted to selected chats'),
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('authorizes the parsed destination and records a scope refusal before the handler', async () => {
     const handler = jest.fn();
     const rejected = jest.fn();
