@@ -78,7 +78,7 @@
 .plugin-instances .pi-actions {
   display: flex;
   gap: 0.25rem;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .plugin-instances .pi-hint {
   font-size: 0.8rem;

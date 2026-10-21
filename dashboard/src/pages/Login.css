@@ -99,7 +99,8 @@
 
 .login-container .input-wrapper input {
   width: 100%;
-  padding: 0.75rem 3rem 0.75rem 1rem;
+  padding: 0.75rem 1rem;
+  padding-inline-end: 3rem;
   font-size: 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -121,7 +122,7 @@
 
 .login-container .toggle-visibility {
   position: absolute;
-  right: 0.75rem;
+  inset-inline-end: 0.75rem;
   top: 50%;
   transform: translateY(-50%);
   background: none;
@@ -228,7 +229,8 @@
   }
 
   .login-container .input-wrapper input {
-    padding: 0.625rem 2.5rem 0.625rem 0.875rem;
+    padding: 0.625rem 0.875rem;
+    padding-inline-end: 2.5rem;
     font-size: 0.9375rem;
   }
 

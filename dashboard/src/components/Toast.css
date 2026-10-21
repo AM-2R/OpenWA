@@ -19,7 +19,7 @@
   box-shadow:
     0 10px 40px rgba(0, 0, 0, 0.12),
     0 4px 12px rgba(0, 0, 0, 0.08);
-  border-left: 4px solid;
+  border-inline-start: 4px solid;
   animation: slideIn 0.3s ease-out;
 }
 

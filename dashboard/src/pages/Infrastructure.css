@@ -542,7 +542,7 @@
 .infrastructure-page .migration-warning {
   display: flex;
   gap: 0.6rem;
-  text-align: left;
+  text-align: start;
   margin: 0 0 1.5rem;
   padding: 0.85rem 1rem;
   border-radius: 8px;

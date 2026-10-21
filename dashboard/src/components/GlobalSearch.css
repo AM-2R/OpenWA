@@ -68,7 +68,7 @@
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--border);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   font: inherit;
   color: var(--text-primary);

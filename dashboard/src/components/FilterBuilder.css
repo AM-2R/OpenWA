@@ -280,7 +280,7 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 .chips-suggestion:hover {
