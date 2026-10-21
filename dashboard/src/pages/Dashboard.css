@@ -296,34 +296,9 @@
   .dashboard .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-}
 
-@media (max-width: 768px) {
-  .dashboard {
-    padding: 1rem;
-  }
-
-  .dashboard .stats-grid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-
-  .dashboard .stat-value {
-    font-size: 1.5rem;
-  }
-
-  .dashboard .sessions-section {
-    padding: 1rem;
-  }
-
-  .dashboard .section-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  /* Convert table to card layout on mobile */
+  /* Convert table to card layout wherever its fixed columns do not fit: they need about 1150px of
+     viewport with the sidebar open. */
   .dashboard .sessions-table .table-header {
     display: none;
   }
@@ -368,6 +343,32 @@
     justify-content: flex-start;
     padding-top: 0.5rem;
     border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 1rem;
+  }
+
+  .dashboard .stats-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .dashboard .stat-value {
+    font-size: 1.5rem;
+  }
+
+  .dashboard .sessions-section {
+    padding: 1rem;
+  }
+
+  .dashboard .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
   }
 }
 
