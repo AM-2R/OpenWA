@@ -38,7 +38,14 @@ jest.mock('@socket.io/redis-adapter', () => ({
   createAdapter: (pub: unknown, sub: unknown) => createAdapterMock(pub, sub),
 }));
 
-import { RedisIoAdapter, isWsRedisEnabled, wsRedisOptions, WS_REDIS_QUIT_TIMEOUT_MS } from './redis-io.adapter';
+import {
+  RedisIoAdapter,
+  isWsRedisEnabled,
+  wsRedisOptions,
+  WS_REDIS_COMMAND_TIMEOUT_MS,
+  WS_REDIS_QUIT_TIMEOUT_MS,
+  WS_REDIS_SOCKET_TIMEOUT_MS,
+} from './redis-io.adapter';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import type { Server } from 'socket.io';
 
@@ -186,6 +193,36 @@ describe('RedisIoAdapter', () => {
         // must not give up on it. The publisher stays bounded.
         expect((sub.opts as { maxRetriesPerRequest?: unknown }).maxRetriesPerRequest).toBeNull();
         expect((pub.opts as { maxRetriesPerRequest?: unknown }).maxRetriesPerRequest).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // A Redis that keeps the connection open and stops answering never errors the publisher's socket, so only
+    // its own deadlines release what it holds. The subscriber must not inherit them: it waits for no reply, and
+    // a destroyed socket or a dropped queue would strand its one-time SUBSCRIBE.
+    it('puts the deadlines on the publisher only', () => {
+      process.env.REDIS_ENABLED = 'true';
+      const spy = withBaseServer(fakeServer().server);
+      try {
+        new RedisIoAdapter({} as never).createIOServer(2785);
+        const [pub, sub] = redisInstances as [FakeRedis, FakeRedis];
+        expect(pub.opts).toMatchObject({
+          commandTimeout: WS_REDIS_COMMAND_TIMEOUT_MS,
+          socketTimeout: WS_REDIS_SOCKET_TIMEOUT_MS,
+          enableOfflineQueue: false,
+          autoResendUnfulfilledCommands: false,
+        });
+        expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBeLessThan(WS_REDIS_COMMAND_TIMEOUT_MS);
+        for (const option of [
+          'commandTimeout',
+          'socketTimeout',
+          'enableOfflineQueue',
+          'autoResendUnfulfilledCommands',
+        ]) {
+          expect(sub.opts).not.toHaveProperty(option);
+        }
+        expect(sub.opts).toMatchObject({ maxRetriesPerRequest: null });
       } finally {
         spy.mockRestore();
       }

@@ -11,6 +11,15 @@ const logger = createLogger('RedisIoAdapter');
 /** Max time to await a graceful `quit()` per client on shutdown before force-disconnecting. */
 export const WS_REDIS_QUIT_TIMEOUT_MS = 2000;
 
+/** Upper bound for one fan-out publish, the same bound as the other Redis clients that serve a request or an event. */
+export const WS_REDIS_COMMAND_TIMEOUT_MS = 2000;
+
+/**
+ * How long the publish client's socket may stay silent after a write before it is destroyed. Kept below the
+ * command timeout, as the throttler's is, so the socket is already being replaced when the first command gives up.
+ */
+export const WS_REDIS_SOCKET_TIMEOUT_MS = 1500;
+
 /**
  * Whether cross-replica WebSocket fan-out is switched on. Same `REDIS_ENABLED === 'true'` gate the
  * throttler and cache read at boot, so a deployment already using Redis for those gets event
@@ -60,6 +69,7 @@ export function rejectRootNamespace(server: Server): void {
  * Failure posture: if the pub/sub clients cannot be created the server falls back to the in-memory
  * adapter — the local node keeps working, only cross-node fan-out is lost — rather than refusing to
  * boot. A Redis outage, at boot or after it, is ioredis's problem to retry; the adapter recovers on reconnect.
+ * Events raised on this node while Redis is unreachable or silent are not replayed to the other replicas.
  */
 export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
@@ -75,22 +85,35 @@ export class RedisIoAdapter extends IoAdapter {
     if (!isWsRedisEnabled()) return server;
 
     try {
-      const pubClient = new Redis(wsRedisOptions());
+      // The publisher is the only client that waits for replies, and a Redis that keeps the connection open but
+      // stops answering (a frozen process, a stalled disk) never errors it: every broadcast would wait in the
+      // client, payload and all, for as long as the stall lasts. So it gets the throttler's posture: a command
+      // the peer does not answer in time is rejected, a socket that stays silent is destroyed and the client
+      // reconnects, nothing is queued while it is disconnected, and nothing the old socket may already have
+      // delivered is sent again. A stall costs fan-out frames, never memory or a second delivery.
+      const pubClient = new Redis({
+        ...wsRedisOptions(),
+        commandTimeout: WS_REDIS_COMMAND_TIMEOUT_MS,
+        socketTimeout: WS_REDIS_SOCKET_TIMEOUT_MS,
+        enableOfflineQueue: false,
+        autoResendUnfulfilledCommands: false,
+      });
       // The adapter issues its SUBSCRIBE/PSUBSCRIBE once, at construction. With a bounded per-request
       // retry, an outage at boot flushes them before Redis is ever reached, and ioredis only replays
       // subscriptions the server confirmed, so the replica would never subscribe. This connection
-      // carries nothing else, so keep its commands queued until the first connect.
-      const subClient = pubClient.duplicate({ maxRetriesPerRequest: null });
+      // carries nothing else, so keep its commands queued until the first connect. It waits for no
+      // reply either, which is why none of the publisher's deadlines apply to it.
+      const subClient = new Redis({ ...wsRedisOptions(), maxRetriesPerRequest: null });
       for (const [name, client] of [
         ['pub', pubClient],
         ['sub', subClient],
       ] as const) {
         client.on('error', err => logger.warn(`Redis ${name} client error: ${err.message}`));
       }
-      // The adapter fires publish() on every broadcast and drops the promise. During an outage ioredis
-      // queues those commands and, each time its retries run out, rejects the whole queue, so every
-      // event emitted meanwhile surfaced as an unhandled rejection. The 'error' listener above already
-      // reports the outage once; a lost fan-out frame is only worth a debug line.
+      // The adapter fires publish() on every broadcast and drops the promise. During an outage each of
+      // those commands is rejected, so every event emitted meanwhile surfaced as an unhandled
+      // rejection. The 'error' listener above already reports the outage once; a lost fan-out frame is
+      // only worth a debug line.
       const publish = pubClient.publish.bind(pubClient);
       pubClient.publish = (channel: string, message: string | Buffer) =>
         publish(channel, message).catch((err: Error) => {
