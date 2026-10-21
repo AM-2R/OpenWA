@@ -19,6 +19,7 @@ import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
 import { parseTrustedProxies } from './common/utils/ip';
+import { exceedsBodyNesting, MAX_BODY_NESTING } from './common/validation/body-nesting';
 
 /** Where the bundled dashboard documents come from, and whether to serve them at all. */
 export interface DashboardSource {
@@ -45,7 +46,7 @@ export interface AppliedBodyCaps {
 /**
  * Everything the production HTTP surface installs on the Express app: request context, the CSP
  * nonce, helmet, the SPA document handler, CORS, the encoded-NUL refusal, the in-flight body budget,
- * the body parsers and the trailing-slash DELETE refusal.
+ * the body parsers, the nesting-depth refusal and the trailing-slash DELETE refusal.
  *
  * It lives here rather than inside bootstrap() so the e2e lane can run the SAME stack. main.ts
  * boots on import, so a suite cannot import it; the whole stack was therefore executed by nothing,
@@ -296,6 +297,19 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       },
     }),
   );
+
+  // The recursive readers of a parsed body (class-transformer in the validation pipe, the send idempotency
+  // fingerprint, the cluster proxy's JSON.stringify) overflow the stack a couple of thousand levels down
+  // and answered 500 with a stack trace in the log. Refused here, once the parsers have run, so every
+  // route and /mcp share one bound and one answer, ahead of the guards, interceptors and pipes.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!exceedsBodyNesting(req.body)) return next();
+    res.status(400).json({
+      statusCode: 400,
+      message: `Request body must not nest objects or arrays more than ${MAX_BODY_NESTING} levels deep`,
+      error: 'Bad Request',
+    });
+  });
 
   // A DELETE path ending in '/' names no resource. Non-strict routing would still match it to the
   // route without the slash, so a client that normalises `<parent>/<child>/..` down to `<parent>/`

@@ -27,6 +27,8 @@ import { DASHBOARD_CSP_NONCE_PLACEHOLDER } from '../src/config/dashboard-csp';
 import { ActiveKeyIndex } from '../src/modules/auth/active-key-index';
 import { ShutdownService } from '../src/common/services/shutdown.service';
 import { documentErrorResponses, ERROR_RESPONSE_SCHEMA } from '../src/config/swagger.config';
+import { MAX_BODY_NESTING } from '../src/common/validation/body-nesting';
+import { SendTextMessageDto } from '../src/modules/message/dto/send-message.dto';
 
 /**
  * The production HTTP surface, run for real. Every other e2e builds a bare Nest app, so the stack
@@ -40,6 +42,15 @@ class EchoController {
   @Post()
   echo(@Body() body: unknown) {
     return { received: typeof body };
+  }
+}
+
+/** A route with a real request DTO, so the global ValidationPipe runs class-transformer over the body. */
+@Controller('validated')
+class ValidatedController {
+  @Post('text')
+  text(@Body() dto: SendTextMessageDto) {
+    return { chatId: dto.chatId };
   }
 }
 
@@ -71,7 +82,7 @@ class IngressStubController {
   }
 }
 
-@Module({ controllers: [EchoController, SessionStubController, IngressStubController] })
+@Module({ controllers: [EchoController, ValidatedController, SessionStubController, IngressStubController] })
 class HttpSurfaceModule {}
 
 // A stand-in for the bundled document: the real dashboard/index.html carries the placeholder in a
@@ -203,6 +214,41 @@ describe('production HTTP surface (configureApp)', () => {
       .send({ blob: 'x'.repeat(900 * 1024) });
 
     expect(res.status).toBe(201);
+  });
+
+  // The recursive readers of a parsed body (class-transformer in the validation pipe, the send
+  // idempotency fingerprint, the cluster proxy's JSON.stringify) overflow the stack a couple of thousand
+  // levels down and answered 500 with a stack trace in the log. A chain of `levels` nested objects:
+  // '{"a":{}}' is two.
+  const nestedObjects = (levels: number): string => '{"a":'.repeat(levels - 1) + '{}' + '}'.repeat(levels - 1);
+
+  it('admits a body nested to the cap and refuses one level more with 400', async () => {
+    const post = (body: string) => request(app.getHttpServer()).post('/api/echo').type('json').send(body);
+
+    expect((await post(nestedObjects(MAX_BODY_NESTING))).status).toBe(201);
+
+    const res = await request(app.getHttpServer())
+      .post('/api/echo')
+      .type('json')
+      .set('Origin', 'https://allowed.example')
+      .send(nestedObjects(MAX_BODY_NESTING + 1))
+      .expect(400);
+    expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
+    expect(res.body).toHaveProperty('message', expect.stringContaining(String(MAX_BODY_NESTING)));
+    expect(res.headers['x-request-id']).toBeDefined();
+    // A browser can read the refusal only if it carries the CORS headers.
+    expect(res.headers['access-control-allow-origin']).toBe('https://allowed.example');
+  });
+
+  it('answers a DTO route 400, not 500, for a body nested thousands of levels deep', async () => {
+    const mentions = '['.repeat(5000) + ']'.repeat(5000);
+    const res = await request(app.getHttpServer())
+      .post('/api/validated/text')
+      .type('json')
+      .send(`{"chatId":"628123456789@c.us","text":"hi","mentions":${mentions}}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
   });
 
   it('refuses a body over the per-request cap with 413', async () => {
