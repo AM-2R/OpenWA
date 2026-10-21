@@ -12,6 +12,16 @@ import { extractWwebjsCall, plannedInboundDownload, wwebjsAckToDeliveryStatus } 
 import { admitInboundSafely, inboundMediaTimeoutMs, withInboundDownloadTimeout } from './inbound-media-cap';
 import { type WwebjsEngineHost } from './wwebjs-host';
 
+/** How many messages being processed have their changes kept at once, and how many changes one message keeps. */
+const MAX_MESSAGES_IN_PROCESSING = 5_000;
+const MAX_CHANGES_KEPT_PER_MESSAGE = 64;
+
+/** A message this adapter is still processing: the text it carries so far, and the changes that reached it. */
+interface MessageInProcessing {
+  text: string;
+  changes: Array<() => void>;
+}
+
 /**
  * Message-domain client events (message, message_create, ack, revoke, reaction, edit) extracted
  * from the adapter's event wiring: pure mapping from wwebjs payloads to neutral events fired
@@ -48,6 +58,63 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     );
   };
 
+  // A message reaches the session once its contact, media and quoted message were fetched. A session that holds
+  // each arrival (a ticket, PostgreSQL) keeps what reaches the message meanwhile for its row. Any other learns of
+  // the message only when it is handed over, so an edit or a delete for everyone that came first would find no
+  // row to change, and the message would then be stored and announced as it was: a deleted one with its content.
+  // Those changes are kept here, by message id, and delivered right after the message.
+  const inProcessing = new Map<string, MessageInProcessing>();
+
+  const deliverKept = (kept: MessageInProcessing): void => {
+    for (const deliver of kept.changes.splice(0)) {
+      try {
+        deliver();
+      } catch (error) {
+        host.logger.error('Error delivering a change that reached a message while it was processed', String(error));
+      }
+    }
+  };
+
+  /**
+   * Start keeping what reaches a message the session does not hold. Returns the call that ends the processing,
+   * however it ends: it delivers what was kept, in arrival order, and forgets the message. Safe to call twice.
+   */
+  const keepChanges = (message: IncomingMessage, ticket: InboundTicket | undefined): (() => void) => {
+    if (ticket || !message.id || message.isStatusBroadcast) return () => undefined;
+    let kept = inProcessing.get(message.id);
+    if (!kept) {
+      // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
+      if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return () => undefined;
+      kept = { text: message.body, changes: [] };
+      inProcessing.set(message.id, kept);
+    }
+    const mine = kept;
+    return () => {
+      if (inProcessing.get(message.id) === mine) inProcessing.delete(message.id);
+      deliverKept(mine);
+    };
+  };
+
+  /**
+   * Deliver a change aimed at `messageId`: right after the message while it is still being processed, else at
+   * once. An edit passes its text: one that repeats the text the message carries so far changes nothing, and goes
+   * through at once as it always did. Past the bound the changes kept so far go first, so none overtakes another.
+   */
+  const afterMessage = (messageId: string, deliver: () => void, editedText?: string): void => {
+    const kept = inProcessing.get(messageId);
+    if (!kept || editedText === kept.text) {
+      deliver();
+      return;
+    }
+    if (editedText !== undefined) kept.text = editedText;
+    if (kept.changes.length < MAX_CHANGES_KEPT_PER_MESSAGE) {
+      kept.changes.push(deliver);
+      return;
+    }
+    deliverKept(kept);
+    deliver();
+  };
+
   client.on('message', msg => {
     let base: IncomingMessage;
     try {
@@ -57,7 +124,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       return;
     }
     const ticket = admit(msg, base, true);
-    holdWhileProcessing(ticket, handleIncoming(host, msg, base, ticket));
+    const endProcessing = keepChanges(base, ticket);
+    const done = handleIncoming(host, msg, base, ticket);
+    holdWhileProcessing(ticket, done);
+    void done.then(endProcessing, endProcessing);
   });
 
   client.on('message_create', msg => {
@@ -70,6 +140,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     }
 
     let ticket: InboundTicket | undefined;
+    let endProcessing: (() => void) | undefined;
     const done = (async () => {
       let incomingMessage: IncomingMessage;
       try {
@@ -82,6 +153,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       }
       // Synchronous, as the first await comes after it.
       ticket = admit(msg, incomingMessage, !incomingMessage.isStatusBroadcast);
+      endProcessing = keepChanges(incomingMessage, ticket);
       // Enrich with the media payload through the same capped path the incoming handler uses —
       // the base builder is sync and carries none, so a phone-sent image would otherwise persist
       // and render as a bare 📎 marker even though the media is downloadable right here. Not for an own
@@ -105,6 +177,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       }
     })();
     holdWhileProcessing(ticket, done);
+    void done.then(
+      () => endProcessing?.(),
+      () => endProcessing?.(),
+    );
   });
 
   client.on('message_ack', (msg, ack) => {
@@ -160,7 +236,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         body: '',
         timestamp: after.timestamp,
       };
-      host.getCallbacks().onMessageRevoked?.(payload);
+      afterMessage(payload.revokedId ?? payload.id, () => host.getCallbacks().onMessageRevoked?.(payload));
     } catch (error) {
       host.logger.error('Error processing message_revoke_everyone', String(error));
     }
@@ -208,7 +284,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         mentionedIds: message.mentionedIds,
       });
       const payload: EditedMessage = buildEditedMessage(base, Boolean(message.hasMedia));
-      host.getCallbacks().onMessageEdited?.(payload);
+      afterMessage(payload.messageId, () => host.getCallbacks().onMessageEdited?.(payload), payload.body);
     } catch (error) {
       host.logger.error('Error processing message_edit', String(error));
     }
