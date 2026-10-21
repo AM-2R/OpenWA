@@ -9,11 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation, in every dashboard language.
-- Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
+- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation, in every dashboard language (#1865). Thanks @Purushotham-Prajapati-24.
+- Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748); the JavaScript, Python, Go and Java SDKs list the event name from the next SDK release after 0.6.0. Thanks @KGMA74, and @berodcdev for the request.
 - Record plugin install, update, uninstall, enable, disable and configuration changes in the audit log.
-- Add `QUEUE_PREFIX` to set the Redis key prefix of the BullMQ queues, so deployments that share a Redis stop taking each other's webhook jobs.
-- `QUEUE_PREFIX` does not separate the rate-limit store or the WebSocket fan-out.
+- Add `QUEUE_PREFIX` to set the Redis key prefix of the BullMQ queues, so deployments that share a Redis stop taking each other's webhook jobs; it covers the queues only, not the rate-limit store or the WebSocket fan-out.
 - Add All, Unread, 1:1, Groups and Unknown quick filters to the dashboard chat list. Thanks @rjsebening.
 - Add a New chat panel to the dashboard Chats page that opens a chat with a saved contact or a number WhatsApp confirms, and on Baileys creates a group. Thanks @rjsebening.
 - Add chat and contact menus to the dashboard Chats page: pin, mute, archive, mark unread, save, rename and block a contact, leave a group, and clear or delete a chat on whatsapp-web.js only until #1891 is fixed. Thanks @rjsebening.
@@ -22,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility (#1870).
-- Reject empty PHP SDK `defaultHeaders` lists before sending requests; use `''` for an empty header value (#1870).
+- Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility, from the next SDK release after 0.6.0 (#1870).
+- Reject empty PHP SDK `defaultHeaders` lists before sending requests, from the next SDK release after 0.6.0; use `''` for an empty header value (#1870).
 - Convert legacy message types in a one-time migration instead of on every boot, which read the whole messages table before the HTTP port opened.
 - Open the HTTP port after at most 60 s of plugin restore; plugins still restoring finish in the background.
 - Apply the hooks of a plugin still restoring only once it is up, and answer 409 to changes to it until then.
@@ -32,9 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the unused `STORAGE_LIST_MAX_FILES` setting; a leftover value is ignored instead of validated at boot.
 - Remove the `INFO` permission from the bundled Docker socket proxy; nothing used it, and `GET /info` through the proxy is now refused.
 - Drop the `archiver` dependency; the storage export writes its tar.gz with `tar-stream` and `zlib`.
-- Remove a stored plugin secret when a config write sends `null` for it; an empty string still keeps it.
+- Remove a stored plugin secret when a config write sends `null` for it, where `null` used to keep it; an empty string still keeps it.
 - Send `null` for a cleared secret field in the plugin config form of the dashboard, which removes the stored secret.
 - Reuse the participant list of a Baileys group for up to 5 minutes (`BAILEYS_GROUP_METADATA_CACHE_TTL_MS`, `0` queries for every send) instead of querying it for every group message.
+- Close a `/events` WebSocket connection that sends a client frame over 8 KiB, where Socket.IO's default allowed 1 MB; the frames the gateway accepts are under 1 KB.
 
 ### Fixed
 
@@ -47,20 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve literal request values in custom ingress acknowledgments.
 - Honor inclusive millisecond lower bounds in built-in search.
 - Preserve replacement plugin search providers during worker recovery.
-- Refuse media exports and file counts when local directories cannot be fully enumerated.
-- Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885).
+- Refuse media exports and file counts when local directories cannot be fully enumerated or hold a symbolic link.
+- Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885). Thanks @Purushotham-Prajapati-24.
 - Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).
-- Answer 400 for a template or bulk message whose rendered text would pass `TEMPLATE_RENDER_MAX_CHARS`, instead of exhausting memory.
+- Answer 400 for a template whose rendered text would pass `TEMPLATE_RENDER_MAX_CHARS`, and fail a bulk item whose text would, instead of exhausting memory.
 - Refuse a bulk media item that would render past the media size limit.
 - Refuse Socket.IO connections to the root namespace, which stayed connected outside the handshake and per-key socket limits; only `/events` accepts clients.
 - Bound a silent Redis connection in the rate-limit store with a socket timeout, so only the first request waits out a timeout.
-- Store the label of a clicked button as the message body; it was returned to the caller but not saved.
-- Leave opt-in events such as `message.receipt` out of the failure redrive batch of a webhook that only subscribes to `*`, where they stayed at the head of every batch.
 - Delete a session's messages, webhook outbox events and webhook delivery failures in batches, with a new index on outbox events by session, so removing a session with a large history does not hold the database in one statement.
 - Answer 503 instead of 500 when WhatsApp answers a Baileys send or status post with a throttle (429) or timeout (408) code, and free the idempotency key of a throttled send.
 - Match a built-in search chat or sender filter against every stored form of the id (`@c.us`, `@s.whatsapp.net`, lid), and a group message's author for the sender.
 - Probe a whatsapp-web.js session that awaits operator action, so the watchdog tells a live page from a dead one.
-- Answer 409 instead of 500 for a whatsapp-web.js send or status post that races a session teardown.
+- Answer 409 instead of 500 for a whatsapp-web.js send, status post, profile, group, label, mute or pin request that races a session teardown.
 - Reload the dashboard chat list at most once at a time per session when live events arrive in a burst.
 - Keep storage export entry names identical to the stored keys; a backslash, a doubled slash or a leading `name:` segment used to rewrite them.
 - Leave S3 folder placeholders (keys ending in `/`) out of the storage export.
@@ -71,17 +69,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a session start that worked when the database fails a read after the engine came up, which made the retry answer "already started".
 - Answer a session delete normally when handing back its claim fails after the delete committed.
 - Clear a logged-out session's phone before the status write, so a failed write cannot leave it in the boot auto-start query.
-- Fail the unfinished bulk batches of a session whose delete fails after it began closing the session, instead of leaving them processing.
 - Log a failed wipe of the stored messages and chat states when a Baileys session is unlinked.
 - Answer the number check with the phone id (`<phone>@c.us`) on whatsapp-web.js for a contact migrated to LID addressing, as Baileys does.
 - Read a list of lid allowlist entries from the database in one query instead of one per unseen entry first.
 - Keep a plugin hook handler that outlives the hook timeout inside the re-entrancy guard, so its late sends no longer re-fire the event and dispatch the handler again.
 - Complete a data import on PostgreSQL when clearing a large messages table outlasts the statement timeout.
-- Create the built-in PostgreSQL container with the saved `DATABASE_PASSWORD`, so a custom password saved with the built-in database no longer fails the next boot.
+- Create the built-in PostgreSQL container with the saved `DATABASE_PASSWORD`, so a custom password saved with the built-in database no longer fails the next boot; a data volume that already exists keeps the role password it was created with.
 - Serialize a plugin upload with an uninstall or update of the same plugin id.
 - Show hours for a session active within the last day on the Sessions page, as the Dashboard does.
 - List a whatsapp-web.js contact held under both its LID and its phone once in the contacts and blocked lists, with the phone as `number`, instead of twice with the LID's digits.
 - Show a localized edited indicator in Chats for observed message edits, including after a reload (#1905). Thanks @yederlv.
+- Answer 409 to a start of a session whose delete is still running; it started an engine that stayed registered for the deleted session.
+- List a Baileys contact blocked under both its LID and its phone once in the blocked list, as whatsapp-web.js does.
+- Hold queued ingress deliveries and reconciler replays for a plugin that is still restoring after startup, instead of spending their retry attempts and dead-lettering them.
+- Remove the secrets of a wildcard integration instance from the plugin config when the instance is deleted, disabled, moved to one session or saved without them, where they stayed in use.
+- Answer 400 instead of 500 on PostgreSQL for a `GET /api/search` `dateFrom` or `dateTo` outside the safe integer range, and publish that range in the schema.
+- Answer an empty page instead of 500 for a list `offset` of 2^63 or more on the audit, session, webhook, delivery failure and message lists.
+- Stop a Redis that stops answering from making the WebSocket publish client hold every event in memory; events raised while it is unreachable are dropped instead of replayed late.
+- Count in `GET /api/infra/storage/files/count` only the keys the export carries, leaving out S3 folder placeholders and unsafe keys.
+- Fall back to the 5000 ms default for a negative `SIMULATE_TYPING_MAX_MS`, which cut the typing pause to about 1 ms.
+- Never fail a log call on metadata that holds a circular reference, a BigInt or a throwing getter, and redact secret-named keys at any depth instead of the first five levels, including on an object with its own `toJSON`.
+
+### Dependencies
+
+- `i18next` 26.4.2 to 26.4.4 in the dashboard tree, closing a regular-expression denial of service in its nested-translation parser. It ships in the dashboard bundle.
+- The image's Node.js 22.23.3 to 22.23.4, a security release for the `http`, `dns`, `tls`, `permission` and `crypto` modules.
+- The image's npm CLI 12.1.0 to 12.2.1, clearing CVE-2026-102276, CVE-2026-102278 (brace-expansion) and CVE-2026-19534 (undici) in its own bundled tree; npm only runs for the documented migration commands, and the three Trivy exceptions for them are gone.
+
+### Upgrade notes (behavior changes)
+
+- ⚠️ **Breaking (config).** A production boot refuses a `METRICS_TOKEN` that is the `.env.example` placeholder or a known weak value such as `test` or `change-me`, since the scrape endpoint is public; set a long random token, or leave it unset to keep the endpoint disabled.
+- The HTTP port now opens after at most 60 s of plugin restore. Until a plugin still restoring is up, the hooks it owns (a send moderation veto, for one) do not run and a change to it answers `409`, so do not rely on a plugin veto for requests in the first minute after a boot with slow plugins.
+- An explicit `null` for a secret field of a plugin config removes the stored secret, where 0.25.0 kept it; a client that sends `null` for "not provided" must leave the key out.
+- A client that connects to the Socket.IO root namespace `/` is refused; connect to `/events`.
+- Baileys group sends reuse a cached participant list for up to 5 minutes; set `BAILEYS_GROUP_METADATA_CACHE_TTL_MS=0` to query for every send as before.
+- `GET /info` through the bundled Docker socket proxy is refused; a client of your own that reads it needs `INFO: 1` on the proxy.
+- Changing `QUEUE_PREFIX` on a live deployment leaves the jobs queued under the old prefix unprocessed.
+- The first boot on PostgreSQL converts the legacy message types in one statement inside the boot transaction, about 1 minute per million legacy rows while the port stays closed; raise `startupProbe.failureThreshold` or run the migrations first (docs/14, section 14.5).
+- A storage export or file count now fails on a symbolic link inside the local storage directory; replace the link with the real directory.
 
 ## [0.25.0] - 2026-10-15
 
