@@ -440,8 +440,6 @@ export interface ContactStatusGroup {
   latest: string;
 }
 
-// Minimal contact type for the recipient picker; the backend GET /sessions/:id/contacts
-// returns a Contact array; fields beyond id are optional.
 /** GET /sessions/:id/groups/:groupId (GroupInfoDto). */
 export interface GroupInfo {
   id: string;
@@ -472,6 +470,8 @@ export interface GroupParticipantsAck extends GroupAck {
   results: GroupParticipantResult[];
 }
 
+// An entry of the session's address book, from GET /sessions/:id/contacts: what the recipient pickers and the
+// chat list's saved-contact check read. Only the name, push name and picture are optional.
 export interface Contact {
   id: string;
   name?: string;
@@ -996,8 +996,8 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
-  // Archive, pin and mute answer `{ success: false }` when the engine declined to act (WhatsApp keeps at most
-  // three chats pinned), which the callers treat as a failure.
+  // Archive and pin answer `{ success: false }` when the engine declined to act (WhatsApp keeps at most three
+  // chats pinned), which the callers treat as a failure. Mute has no declined outcome and always answers success.
   archiveChat: (id: string, chatId: string, archive: boolean) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/archive`, {
       method: 'POST',
