@@ -62,22 +62,28 @@ export function MuteChatDialog({
 // The gateway's cap on an address-book name (UpsertContactDto).
 const NAME_MAX_LENGTH = 100;
 
-/** Save a 1:1 chat's contact to the account's address book, or rename the entry it has. */
+/**
+ * Save a 1:1 chat's contact to the account's address book, or rename the entry it has. `saved` is the address
+ * book's word on whether it holds the contact, the one the chat's menu went by; the chat's name says nothing
+ * of it, since an unsaved contact is named by its push name.
+ */
 export function SaveContactDialog({
   chat,
+  saved,
   busy,
   onSave,
   onClose,
 }: {
   chat: Chat;
+  saved: boolean;
   busy: boolean;
   onSave: (firstName: string, lastName: string) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  // A push name (`~Max`) or the number itself is no name to start from.
-  const known = chat.name && !chat.name.startsWith('~') && /\D/.test(chat.name.replace(/[\s+()-]/g, ''));
-  const [first, ...rest] = known ? chat.name.trim().split(/\s+/) : [''];
+  // A saved contact starts from its name, unless that is a push name (`~Max`) or the number itself.
+  const named = chat.name && !chat.name.startsWith('~') && /\D/.test(chat.name.replace(/[\s+()-]/g, ''));
+  const [first, ...rest] = saved && named ? chat.name.trim().split(/\s+/) : [''];
   const [firstName, setFirstName] = useState(first ?? '');
   const [lastName, setLastName] = useState(rest.join(' '));
   const canSave = firstName.trim().length > 0 && !busy;
@@ -85,7 +91,7 @@ export function SaveContactDialog({
     <Modal
       open
       onClose={onClose}
-      title={known ? t('chats.rowActions.renameContact') : t('chats.rowActions.saveContact')}
+      title={saved ? t('chats.rowActions.renameContact') : t('chats.rowActions.saveContact')}
       className="confirm-modal"
       closeLabel={t('common.close')}
       footer={

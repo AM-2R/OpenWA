@@ -1318,11 +1318,13 @@ export function Chats() {
       .catch(failWith('chats.rowActions.blockFailed'));
   };
 
+  const isSavedContact = (chat: Chat) => savedContactKeys?.has(contactKey(chat.id)) ?? false;
+
   const rowActions: ChatRowActions = {
     onGroupInfo: setGroupDialogChat,
     onSaveContact: canWrite ? setContactDialogChat : undefined,
     canSaveContact: chat => addressbookIdOf(chat) !== null,
-    isSavedContact: chat => savedContactKeys?.has(contactKey(chat.id)) ?? false,
+    isSavedContact,
     onTogglePin: canWrite ? chat => void handleTogglePin(chat) : undefined,
     onMute: canWrite ? chat => (chat.muted ? void handleMute(chat, null) : setMuteDialogChat(chat)) : undefined,
     onToggleArchive: canWrite ? chat => void handleToggleArchive(chat) : undefined,
@@ -1850,6 +1852,7 @@ export function Chats() {
       {contactDialogChat && (
         <SaveContactDialog
           chat={contactDialogChat}
+          saved={isSavedContact(contactDialogChat)}
           busy={dialogRunning === contactDialogChat}
           onSave={(first, last) => void handleSaveContact(contactDialogChat, first, last)}
           onClose={() => setContactDialogChat(null)}

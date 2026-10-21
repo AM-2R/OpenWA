@@ -90,6 +90,15 @@ const PUSH_ONLY_CONTACT = {
   isBlocked: false,
 };
 const LID_CHAT: Chat = { ...CHAT, id: '262813461250071@lid', name: 'Lia', lastMessage: 'from a lid' };
+// A contact the address book holds as saved under a name that reads like a number.
+const NUMBER_NAMED_CHAT: Chat = { ...CHAT, id: '15550003333@c.us', name: '+1 555 000 3333', lastMessage: 'hey' };
+const NUMBER_NAMED_CONTACT = {
+  id: NUMBER_NAMED_CHAT.id,
+  name: NUMBER_NAMED_CHAT.name,
+  number: '15550003333',
+  isMyContact: true,
+  isBlocked: false,
+};
 let listExtra = false;
 // Served when a test turns `listDuplicateContact` on: Bob listed twice under one id, as whatsapp-web.js lists a
 // contact it holds as both a LID and a phone record. The first copy carries another number than the id's.
@@ -129,7 +138,11 @@ function installFetchStub(): void {
     }
     if (method === 'GET' && path.startsWith(`${base}/chats?`)) {
       return Promise.resolve(
-        jsonResponse([CHAT, ...(listGroup ? [GROUP] : []), ...(listExtra ? [PUSH_ONLY_CHAT, LID_CHAT] : [])]),
+        jsonResponse([
+          CHAT,
+          ...(listGroup ? [GROUP] : []),
+          ...(listExtra ? [PUSH_ONLY_CHAT, LID_CHAT, NUMBER_NAMED_CHAT] : []),
+        ]),
       );
     }
     const groupPath = `${base}/groups/${encodeURIComponent(GROUP.id)}`;
@@ -202,7 +215,7 @@ function installFetchStub(): void {
           ALICE_CONTACT,
           ...(listDuplicateContact ? [DUPLICATE_CONTACT] : []),
           CONTACT,
-          ...(listExtra ? [PUSH_ONLY_CONTACT] : []),
+          ...(listExtra ? [PUSH_ONLY_CONTACT, NUMBER_NAMED_CONTACT] : []),
         ]),
       );
     }
@@ -993,6 +1006,26 @@ test('a contact Baileys knows by push name only is unsaved: Unknown lists it, an
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Bobby' }));
   assert.ok(screen.getByRole('button', { name: /^Save contact/ }));
   assert.ok(!screen.queryByRole('button', { name: /^Rename contact/ }), 'an unsaved contact is offered Rename');
+});
+
+test("the contact dialog follows the address book the menu read, not the chat's name", async () => {
+  const { screen, fireEvent, within } = rtl;
+  listExtra = true;
+  renderPage();
+  await screen.findByText('Bobby');
+
+  // Known to Baileys by a bare push name: unsaved, so Save, and the push name is no name to start from.
+  pickRowAction('Bobby', 'Save contact');
+  let dialog = await screen.findByRole('dialog');
+  assert.equal(dialog.querySelector('h2')?.textContent, 'Save contact');
+  assert.equal((within(dialog).getByLabelText('First name') as HTMLInputElement).value, '');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+  // Saved under a name that reads like a number: Rename, with nothing to start from.
+  pickRowAction('+1 555 000 3333', 'Rename contact');
+  dialog = await screen.findByRole('dialog');
+  assert.equal(dialog.querySelector('h2')?.textContent, 'Rename contact');
+  assert.equal((within(dialog).getByLabelText('First name') as HTMLInputElement).value, '');
 });
 
 test('a chat keyed by a privacy id offers Save contact disabled, with the reason, and sends nothing', async () => {
