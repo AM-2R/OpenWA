@@ -103,8 +103,19 @@
   background: rgba(37, 211, 102, 0.05);
 }
 
+/* Hidden but focusable: display: none would take the radio out of the tab order, and the arrow keys
+   that change the choice with it. */
 .infrastructure-page .radio-option input {
-  display: none;
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.infrastructure-page .radio-option:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .infrastructure-page .radio-option span {
