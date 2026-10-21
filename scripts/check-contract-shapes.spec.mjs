@@ -188,6 +188,19 @@ test('parsePythonTypes: TypedDict totals, NotRequired, aliased Literal enums, in
   assert.equal(types.Session.lastError.token, 'string|null');
 });
 
+test('parsePythonTypes: a trailing comment neither hides NotRequired nor leaves an unreadable type', () => {
+  const src = [
+    'class Media(TypedDict):',
+    '    id: str  # the media id',
+    '    data: NotRequired[str]  # base64; absent when omitted (too large)',
+  ].join('\n');
+  const media = parsePythonTypes(src).Media;
+  assert.equal(media.data.optional, true);
+  assert.equal(media.data.token, 'string');
+  assert.equal(media.id.optional, false);
+  assert.equal(media.id.token, 'string');
+});
+
 test('parseGoTypes: omitempty optionality, pointer nullability, const-block enums, required slices', () => {
   const src = [
     'type Kind string',

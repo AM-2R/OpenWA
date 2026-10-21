@@ -1066,7 +1066,9 @@ function parsePythonMembers(body) {
     const m = t.match(/^(\w+)\s*:\s*(.+)$/);
     if (!m) continue;
     let optional = false;
-    let typeText = m[2];
+    // A trailing comment would hide the NotRequired[...] wrapper and leave an unreadable type token,
+    // so the member read as required and its type went uncompared.
+    let typeText = m[2].replace(/\s+#.*$/, '');
     const notReq = typeText.match(/^NotRequired\[(.+)\]$/s);
     if (notReq) {
       optional = true;
