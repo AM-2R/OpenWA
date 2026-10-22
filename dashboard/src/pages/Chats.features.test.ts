@@ -2486,6 +2486,7 @@ test('the Unknown filter says the address book could not be read, and Retry read
   await screen.findByText('Could not load contacts');
   assert.ok(!screen.queryByText('No chats match this filter'), 'a failed read was reported as no matching chat');
   assert.equal(contactReads().length, 1);
+  assert.equal(screen.getByRole('button', { name: 'Retry' }).querySelector('.animate-spin'), null);
 
   // The retry keeps the keyboard where it was while the read runs, and says it is busy.
   failContacts = false;
@@ -2496,6 +2497,9 @@ test('the Unknown filter says the address book could not be read, and Retry read
   await waitFor(() => assert.equal(contactReads().length, 2));
   assert.equal(document.activeElement === retry, true, `focus is on "${focusedName()}", not on Retry`);
   assert.equal(retry.getAttribute('aria-disabled'), 'true');
+  // A sighted operator sees it too: a spinner beside the label, and nothing like it before the press.
+  assert.equal(retry.getAttribute('aria-busy'), 'true');
+  assert.ok(retry.querySelector('.animate-spin'), 'the running retry shows no spinner');
 
   release();
   await screen.findByText('Bobby');

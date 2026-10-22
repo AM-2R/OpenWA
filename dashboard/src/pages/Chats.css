@@ -166,6 +166,11 @@
   gap: 0.5rem;
 }
 
+.chats-page .btn-secondary[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .chats-page .chat-item-card {
   display: flex;
   align-items: center;

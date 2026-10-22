@@ -277,15 +277,17 @@ function ChatSidebar({
             <div className="chats-list-empty">
               <AlertCircle size={24} className="text-warn" />
               <span>{t('chats.newChat.contactsError')}</span>
-              {/* aria-disabled, not disabled, so the keyboard stays on the button while the read runs. */}
+              {/* aria-disabled, not disabled, so the keyboard stays on the button while the read runs; Chats.css dims it. */}
               <button
                 type="button"
                 className="btn-secondary"
                 aria-disabled={chatsTab.filterError.retrying}
+                aria-busy={chatsTab.filterError.retrying}
                 onClick={() => {
                   if (!chatsTab.filterError?.retrying) chatsTab.filterError?.onRetry();
                 }}
               >
+                {chatsTab.filterError.retrying && <Loader2 className="animate-spin" size={16} />}
                 {t('common.retry')}
               </button>
             </div>
