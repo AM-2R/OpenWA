@@ -159,6 +159,41 @@ describe('LoggerService', () => {
       expect(items[0]).toEqual({ id: 0 });
       expect(items[1499]).toBe('[Truncated]');
     });
+
+    // Where the first five levels end and the node budget runs out, as they reach the line.
+    describe('the boundaries of the whole levels and of the node budget', () => {
+      const bare = (length: number): object[] => Array.from({ length }, () => ({}));
+      const wide = (keys: number): Record<string, number> =>
+        Object.fromEntries(Array.from({ length: keys }, (_, key) => [`k${key}`, key]));
+      const at = (line: unknown, ...path: string[]): unknown =>
+        path.reduce<unknown>((node, key) => (node as Record<string, unknown>)[key], line);
+      const line = (metadata: unknown): unknown => {
+        consoleSpy.mockClear();
+        logger.log('cfg', metadata as never);
+        return getLogOutput(consoleSpy);
+      };
+
+      it('copies exactly 1000 objects below the fifth level and writes the next as [Truncated]', () => {
+        const rows = at(line({ a: { b: { c: { rows: bare(1001) } } } }), 'a', 'b', 'c', 'rows') as unknown[];
+
+        expect(rows.slice(0, 1000)).toEqual(bare(1000));
+        expect(rows[1000]).toBe('[Truncated]');
+      });
+
+      it('copies an object of the fifth level whole, whatever its number of keys', () => {
+        const copy = at(line({ a: { b: { c: { wide: wide(1500) } } } }), 'a', 'b', 'c', 'wide') as object;
+
+        expect(Object.keys(copy)).toHaveLength(1500);
+      });
+
+      it('copies an object of the sixth level that fits in what is left of the budget, and not a wider one', () => {
+        const fits = at(line({ a: { b: { c: { d: { wide: wide(999) } } } } }), 'a', 'b', 'c', 'd', 'wide') as object;
+        const wider = at(line({ a: { b: { c: { d: { wide: wide(1000) } } } } }), 'a', 'b', 'c', 'd', 'wide');
+
+        expect(Object.keys(fits)).toHaveLength(999);
+        expect(wider).toBe('[Truncated]');
+      });
+    });
   });
 
   // Plugin ctx.logger spreads its caller's metadata in verbatim, so the metadata is whatever the plugin holds.

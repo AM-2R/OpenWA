@@ -123,6 +123,42 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(items[1499]).toEqual({ id: 1499, tags: [1499] });
   });
 
+  describe('the boundaries of the whole levels and of the node budget', () => {
+    const bare = (length: number): object[] => Array.from({ length }, () => ({}));
+    const wide = (keys: number): Record<string, number> =>
+      Object.fromEntries(Array.from({ length: keys }, (_, key) => [`k${key}`, key]));
+    const at = (line: unknown, ...path: string[]): unknown =>
+      path.reduce<unknown>((node, key) => (node as Record<string, unknown>)[key], line);
+
+    it('copies exactly 1000 objects below the fifth level and writes the next as [Truncated]', () => {
+      const rows = at(write({ a: { b: { c: { rows: bare(1001) } } } }, 'x'), 'a', 'b', 'c', 'rows') as unknown[];
+
+      expect(rows.slice(0, 1000)).toEqual(bare(1000));
+      expect(rows[1000]).toBe('[Truncated]');
+    });
+
+    it('copies an object of the fifth level whole, whatever its number of keys', () => {
+      const copy = at(write({ a: { b: { c: { wide: wide(1500) } } } }, 'x'), 'a', 'b', 'c', 'wide') as object;
+
+      expect(Object.keys(copy)).toHaveLength(1500);
+    });
+
+    it('copies an object of the sixth level that fits in what is left of the budget, and not a wider one', () => {
+      const fits = at(
+        write({ a: { b: { c: { d: { wide: wide(999) } } } } }, 'x'),
+        'a',
+        'b',
+        'c',
+        'd',
+        'wide',
+      ) as object;
+      const wider = at(write({ a: { b: { c: { d: { wide: wide(1000) } } } } }, 'x'), 'a', 'b', 'c', 'd', 'wide');
+
+      expect(Object.keys(fits)).toHaveLength(999);
+      expect(wider).toBe('[Truncated]');
+    });
+  });
+
   it('replaces a credential nested deeper than five levels', () => {
     const line = JSON.stringify(write({ record: nest(8, { password: 'value-deep', visible: 'v' }) }, 'x'));
 
