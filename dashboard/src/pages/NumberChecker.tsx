@@ -79,11 +79,17 @@ function asciiDigit(digit: string): string {
   return String((code - zero) % 10);
 }
 
-// The text as typed or pasted: compatibility forms folded (a full-width plus or digit), invisible format marks such as
-// the direction marks of a right-to-left chat dropped, and every script's decimal digits as ASCII ones.
+// The text as typed or pasted: the full-width forms of ASCII characters (a plus or a digit from a CJK input method)
+// folded to ASCII, invisible format marks such as the direction marks of a right-to-left chat dropped, and every
+// script's decimal digits as ASCII ones. Only that block is folded: a general compatibility fold would also turn
+// circled and superscript numbers and fractions, which are list bullets and footnote marks, into digits.
 function normalizePhoneText(text: string): string {
-  return text
-    .normalize('NFKC')
+  return [...text]
+    .map(ch => {
+      const code = ch.codePointAt(0)!;
+      return code >= 0xff01 && code <= 0xff5e ? String.fromCharCode(code - 0xfee0) : ch;
+    })
+    .join('')
     .replace(/\p{Cf}/gu, '')
     .replace(/\p{Nd}/gu, asciiDigit);
 }

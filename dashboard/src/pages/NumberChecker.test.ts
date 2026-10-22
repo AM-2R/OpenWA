@@ -252,6 +252,41 @@ for (const [label, typed] of WRAPPED_PLUS) {
   });
 }
 
+// Circled and superscript numbers, and fractions, are list bullets and footnote marks around a number, not digits of it.
+const MARKED_NUMBERS = [
+  ['a circled-number bullet before the number', `${char(0x2460)} +62 812 3456 7890`, '6281234567890'],
+  ['a superscript footnote mark after the number', `6281234567890${char(0x00b9)}`, '6281234567890'],
+  ['a superscript two after a plus number', `+65 8123 4567${char(0x00b2)}`, '6581234567'],
+  ['a vulgar fraction after the number', `6281234567890${char(0x00bc)}`, '6281234567890'],
+] as const;
+
+for (const [label, typed, expected] of MARKED_NUMBERS) {
+  test(`NumberChecker: ${label} is not read as digits of the number`, async () => {
+    const lookups = stubLookups(registered);
+    renderComponent();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: typed } });
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+    await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+    assert.deepEqual(lookups, [expected]);
+  });
+}
+
+test('NumberChecker: a bulk list numbered with circled digits looks up the numbers, not the bullets', async () => {
+  const lookups = stubLookups(registered);
+  renderComponent();
+  const textarea = await openBulkTab();
+  const bullet = (n: number) => char(0x2460 + n);
+  rtl.fireEvent.change(textarea, {
+    target: {
+      value: `${bullet(0)} +62 812 3456 7890\n${bullet(1)} +62 813 4567 8901\n${bullet(2)} +62 814 5678 9012`,
+    },
+  });
+  startBatch();
+  await rtl.screen.findByText('Completed checking 3 numbers.', {}, { timeout: 4000 });
+  assert.deepEqual(lookups, ['6281234567890', '6281345678901', '6281456789012']);
+});
+
 test('NumberChecker: a bulk list keeps wrapped and full-width plus numbers international with +91 on', async () => {
   const lookups = stubLookups(registered);
   renderComponent();
