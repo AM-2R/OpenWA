@@ -21,7 +21,7 @@ import { MAX_CONDITIONS } from '../filters/filter-types';
 import type { FilterOperator, WebhookFilters } from '../filters/filter-types';
 import { IsValidWebhookFilters } from '../filters/filter-validation';
 import { IsHeaderMap } from './is-header-map.validator';
-import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 
 /**
@@ -132,6 +132,7 @@ export class CreateWebhookDto {
     minItems: 1,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
   // Must include '*' (wildcard subscribe-all) alongside the known events.
@@ -221,6 +222,7 @@ export class UpdateWebhookDto {
     minItems: 1,
   })
   @ValidateIf((_: UpdateWebhookDto, v: unknown) => v !== undefined)
+  @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
   @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
@@ -461,6 +463,7 @@ export class RedriveWebhookDeliveriesDto {
     items: { type: 'string', maxLength: 128 },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(500)
   @IsString({ each: true })

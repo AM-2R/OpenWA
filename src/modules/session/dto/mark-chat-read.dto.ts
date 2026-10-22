@@ -10,7 +10,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { CHAT_ID_MAX_LENGTH, CHAT_JID_MESSAGE, CHAT_JID_PATTERN } from '../../message/dto/send-message.dto';
-import { ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictString, ToStrictArray } from '../../../common/utils/strict-boolean';
 
 /**
  * Ceiling on one request's receipt batch, so a single call cannot hand the engine an unbounded key
@@ -66,6 +66,7 @@ export class MarkChatReadDto {
   // `"messageIds": null` reached the engine unchecked and dereferenced there as a 500. Absent stays
   // absent; present-but-null falls through to @IsArray and answers 400.
   @ValidateIf((_object, value) => value !== undefined)
+  @ToStrictArray()
   @IsArray()
   // An empty array asks for nothing to be acknowledged. Rejected rather than accepted, because the
   // engine reads a missing list as "the newest message" and the two must not collapse: a caller that

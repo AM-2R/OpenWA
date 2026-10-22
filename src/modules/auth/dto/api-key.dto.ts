@@ -10,7 +10,7 @@ import {
   Validate,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
@@ -52,6 +52,7 @@ export class CreateApiKeyDto {
     example: ['192.168.1.1', '10.0.0.0/8'],
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @IsString({ each: true })
   @Validate(IsIpOrCidrConstraint, { each: true })
@@ -65,6 +66,7 @@ export class CreateApiKeyDto {
     example: ['0a941dac-a965-45e7-b318-74ae8be134f0', '8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a'],
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @IsString({ each: true })
   @ArrayUnique()
@@ -83,6 +85,7 @@ export class CreateApiKeyDto {
     maxItems: ALLOWED_CHATS_MAX,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(ALLOWED_CHATS_MAX)
   @IsString({ each: true })
@@ -184,6 +187,7 @@ export class UpdateApiKeyDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @IsString({ each: true })
   @Validate(IsIpOrCidrConstraint, { each: true })
@@ -191,6 +195,7 @@ export class UpdateApiKeyDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @IsString({ each: true })
   @ArrayUnique()
@@ -199,6 +204,7 @@ export class UpdateApiKeyDto {
 
   @ApiPropertyOptional({ maxItems: ALLOWED_CHATS_MAX })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(ALLOWED_CHATS_MAX)
   @IsString({ each: true })

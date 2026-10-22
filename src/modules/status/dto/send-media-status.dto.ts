@@ -15,7 +15,7 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../../message/media-cap.util';
-import { ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictString } from '../../../common/utils/strict-boolean';
 
 class StatusMediaInput {
   @ApiPropertyOptional({
@@ -74,6 +74,7 @@ export class SendImageStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })
@@ -107,6 +108,7 @@ export class SendVideoStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })
@@ -154,6 +156,7 @@ export class SendVoiceStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })

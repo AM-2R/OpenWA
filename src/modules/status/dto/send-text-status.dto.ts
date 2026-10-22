@@ -1,6 +1,6 @@
 import { IsString, IsOptional, IsInt, IsIn, Matches, MaxLength, IsArray, ArrayMaxSize } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class SendTextStatusDto {
   @ApiProperty({
@@ -47,6 +47,7 @@ export class SendTextStatusDto {
     maxItems: 256,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(256)
   @IsString({ each: true })

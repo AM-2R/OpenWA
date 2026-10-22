@@ -16,7 +16,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Validate } from 'class-validator';
-import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import {
   BATCH_ID_MAX_LENGTH,
   CHAT_ID_MAX_LENGTH,
@@ -117,6 +117,7 @@ export class BulkMessageContentDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })
@@ -195,6 +196,7 @@ export class SendBulkMessageDto {
     type: [BulkMessageItemDto],
     maxItems: BULK_MESSAGES_MAX,
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(BULK_MESSAGES_MAX)
   @ValidateNested({ each: true })

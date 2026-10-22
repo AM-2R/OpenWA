@@ -10,9 +10,9 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { InfraConfigResponseDto, InfraConfigSaveResponseDto, InfraRestartResponseDto } from './dto/infra-response.dto';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { RestartDto } from './dto/restart.dto';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
@@ -39,24 +39,11 @@ import {
   ConfigSectionContext,
 } from './config-sections';
 
-// The PUT /infra/config body DTOs live in ./dto/save-config.dto.ts: as *.dto.ts classes they are
-// covered by the input-coercion drift gate (src/common/utils/dto-strict-coercion.spec.ts), which
-// controller-local classes escape, and their boolean/numeric fields carry the @ToStrictBoolean /
-// @ToStrictNumber transforms that keep a form-encoded 'false' from being coerced to `true`.
-
-class RestartDto {
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  profiles?: string[];
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  profilesToRemove?: string[];
-}
+// The PUT /infra/config body DTOs live in ./dto/save-config.dto.ts and the restart body in
+// ./dto/restart.dto.ts: as *.dto.ts classes they are covered by the input-coercion drift gate
+// (src/common/utils/dto-strict-coercion.spec.ts), which controller-local classes escape, and their
+// boolean/numeric fields carry the @ToStrictBoolean / @ToStrictNumber transforms that keep a form-encoded
+// 'false' from being coerced to `true`.
 
 // The env key and value that point the app at each bundled service, as /infra/status detects them.
 const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {

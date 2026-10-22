@@ -75,3 +75,20 @@ export function coerceStrictString({ obj, key }: Pick<TransformFnParams, 'obj' |
 
 /** Property decorator form of {@link coerceStrictString}. Pair it with `@IsString()`. */
 export const ToStrictString = (): PropertyDecorator => Transform(coerceStrictString);
+
+/**
+ * The array counterpart. For an `Array`-typed property class-transformer builds `new Array()` and copies
+ * the keys of an object onto it, so `{"628111@c.us":true}` arrives as an EMPTY array that `@IsArray()`
+ * accepts. Where an empty list means "no restriction" (the key lists `allowedChats`, `allowedSessions` and
+ * `allowedIps`), a map sent by mistake created a key with no restriction at all.
+ *
+ * A JSON array keeps the converted value class-transformer built, element types and all, so it reads
+ * exactly as before. Anything else is kept as the caller sent it, so `@IsArray()` refuses it.
+ */
+export function coerceStrictArray({ value, obj, key }: Pick<TransformFnParams, 'value' | 'obj' | 'key'>): unknown {
+  const raw = (obj as Record<string, unknown> | undefined)?.[key];
+  return Array.isArray(raw) ? value : raw;
+}
+
+/** Property decorator form of {@link coerceStrictArray}. Pair it with `@IsArray()`. */
+export const ToStrictArray = (): PropertyDecorator => Transform(coerceStrictArray);

@@ -10,7 +10,7 @@ import {
   IsBoolean,
   Validate,
 } from 'class-validator';
-import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import { CHAT_ID_MAX_LENGTH, MENTIONS_DESCRIPTION, MENTIONS_MAX, MENTION_WID_MAX_LENGTH } from './send-message.dto';
 import { IsMentionWidConstraint } from './is-mention-wid.validator';
 
@@ -65,6 +65,7 @@ export class SendTemplateMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })

@@ -2,7 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsObject, IsString, IsUrl } from 'class-validator';
 import type { PluginConfigSchema, PluginI18n } from '../../../core/plugins';
 import { PluginType, PluginStatus } from '../../../core/plugins';
-import { ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class PluginDto {
   @ApiProperty({ description: 'Plugin ID' })
@@ -78,6 +78,7 @@ export class PluginSessionsDto {
     example: ['*'],
     type: [String],
   })
+  @ToStrictArray()
   @IsArray()
   @IsString({ each: true })
   sessions!: string[];

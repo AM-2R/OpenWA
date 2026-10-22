@@ -13,7 +13,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsMentionWidConstraint } from './is-mention-wid.validator';
-import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../media-cap.util';
 
@@ -140,6 +140,7 @@ export class SendTextMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })
@@ -284,6 +285,7 @@ export class SendMediaMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })

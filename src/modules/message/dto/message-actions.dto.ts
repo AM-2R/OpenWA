@@ -13,7 +13,7 @@ import {
   IsIn,
   Validate,
 } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import {
   CHAT_ID_MAX_LENGTH,
   MENTIONS_DESCRIPTION,
@@ -134,6 +134,7 @@ export class SendPollDto {
     items: { type: 'string', maxLength: 100 },
     example: ['Park', 'Beach', 'Downtown'],
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayMinSize(2)
   @ArrayMaxSize(12)
@@ -189,6 +190,7 @@ export class ReplyMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })
@@ -328,6 +330,7 @@ export class VotePollDto {
     type: [String],
     maxItems: POLL_VOTE_MAX_OPTIONS,
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(POLL_VOTE_MAX_OPTIONS)
   @IsString({ each: true })
@@ -443,6 +446,7 @@ export class EditMessageDto {
     items: { type: 'string', maxLength: MENTION_WID_MAX_LENGTH },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })

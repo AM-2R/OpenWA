@@ -1,9 +1,9 @@
 import 'reflect-metadata';
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Type } from 'class-transformer';
 import { validate } from 'class-validator';
 import { IsBoolean, ValidateIf } from 'class-validator';
-import { IsInt, IsString } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber, ToStrictString } from './strict-boolean';
+import { IsArray, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { ToStrictArray, ToStrictBoolean, ToStrictNumber, ToStrictString } from './strict-boolean';
 
 // Mirrors the real pipe: whitelist + forbidNonWhitelisted from src/main.ts, and the
 // enableImplicitConversion transform option from src/config/app-validation.ts. Leaving the
@@ -188,6 +188,95 @@ describe('ToStrictString', () => {
     ] as const) {
       const { instance, errors } = await run(UnguardedString, { text: value });
       expect(instance.text).toBe(expected);
+      expect(errors).toHaveLength(0);
+    }
+  });
+});
+
+class Item {
+  @IsString()
+  name!: string;
+}
+
+class ArraySubject {
+  @ToStrictArray()
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  list?: string[];
+
+  @ToStrictArray()
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => Item)
+  items?: Item[];
+}
+
+class UnguardedArray {
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  list?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => Item)
+  items?: Item[];
+}
+
+describe('ToStrictArray', () => {
+  // A JSON array behaves exactly as it does without the decorator: same converted value, same verdict.
+  it.each([
+    [{ list: [] }],
+    [{ list: ['a'] }],
+    [{ list: ['a', 'b'] }],
+    [{ list: [1, 2] }],
+    [{ list: [{ a: 1 }] }],
+    [{ items: [] }],
+    [{ items: [{ name: 'x' }] }],
+    [{ items: [{ name: 5 }, { other: true }] }],
+  ])('reads %j as the unguarded pipe does', async payload => {
+    const guarded = await run(ArraySubject, payload);
+    const unguarded = await run(UnguardedArray, payload);
+    expect(guarded.instance).toEqual(unguarded.instance);
+    expect(guarded.errors.map(e => e.property)).toEqual(unguarded.errors.map(e => e.property));
+  });
+
+  it('still builds the elements of a nested list', async () => {
+    const { instance, errors } = await run(ArraySubject, { items: [{ name: 'x' }] });
+    expect(errors).toHaveLength(0);
+    expect(instance.items?.[0]).toBeInstanceOf(Item);
+  });
+
+  it.each([[{}], [{ a: 1 }], [{ '628111@c.us': true }], ['abc'], [5], [true]])(
+    'rejects %j instead of storing an empty list',
+    async value => {
+      const { instance, errors } = await run(ArraySubject, { list: value });
+      expect(instance.list).toEqual(value);
+      expect(Array.isArray(instance.list)).toBe(false);
+      expect(errors.map(e => e.property)).toEqual(['list']);
+    },
+  );
+
+  it('leaves an absent property absent and a null one null', async () => {
+    const absent = await run(ArraySubject, {});
+    expect(absent.instance.list).toBeUndefined();
+    expect(absent.errors).toHaveLength(0);
+
+    const nulled = await run(ArraySubject, { list: null });
+    expect(nulled.instance.list).toBeNull();
+    expect(nulled.errors).toHaveLength(0);
+  });
+
+  // The behaviour the decorator exists to prevent: an object becoming an empty list, which an access
+  // restriction read as "no restriction".
+  it('documents the unguarded behaviour it replaces: an object becomes an empty list', async () => {
+    for (const value of [{}, { a: 1 }, { '628111@c.us': true }]) {
+      const { instance, errors } = await run(UnguardedArray, { list: value });
+      expect(Array.isArray(instance.list)).toBe(true);
+      expect(instance.list).toHaveLength(0);
       expect(errors).toHaveLength(0);
     }
   });

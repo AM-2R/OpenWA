@@ -14,7 +14,7 @@ import {
   Matches,
   ValidateIf,
 } from 'class-validator';
-import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import type { GroupMemberAddMode } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { IsMediaUrl } from '../../../common/media/media-url';
 import { stripBase64DataUri } from '../../message/media-cap.util';
@@ -46,6 +46,7 @@ export class CreateGroupDto {
     type: [String],
     maxItems: GROUP_PARTICIPANTS_MAX,
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayNotEmpty()
   @ArrayMaxSize(GROUP_PARTICIPANTS_MAX)
@@ -59,6 +60,7 @@ export class ParticipantsDto {
     type: [String],
     maxItems: GROUP_PARTICIPANTS_MAX,
   })
+  @ToStrictArray()
   @IsArray()
   @ArrayNotEmpty()
   @ArrayMaxSize(GROUP_PARTICIPANTS_MAX)
@@ -79,6 +81,7 @@ export class MembershipRequestActionDto {
     maxItems: GROUP_PARTICIPANTS_MAX,
   })
   @ValidateIf(o => (o as MembershipRequestActionDto).participants !== undefined)
+  @ToStrictArray()
   @IsArray()
   @ArrayNotEmpty()
   @ArrayMaxSize(GROUP_PARTICIPANTS_MAX)
