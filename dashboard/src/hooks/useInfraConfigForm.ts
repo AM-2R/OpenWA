@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { InfraStatus, SavedConfig, SaveConfigPayload } from '../services/api';
+import { namesBundledContainer } from '../utils/bundledHost';
 
 export interface DatabaseConfig {
   type: 'sqlite' | 'postgres';
@@ -140,6 +141,7 @@ export function useInfraConfigForm(
   // Whether the operator has edited the database card, the storage card or the Redis switch here. Until then a
   // selection the environment pins is the pin, not a choice, and a save leaves it out (see buildSavePayload).
   const dbTouched = useRef(false);
+  const redisTouched = useRef(false);
   const storageTouched = useRef(false);
   const redisEnabledTouched = useRef(false);
   // Whether the operator has used each Use Built-in toggle here; beside a pinned host an unused one is left out.
@@ -226,6 +228,7 @@ export function useInfraConfigForm(
     setDbConfig(prev => ({ ...prev, [key]: value }));
   };
   const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) => {
+    redisTouched.current = true;
     if (key === 'builtIn') redisBuiltInTouched.current = true;
     setRedisConfig(prev => ({ ...prev, [key]: value }));
   };
@@ -256,9 +259,13 @@ export function useInfraConfigForm(
   // the engine pin below. A pinned host decides the built-in mode the same way, and a flag of true sent beside it
   // writes the bundled credentials over stored ones the pinned host may still need, so an unused toggle there is
   // left out too and the gateway keeps the stored flag, unless the form changes the selection the flag belongs to:
-  // the stored flag is the one of the selection being left then (the first boot writes it false beside SQLite).
+  // the stored flag is the one of the selection being left then (the first boot writes it false beside SQLite). Beside
+  // a host pinned elsewhere the card shows the external server the next boot dials, so an edit in the card belongs to
+  // that server and sends the flag the card shows; left out, the gateway would apply a stored built-in mode instead.
   const pinnedSeed = (key: string, touched: { current: boolean }) =>
     !touched.current && !!infraStatus?.envPinned?.includes(key);
+  const editedAway = (profile: string, pinnedHost: string | undefined, touched: { current: boolean }) =>
+    touched.current && !namesBundledContainer(profile, pinnedHost);
 
   const buildSavePayload = (): SaveConfigPayload => ({
     // A bundled container never receives a typed password (the field is hidden once built-in is on,
@@ -268,7 +275,9 @@ export function useInfraConfigForm(
       ...dbConfig,
       type: pinnedSeed('DATABASE_TYPE', dbTouched) ? undefined : dbConfig.type,
       builtIn:
-        pinnedSeed('DATABASE_HOST', dbBuiltInTouched) && dbConfig.type === savedConfig?.database.type
+        pinnedSeed('DATABASE_HOST', dbBuiltInTouched) &&
+        dbConfig.type === savedConfig?.database.type &&
+        !editedAway('postgres', savedConfig?.database.host, dbTouched)
           ? undefined
           : dbConfig.builtIn,
       password: dbConfig.builtIn ? '' : dbConfig.password,
@@ -279,7 +288,9 @@ export function useInfraConfigForm(
     redis: {
       enabled: pinnedSeed('REDIS_ENABLED', redisEnabledTouched) ? undefined : redisEnabled,
       builtIn:
-        pinnedSeed('REDIS_HOST', redisBuiltInTouched) && redisEnabled === savedConfig?.redis.enabled
+        pinnedSeed('REDIS_HOST', redisBuiltInTouched) &&
+        redisEnabled === savedConfig?.redis.enabled &&
+        !editedAway('redis', savedConfig?.redis.host, redisTouched)
           ? undefined
           : redisConfig.builtIn,
       host: redisConfig.host,
@@ -291,7 +302,9 @@ export function useInfraConfigForm(
       ...storageConfig,
       type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
       builtIn:
-        pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) && storageConfig.type === savedConfig?.storage.type
+        pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) &&
+        storageConfig.type === savedConfig?.storage.type &&
+        !editedAway('minio', savedConfig?.storage.s3Endpoint, storageTouched)
           ? undefined
           : storageConfig.builtIn,
     },

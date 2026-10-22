@@ -1027,6 +1027,55 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       }
     });
 
+    // What the page sends after an edit in the database card beside a host pinned to another server, over a stored
+    // built-in database: the flag the card shows (false) and the typed fields, which are written as that server's.
+    describe('an edited external card beside a host pinned elsewhere over a stored built-in database', () => {
+      const STORED_BUILTIN =
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PORT=5432\n' +
+        'DATABASE_USERNAME=openwa\nDATABASE_PASSWORD=openwa\nDATABASE_NAME=openwa\nPOSTGRES_SCHEMA=public\n';
+      const EDITED = {
+        database: {
+          type: 'postgres' as const,
+          builtIn: false,
+          host: 'db.ext.example',
+          port: '6543',
+          username: 'app',
+          password: '',
+          database: 'appdb',
+          schema: 'tenant',
+        },
+      };
+
+      it('writes the typed fields and resets the flag when the pinned password passes the guard', () => {
+        pin({ DATABASE_HOST: 'db.ext.example', DATABASE_PASSWORD: 'PinnedPw456!' });
+        const controller = newController();
+        (fs.existsSync as jest.Mock).mockReturnValue(true);
+        (fs.readFileSync as jest.Mock).mockReturnValue(STORED_BUILTIN);
+        (fs.writeFileSync as jest.Mock).mockClear();
+
+        const { profiles } = controller.saveConfig(EDITED);
+        const env = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
+
+        for (const line of [
+          'POSTGRES_BUILTIN=false',
+          'DATABASE_HOST=db.ext.example',
+          'DATABASE_PORT=6543',
+          'DATABASE_USERNAME=app',
+          'DATABASE_NAME=appdb',
+          'POSTGRES_SCHEMA=tenant',
+        ]) {
+          expect(env).toContain(line);
+        }
+        expect(profiles).toEqual([]);
+      });
+
+      it('is refused while the external server would boot with no password', () => {
+        pin({ DATABASE_HOST: 'db.ext.example' });
+
+        expect(() => written(EDITED, STORED_BUILTIN)).toThrow(/DATABASE_PASSWORD/);
+      });
+    });
+
     it('still writes a type that is sent', () => {
       pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
 

@@ -395,8 +395,16 @@ test('a built-in flag beside a pinned host is left out of a save until its toggl
   assert.deepEqual([touched.database?.builtIn, touched.redis?.builtIn, touched.storage?.builtIn], [true, true, true]);
 });
 
-test('another edit in the card keeps a built-in flag beside a pinned host out', () => {
-  const { result } = renderForm({ status: PINNED_HOSTS, saved: SAVED });
+// The hosts pinned to the bundled containers, in some of the spellings that reach them.
+const SAVED_PINNED_BUNDLED: SavedConfig = {
+  ...SAVED,
+  database: { ...SAVED.database, builtIn: true, builtInSet: false, host: 'openwa-postgres' },
+  redis: { ...SAVED.redis, builtIn: true, builtInSet: false, host: 'REDIS' },
+  storage: { ...SAVED.storage, builtIn: true, builtInSet: false, s3Endpoint: 'http://minio:9000/' },
+};
+
+test('another edit in the card keeps a built-in flag beside a host pinned to the bundled container out', () => {
+  const { result } = renderForm({ status: PINNED_HOSTS, saved: SAVED_PINNED_BUNDLED });
 
   rtl.act(() => {
     result.current.updateDbConfig('sslEnabled', false);
@@ -406,6 +414,27 @@ test('another edit in the card keeps a built-in flag beside a pinned host out', 
   const { database, redis, storage } = result.current.buildSavePayload();
 
   assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [undefined, undefined, undefined]);
+});
+
+// Beside a host pinned to another server the card shows that server, and its fields are what an edit changes: the
+// flag the card shows goes with them, so the gateway applies them instead of a stored built-in mode. Untouched, the
+// flag stays out and the stored mode is kept.
+test('an edit in the card beside a host pinned elsewhere sends the flag the card shows', () => {
+  const { result } = renderForm({ status: PINNED_HOSTS, saved: SAVED });
+
+  const untouched = result.current.buildSavePayload();
+  assert.deepEqual(
+    [untouched.database?.builtIn, untouched.redis?.builtIn, untouched.storage?.builtIn],
+    [undefined, undefined, undefined],
+  );
+  rtl.act(() => {
+    result.current.updateDbConfig('username', 'app');
+    result.current.updateRedisConfig('port', '6390');
+    result.current.updateStorageConfig('s3Bucket', 'media-2');
+  });
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [false, false, false]);
 });
 
 // Choosing the service in the form is a new selection, and its built-in mode is part of it: the stored flag belongs to

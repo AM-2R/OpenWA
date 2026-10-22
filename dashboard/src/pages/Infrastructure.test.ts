@@ -2263,6 +2263,40 @@ for (let round = 0; round < spellingRounds; round++) {
   });
 }
 
+// The database card beside DATABASE_HOST pinned to an external server, over a stored built-in database: the card shows
+// that server, and the typed user and database name are its own. The save sends the flag the card shows with them, so
+// the gateway writes them instead of the stored bundled values, and the new database name is the switch warned of.
+test('typed external fields beside a host pinned elsewhere are sent with the flag the card shows', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      database: { connected: true, type: 'postgres', host: 'db.ext.example', builtIn: false, running: true },
+      envPinned: ['DATABASE_HOST'],
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, builtIn: false, builtInSet: false, host: 'db.ext.example' },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, false);
+  fireEvent.change(fieldInput(container, 'Username'), { target: { value: 'app' } });
+  fireEvent.change(fieldInput(container, 'Database Name'), { target: { value: 'appdb' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database?: { builtIn?: boolean; username?: string; database?: string };
+  };
+  assert.deepEqual([body.database?.builtIn, body.database?.username, body.database?.database], [false, 'app', 'appdb']);
+  rtl.within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
+});
+
 // ── Restart-flow timer cleanup on unmount ────────────────────────────────────
 
 test('unmounting mid-restart cancels the health poll and countdown timers', { timeout: 10_000 }, async () => {
