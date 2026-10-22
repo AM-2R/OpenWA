@@ -412,6 +412,50 @@ describe('edited marker for a message whose row is not written yet', () => {
     );
   });
 
+  // The message.edited of a message without a row reaches consumers before the message itself, so the
+  // announcement of the message says what its row is stored with.
+  it('announces each message with the edited mark its row is stored with, and no mark on the others', async () => {
+    const insert = deferred<void>();
+    const ids = ['A', 'R', 'V', 'N', 'T', 'S', 'D'];
+    for (const id of ids) stalled.set(id, insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    projector.handleInboundMessage('s1', engine, incoming('R'));
+    projector.handleInboundMessage('s1', engine, incoming('V'));
+    projector.handleInboundMessage('s1', engine, incoming('N'));
+    projector.handleInboundMessage('s1', engine, incoming('T', { body: 'fixed', originalBody: 'original' }));
+    projector.handleOwnSendEcho('s1', engine, incoming('S', { fromMe: true, body: 'sent' }));
+    projector.handleInboundMessage('s1', engine, incoming('D'));
+    await flush();
+
+    projector.applyMessageEditQueued('s1', editOf('A', 'edited'));
+    projector.applyMessageEditQueued('s1', editOf('R', 'original'));
+    projector.applyMessageEditQueued('s1', editOf('V', 'v1'));
+    projector.applyMessageEditQueued('s1', editOf('V', 'original'));
+    projector.applyMessageEditQueued('s1', editOf('T', 'fixed'));
+    await projector.recordOutboundMessageEdit('s1', 'S', 'sent', { kind: 'edit', chatId: CHAT, fromMe: true });
+    projector.applyMessageEditQueued('s1', editOf('D', 'edited'));
+    await projector.recordRevoke('s1', 'D');
+    insert.resolve();
+    await flush();
+
+    const marked: string[] = [];
+    for (const id of ids) {
+      const row = await stored(id);
+      const payloads = announced
+        .filter(a => /^(message\.(received|sent)|socket emitMessage(Sent)?)$/.test(a.event) && a.payload.id === id)
+        .map(a => a.payload);
+      // The webhook and the socket.
+      expect(payloads).toHaveLength(2);
+      for (const payload of payloads) {
+        expect(payload.body).toBe(row.body);
+        if (row.metadata?.edited) expect(payload.edited).toBe(true);
+        else expect(payload).not.toHaveProperty('edited');
+      }
+      if (row.metadata?.edited) marked.push(id);
+    }
+    expect(marked).toEqual(['A', 'V', 'T', 'S']);
+  });
+
   it('leaves a message nobody edited unmarked', async () => {
     const insert = deferred<void>();
     stalled.set('A', insert.promise);

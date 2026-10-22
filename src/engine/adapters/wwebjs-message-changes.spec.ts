@@ -269,7 +269,7 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
     expect(hooked).toEqual(['fixed']);
-    expect(events('message.received').map(m => m.body)).toEqual(['fixed']);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
     expect(events('message.edited').map(m => m.body)).toEqual(['fixed']);
   });
 
@@ -290,7 +290,7 @@ describe.each([
       }),
     ]);
     expect(hooked).toEqual(['new cap']);
-    expect(events('message.received').map(m => m.body)).toEqual(['new cap']);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'new cap', edited: true })]);
   });
 
   it('keeps the caption of a message whose thumbnail changed during the media download, and announces no edit', async () => {
@@ -459,7 +459,7 @@ describe.each([
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', body: 'sent again' })]);
     expect((rows[0].metadata as Row).edited).toBe(true);
     expect(hooked).toEqual(['sent again']);
-    expect(events('message.sent').map(m => m.body)).toEqual(['sent again']);
+    expect(events('message.sent')).toEqual([expect.objectContaining({ body: 'sent again', edited: true })]);
   });
 
   // An edit that repeats the text the message carries changes nothing: it is announced, and leaves no mark.
@@ -476,6 +476,8 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'same' })]);
     expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
+    expect(events('message.received')).toHaveLength(1);
+    expect(events('message.received')[0]).not.toHaveProperty('edited');
   });
 
   // The hook of message:received can run for a while, and the row is written when it returns.
@@ -492,6 +494,8 @@ describe.each([
     expect(events('message.edited')).toHaveLength(1);
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'same' })]);
     expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
+    expect(events('message.received')).toHaveLength(1);
+    expect(events('message.received')[0]).not.toHaveProperty('edited');
   });
 
   it('stores an edit that changes the text while the hook runs, marked edited', async () => {
@@ -505,6 +509,7 @@ describe.each([
     await flush();
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
   });
 });
 

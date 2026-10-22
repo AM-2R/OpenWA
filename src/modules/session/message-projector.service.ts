@@ -1017,10 +1017,14 @@ export class MessageProjector {
    * null once the engine revoked it (message.revoked already went out, so the deleted content is not
    * announced after it), the revoked placeholder when only the REST delete did (a delete-for-me emits no
    * engine revoke, and the message still exists for its sender), the edited body when edited
-   * (message.edited already went out with it). The stored row takes the same changes in
+   * (message.edited already went out with it), plus `edited: true` when the row is marked for it: a consumer
+   * that held no copy of the message could not apply that event. The stored row takes the same changes in
    * {@link applyChangesMadeInFlight}.
    */
-  private withChangesMadeInFlight(id: string, message: InboundMessageData): InboundMessageData | null {
+  private withChangesMadeInFlight(
+    id: string,
+    message: InboundMessageData,
+  ): (InboundMessageData & { edited?: true }) | null {
     const pending = this.inboundInFlight.get(`${id}:${message.id}`);
     if (pending?.revokeAnnounced) return null;
     if (pending?.revoked) {
@@ -1030,7 +1034,8 @@ export class MessageProjector {
         message;
       return { ...kept, body: '', type: 'revoked' };
     }
-    return pending?.editedBody === undefined ? message : { ...message, body: pending.editedBody };
+    if (pending?.editedBody === undefined) return message;
+    return { ...message, body: pending.editedBody, ...(pending.edited ? { edited: true as const } : {}) };
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */

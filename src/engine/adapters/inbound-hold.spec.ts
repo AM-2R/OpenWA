@@ -1268,7 +1268,7 @@ describe('Baileys inbound messages held for storage', () => {
     it.each([
       ['an edit', 'fixed caption', true],
       ['an edit that repeats the text', 'caption', undefined],
-    ])('marks the row edited for %s only if it changed the text', async (_, body, edited) => {
+    ])('marks the row and the message edited for %s only if it changed the text', async (_, body, edited) => {
       const h = heldProjector({ unique: true, sqlite });
       const { events } = build(4, h.callbacks);
       const release = download();
@@ -1282,6 +1282,10 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body })]);
       expect((h.rows[0].metadata as Row).edited).toBe(edited);
       expect(h.announcedAs('message.edited')).toEqual([expect.objectContaining({ messageId: 'M', body })]);
+      const received = h.announcedAs('message.received');
+      expect(received).toEqual([expect.objectContaining({ id: 'M', body })]);
+      if (edited) expect(received[0]).toEqual(expect.objectContaining({ edited: true }));
+      else expect(received[0]).not.toHaveProperty('edited');
     });
 
     it(

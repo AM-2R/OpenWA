@@ -289,6 +289,9 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(rows).toEqual([expect.objectContaining({ body: 'original', metadata: undefined })]);
     expect(persistedHooks()[0]).toEqual(expect.objectContaining({ body: 'original', metadata: undefined }));
     expect(eventsGateway.emitMessageEdited).toHaveBeenCalledTimes(1);
+    expect(eventsGateway.emitMessage).toHaveBeenCalledTimes(1);
+    const [[, announced]] = eventsGateway.emitMessage.mock.calls as Array<[string, Record<string, unknown>]>;
+    expect(announced).not.toHaveProperty('edited');
   });
 
   it('marks an edit that restores the text after another one, before the emit', async () => {
@@ -316,6 +319,15 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } }),
       expect.objectContaining({ waMessageId: 'B', body: 'original', metadata: undefined }),
     ]);
+    // The webhook and the socket are told alike.
+    const received = (webhookService.dispatch.mock.calls as Array<[string, string, Record<string, unknown>]>)
+      .filter(([, event]) => event === 'message.received')
+      .map(([, , payload]) => payload);
+    expect(received).toEqual([expect.objectContaining({ id: 'A', body: 'fixed', edited: true }), expect.anything()]);
+    expect(received[1]).toEqual(expect.objectContaining({ id: 'B', body: 'original' }));
+    expect(received[1]).not.toHaveProperty('edited');
+    const emitted = eventsGateway.emitMessage.mock.calls as Array<[string, Record<string, unknown>]>;
+    expect(emitted.map(([, payload]) => payload)).toEqual(received);
   });
 
   it('marks a message edited while its insert is out, where nothing holds the arrival (SQLite)', async () => {
