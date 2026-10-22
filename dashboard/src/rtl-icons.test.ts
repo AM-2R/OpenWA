@@ -72,7 +72,7 @@ test('lucide renders the class names the mirror rule selects', () => {
 
 test('every directional icon the app imports is mirrored under right-to-left', () => {
   const used = [...new Set(tsxFiles(SRC).flatMap(importedDirectional))];
-  assert.ok(used.includes('ArrowLeft') && used.includes('Send'), 'the sweep no longer finds the icons in use');
+  assert.ok(used.includes('ArrowLeft') && used.includes('Send'), 'the scan no longer finds the icons in use');
   assert.deepEqual(
     used.filter(name => !mirrored.has(kebab(name))),
     [],

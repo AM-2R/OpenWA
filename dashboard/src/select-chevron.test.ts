@@ -64,7 +64,7 @@ function targetsSelect(selector: string, classes: Set<string>): boolean {
 
 test('no rule that styles a select sets the background shorthand', () => {
   const classes = selectClasses();
-  assert.ok(classes.has('session-selector'), 'the sweep no longer finds the select classes');
+  assert.ok(classes.has('session-selector'), 'the scan no longer finds the select classes');
   const offenders: string[] = [];
   for (const full of filesUnder(SRC, '.css')) {
     const css = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
