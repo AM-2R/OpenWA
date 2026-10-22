@@ -53,8 +53,9 @@
   width: 100%;
 }
 
-/* Wide enough, with the padding above, for the longest field and operator label in every shipped locale
-   except the two or three over-long ones, which end in an ellipsis; the open list shows them whole. */
+/* From 601px wide enough, with the padding above, for the longest field and operator label in every shipped
+   locale except the two or three over-long ones, which end in an ellipsis; the open list shows them whole. The
+   phone rule below replaces these bases. */
 .filter-field {
   flex: 0 0 10.75rem;
 }
@@ -116,9 +117,10 @@
   }
 }
 
-/* At 320px the two selects share a row with 89px of text each, which cuts even "Message body"; the field takes
-   the first row and the operator the second. */
-@media (max-width: 340px) {
+/* Up to 420px two selects side by side leave the field 100px of text at 341px and 109px at 360px, which cuts
+   "Message body" in German, French, Italian, Spanish and Portuguese; the field takes the first row and the
+   operator the second. From 421px the share is 139px and holds every label the desktop bases hold. */
+@media (max-width: 420px) {
   .filter-field {
     flex-basis: 100%;
   }
