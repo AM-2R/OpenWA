@@ -975,7 +975,7 @@ export function Chats() {
       void reloadChatsInBackground(selectedSessionId).then(applied => {
         if (!applied || !readChatId || activeChatIdRef.current !== readChatId) return;
         markChatRead(readChatId);
-        setChats(prev => prev.map(c => (c.id === readChatId ? { ...c, unreadCount: 0 } : c)));
+        markRowRead(readChatId);
       });
     }
   }, [
@@ -987,6 +987,7 @@ export function Chats() {
     activeChatId,
     canWrite,
     markChatRead,
+    markRowRead,
   ]);
 
   // The threads cache at staleTime: Infinity, and this session's events were not delivered while

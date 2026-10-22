@@ -1015,6 +1015,53 @@ test('a reconnect whose refetch fails while the engine starts sends no mark-as-r
   );
 });
 
+test('a reload asked for before the reconnect zeroed the open row does not bring the gap count back', async () => {
+  const { screen, fireEvent, within, act, waitFor } = rtl;
+  const { container } = renderChats();
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  await new Promise(resolve => setTimeout(resolve, 1_000));
+  resetFetchCalls();
+
+  // Every snapshot counts Alice's gap messages, as the gateway does until it has processed the read.
+  const snapshot = [{ ...CHAT, unreadCount: 4, lastMessage: 'sent during the gap' }, CHAT_2];
+  const answers: Array<() => void> = [];
+  chatsResponder = () =>
+    new Promise<Response>(resolve => {
+      answers.push(() => resolve(jsonResponse(snapshot)));
+    });
+  const edit = () =>
+    receiveEvent('message.edited', {
+      messageId: 'wamid.carol.1',
+      chatId: CHAT_2.id,
+      body: 'edited',
+      timestamp: 1_700_003_000,
+    });
+  edit();
+  await waitFor(() => assert.equal(answers.length, 1));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+  await flush();
+  answers[0]();
+  await screen.findByText('sent during the gap');
+  await waitFor(() => assert.equal(answers.length, 2), { timeout: 3_000 }); // the reconnect's own reload is out
+
+  // Another event asks for a list while it is out; that one starts the moment the reconnect's lands.
+  edit();
+  answers[1]();
+  // The row is zeroed with the reload, well before the read it sends is due.
+  await flush();
+  await flush();
+  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the open chat was badged');
+  await waitFor(() => assert.equal(answers.length, 3), { timeout: 3_000 });
+  answers[2]();
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.ok(!screen.queryByLabelText('4 unread messages'), 'the gap count came back on the open chat');
+});
+
 test('a reconnect refetch that settles after the open chat was left keeps its unread count', async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
   const { container } = renderChats();
