@@ -197,7 +197,10 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
       for (let index = 0; index < length; index++) if (index in list) plain[index] = copy(list[index]);
       return plain;
     }
-    const source = writtenForm(node, form, isSecretKey, marker) as Record<string, unknown>;
+    // A plain object, by far the most common, is its own form: the call is left out, as it costs an ordinary line.
+    const source = (
+      form === undefined && !ArrayBuffer.isView(node) ? node : writtenForm(node, form, isSecretKey, marker)
+    ) as Record<string, unknown>;
     const keys = Object.keys(source);
     if (keys.length > left) {
       // Listed once, then charged: another reference to this object, or any other node, is refused without listing.
