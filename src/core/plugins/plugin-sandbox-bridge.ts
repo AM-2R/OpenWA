@@ -579,8 +579,8 @@ export class PluginSandboxBridge {
       }
       // Like the level below, the message and meta come off the wire unchecked: a non-string message is replaced by
       // a fixed marker (turning an array into text would write a shared reference out at every use), and a meta
-      // whose JSON form exceeds the same cap is replaced by a size marker (not a truncated string, which would hide
-      // its keys from the logger's secret redaction).
+      // whose text, as the logger writes it (metaText), exceeds the same cap is replaced by a size marker (not a
+      // truncated string, which would hide its keys from the logger's secret redaction).
       // logger.error's reason travels as a string meta.error, so that one key survives the replacement.
       const truncate = (value: string): string =>
         value.length > SANDBOX_LOG_MAX_MESSAGE_LENGTH
@@ -592,8 +592,7 @@ export class PluginSandboxBridge {
         const reason = typeof meta?.error === 'string' ? { error: truncate(meta.error) } : undefined;
         // A count past the size limit (values, string characters and property name characters) marks a meta that is
         // replaced without being written out. The text is only built, to learn its length, for a meta under the
-        // limit: building it for any other could take seconds (a shared reference is written out at every use) or
-        // exhaust the heap (a typed array lists a key per element).
+        // limit: building it for any other could take seconds, as a shared reference is written out at every use.
         if (countMetaValues(meta, SANDBOX_LOG_MAX_MESSAGE_LENGTH) > SANDBOX_LOG_MAX_MESSAGE_LENGTH) {
           boundedMeta = { ...reason, metaTruncated: true };
         } else {
@@ -602,7 +601,7 @@ export class PluginSandboxBridge {
             if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH)
               boundedMeta = { ...reason, metaTruncated: true, metaLength };
           } catch {
-            boundedMeta = reason; // not serializable (circular or BigInt), so it cannot be logged as JSON anyway
+            boundedMeta = reason; // circular, or holding a BigInt, whose text is not built on the host
           }
         }
       }
