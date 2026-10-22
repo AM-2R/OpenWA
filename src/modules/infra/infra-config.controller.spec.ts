@@ -2031,6 +2031,33 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
       }
     });
 
+    // The bundled container answers to its network alias and its container name, in any letter case and as an
+    // absolute DNS name with a trailing dot, so a host spelled any of these ways still reaches it.
+    const SPELLINGS: Record<ServiceName, { reach: string[]; elsewhere: string[] }> = {
+      database: {
+        reach: ['Postgres', 'postgres.', 'openwa-postgres', ' OPENWA-POSTGRES. '],
+        elsewhere: ['localhost', 'postgres-replica', 'postgres.example.com', 'openwa-postgres-2'],
+      },
+      redis: { reach: ['REDIS', 'redis.', 'openwa-redis'], elsewhere: ['localhost', 'redis-master', 'myredis'] },
+      storage: {
+        reach: ['http://MINIO:9000', 'http://minio:9000/', 'http://openwa-minio:9000', 'https://minio.:9000'],
+        elsewhere: ['http://localhost:9000', 'http://minio.example.com:9000', 'minio:9000', 'not a url'],
+      },
+    };
+    describe.each(SERVICE_NAMES)('%s under another spelling of the bundled host', service => {
+      for (const host of SPELLINGS[service].reach) {
+        it(`keeps it under ${JSON.stringify(host)}, in the file or pinned`, async () => {
+          expect((await stoppedFor(service, host, undefined)).stopped).toBe(false);
+          expect((await stoppedFor(service, SERVICES[service].externalHost, host)).stopped).toBe(false);
+        });
+      }
+      for (const host of SPELLINGS[service].elsewhere) {
+        it(`still stops it under ${JSON.stringify(host)}`, async () => {
+          expect((await stoppedFor(service, host, undefined)).stopped).toBe(true);
+        });
+      }
+    });
+
     it('keeps the container when the flag is pinned off over a stored bundled host', async () => {
       process.env.REDIS_BUILTIN = 'false';
       pinnedKeys.push('REDIS_BUILTIN');

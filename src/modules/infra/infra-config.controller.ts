@@ -17,7 +17,13 @@ import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorat
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
-import { BUNDLED_SERVICE_ENV, DockerService, MANAGED_DOCKER_PROFILES, hostPinnedElsewhere } from '../docker';
+import {
+  BUNDLED_SERVICE_ENV,
+  DockerService,
+  MANAGED_DOCKER_PROFILES,
+  hostPinnedElsewhere,
+  namesBundledContainer,
+} from '../docker';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
 import { AuditService } from '../audit/audit.service';
@@ -444,14 +450,14 @@ export class InfraConfigController {
     // app would point at a stopped container and fail to boot, with the dashboard that could undo it. The
     // host it dials is the one the environment pins (e.g. the documented manual built-in Postgres with
     // DATABASE_HOST=postgres in .env, which outranks the saved config), else the one in the saved file,
-    // which already holds the save that precedes this restart. A host moved away from the bundled name
-    // still stops its container.
+    // which already holds the save that precedes this restart. Any spelling that reaches the container counts (the
+    // container name, another letter case). A host moved away from the bundled name still stops its container.
     let saved: Record<string, string> | undefined;
     const dialsBundled = (profile: string): boolean => {
       const bundled = BUNDLED_SERVICE_ENV[profile];
       if (!bundled) return false;
-      const [key, value] = bundled;
-      return (isEnvPinned(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key]) === value;
+      const [key] = bundled;
+      return namesBundledContainer(profile, isEnvPinned(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key]);
     };
     const requestedRemoval = body?.profilesToRemove || [];
     const keptRunning = requestedRemoval.filter(dialsBundled);

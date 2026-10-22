@@ -28,6 +28,25 @@ export const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
 };
 
 /**
+ * Whether a host (for minio, the host of an S3 endpoint) reaches the profile's bundled container: its network alias
+ * (the profile name) or its container name, in any letter case and with or without the trailing dot of an absolute
+ * DNS name.
+ */
+export function namesBundledContainer(profile: string, value: string | undefined): boolean {
+  if (!BUNDLED_SERVICE_ENV[profile] || value === undefined) return false;
+  let host = value.trim();
+  if (profile === 'minio') {
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      return false;
+    }
+  }
+  host = host.toLowerCase().replace(/\.$/, '');
+  return host === profile || host === `openwa-${profile}`;
+}
+
+/**
  * Whether the environment (or the project .env) pins the profile's host to anything but its bundled container. The
  * pin outranks the saved file at every boot, so a container started for that profile would run with nothing using it.
  */
