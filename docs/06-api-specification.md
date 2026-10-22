@@ -634,7 +634,7 @@ whichever proxy they go through.
 
 Like every other session route, this returns the `SessionResponseDto` shape (via `fromEntity`), so `config`, `proxyUrl` and `proxyType` are stripped and `lastActiveAt` appears as `lastActive`. Newly created `status` is `created`. Masked proxy details come only from `GET /api/sessions/{sessionId}/proxy`.
 
-**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, or an extra non-whitelisted field) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists
+**Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, or an extra non-whitelisted field) · `401` · `403` key lacks OPERATOR role, `proxyUrl` set by a key below ADMIN, or the key is restricted to specific sessions · `409` session name already exists · `503` on SQLite, another database transaction stayed open for 10 s (nothing is stored; retry)
 
 #### POST /api/sessions/:sessionId/start
 

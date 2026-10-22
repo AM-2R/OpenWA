@@ -52,6 +52,7 @@ import { SessionOwnershipService } from './session-ownership.service';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { ListingMemo } from '../../common/utils/listing-memo';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
+import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
@@ -431,6 +432,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // The findOne pre-check above is a fast path for the common case, but it's a check-then-insert
     // TOCTOU: two concurrent same-name creates both pass it, then one hits the name UNIQUE constraint.
     // Translate that violation to a 409 (matching the pre-check) instead of leaking a raw 500.
+    // On SQLite every caller shares one connection: opened beside another caller's transaction, this one would be a
+    // savepoint in it or carry that one's writes, and either rollback could undo what the other had answered for.
+    if (!(await awaitNoOpenTransaction(this.dataSource))) {
+      throw new ServiceUnavailableException(
+        `Session '${dto.name}' was not created: another database transaction stayed open. Retry the create.`,
+      );
+    }
     let saved: Session;
     try {
       saved = await this.dataSource.transaction(async manager => {

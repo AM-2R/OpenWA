@@ -101,6 +101,10 @@ export class SessionController {
   })
   @ApiResponse({ status: 400, description: 'Validation failed, or the body carries a field the DTO does not declare.' })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
+  @ApiResponse({
+    status: 503,
+    description: 'On SQLite, another database transaction stayed open for 10 s; nothing was stored, so retry.',
+  })
   async create(@Body() dto: CreateSessionDto, @CurrentApiKey() apiKey?: ApiKey): Promise<SessionResponseDto> {
     // A session proxy carries the session's egress, including the gateway's fetches of caller-supplied
     // URLs, so choosing one is a deployment decision: ADMIN only, like PATCH :sessionId/proxy. The

@@ -848,4 +848,72 @@ describe('Session content lifetime', () => {
       },
     );
   });
+
+  // Both creates pass the name check, so one loses on the unique index. On SQLite, begun in the same turn of the
+  // event loop, the loser's transaction would be a savepoint in the winner's, or the reverse.
+  describe('two creates of one name begun in the same turn', () => {
+    let sessions: SessionService;
+
+    beforeEach(() => {
+      const attach = { attachTo: (session: Session) => session } as never;
+      const unused = {} as never;
+      sessions = new SessionService(
+        db.getRepository(Session),
+        unused,
+        db,
+        engines,
+        unused,
+        attach,
+        attach,
+        unused,
+        hooks,
+        unused,
+        unused,
+      );
+    });
+
+    // Over this range the second begins before, during and after the first one's transaction.
+    it('store one session and refuse the other', async () => {
+      for (let steps = 0; steps <= 40; steps += 1) {
+        const name = `twin-${steps}`;
+        const second = async () => {
+          for (let i = 0; i < steps; i += 1) await Promise.resolve();
+          return sessions.create({ name });
+        };
+        const outcomes = await Promise.all(
+          [sessions.create({ name }), second()].map(create =>
+            create.then(
+              () => 'created',
+              (error: unknown) => (error instanceof ConflictException ? 'refused' : String(error)),
+            ),
+          ),
+        );
+        const stored = await db.getRepository(Session).countBy({ name });
+        expect({ steps, outcomes: outcomes.sort(), stored }).toEqual({
+          steps,
+          outcomes: ['created', 'refused'],
+          stored: 1,
+        });
+      }
+    });
+
+    (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
+      'refuses with 503 and stores nothing when a transaction beside it stays open',
+      async () => {
+        const other = db.createQueryRunner();
+        await other.connect();
+        await other.startTransaction();
+        const start = Date.now();
+        let calls = 0;
+        const clock = jest.spyOn(Date, 'now').mockImplementation(() => start + FOREIGN_TRANSACTION_WAIT_MS * calls++);
+
+        await expect(sessions.create({ name: 'held' })).rejects.toThrow(ServiceUnavailableException);
+        clock.mockRestore();
+        await other.commitTransaction();
+        await other.release();
+
+        expect(await db.getRepository(Session).countBy({ name: 'held' })).toBe(0);
+      },
+    );
+  });
 });

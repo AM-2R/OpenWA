@@ -661,6 +661,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On SQLite, another database transaction stayed open for 10 s; nothing was stored, so retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Create a new WhatsApp session",
