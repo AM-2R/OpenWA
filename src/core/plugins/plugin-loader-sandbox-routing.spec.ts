@@ -686,17 +686,43 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     expect(relayed.length).toBe('[p1] '.length + 8192 + '…[truncated]'.length);
   });
 
-  it('bounds a non-string worker log message like a string one', async () => {
-    // Plugin code can post to parentPort directly, so the message is untrusted and may not be a string.
-    const loader = makeLoader();
-    seed(loader, { builtIn: false, instance: null });
-    await loader.enablePlugin('p1');
-    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+  describe('a non-string worker log message', () => {
+    // Plugin code can post to parentPort directly, so the message is untrusted and may not be a string. It is not
+    // turned into text, which for an array would write out every shared reference at every use.
+    const sharedArray = (levels: number): unknown[] => {
+      let node: unknown[] = [1];
+      for (let level = 0; level < levels; level++) node = new Array<unknown>(10).fill(node);
+      return node;
+    };
 
-    loader.capturedOnLog!('log', ['x'.repeat(6000), 'y'.repeat(6000)] as unknown as string);
+    it.each([
+      ['an array', ['x'.repeat(6000), 'y'.repeat(6000)]],
+      ['a number', 42],
+      ['an object', { text: 'x'.repeat(10000) }],
+      ['null', null],
+    ])('is relayed as a fixed marker when it is %s', async (_name, message) => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-    const relayed = logSpy.mock.calls[0][0] as string;
-    expect(relayed.length).toBe('[p1] '.length + 8192 + '…[truncated]'.length);
+      loader.capturedOnLog!('log', message as unknown as string);
+
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', { pluginId: 'p1' });
+    });
+
+    it('is relayed at once when it is an array whose levels share the same child', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', sharedArray(7) as unknown as string);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', { pluginId: 'p1' });
+    });
   });
 
   it('replaces an oversized worker log meta with a size marker instead of relaying it', async () => {
