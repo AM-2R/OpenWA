@@ -738,6 +738,19 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1, pluginId: 'p1' });
   });
 
+  it('relays a worker log meta that is a string or an array as one field', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+    loader.capturedOnLog!('log', 'string', 'abc' as unknown as Record<string, unknown>);
+    loader.capturedOnLog!('log', 'array', [1, 2] as unknown as Record<string, unknown>);
+
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] string', { meta: 'abc', pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] array', { meta: [1, 2], pluginId: 'p1' });
+  });
+
   it('keeps the error text of a worker error log whose meta is oversized or not serializable', async () => {
     // logger.error's reason travels as meta.error, and the host error call gets no trace argument.
     const loader = makeLoader();

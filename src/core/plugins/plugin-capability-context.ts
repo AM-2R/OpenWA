@@ -59,6 +59,14 @@ export function dispatchConversationMedia(
 /** The trace for a plugin's ctx.logger.error: an Error's message, or the text of whatever else was passed. */
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** A plugin's log meta as the fields of the line: a record as it is, nothing as no fields, anything else as one field. */
+const metaFields = (meta: unknown): Record<string, unknown> =>
+  meta === undefined || meta === null
+    ? {}
+    : typeof meta === 'object' && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>)
+      : { meta };
+
 /**
  * The capability surface a plugin actually touches: ctx.messages, ctx.engine, ctx.net, ctx.storage,
  * ctx.conversations, ctx.handover, ctx.mappings — and the gates in front of every one of them.
@@ -226,14 +234,14 @@ export class PluginCapabilityContext {
   private buildPluginLogger(plugin: PluginInstance): PluginLogger {
     return {
       log: (message, meta) =>
-        this.logger.log(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
+        this.logger.log(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
       debug: (message, meta) =>
-        this.logger.debug(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
+        this.logger.debug(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
       warn: (message, meta) =>
-        this.logger.warn(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
+        this.logger.warn(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
       error: (message, error, meta) =>
         this.logger.error(`[${plugin.manifest.id}] ${message}`, error === undefined ? undefined : errorText(error), {
-          ...meta,
+          ...metaFields(meta),
           pluginId: plugin.manifest.id,
         }),
     };
