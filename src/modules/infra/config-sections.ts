@@ -22,6 +22,11 @@ function setSecret(updates: Record<string, string>, key: string, value: string |
   if (value) updates[key] = value;
 }
 
+// The host the next boot dials before this save changes it: one the environment pins, else the stored one.
+function nextBootHost(key: string, existing: Record<string, string>): string | undefined {
+  return isEnvPinned(key) ? process.env[key] : existing[key];
+}
+
 // What the next boot's validation (env.validation.ts) reads from these keys, refused here instead: the saved
 // file is loaded at boot, and a value it rejects crash-loops the instance and the dashboard that could undo it.
 function portValue(label: string, value: string): string {
@@ -84,9 +89,14 @@ export function applyDatabaseSection(
       // dashboard ALWAYS sends builtIn, so keying the reset on "explicit builtIn:true" reset a
       // re-keyed container on every save from the Infrastructure page.
       // What decides it is whether the stored password belongs to this same bundled container:
-      // it does when the previous mode was already built-in. Coming from external, the stored
-      // value is the external DB's credential and must not be carried into the container.
-      const storedPassword = existing.POSTGRES_BUILTIN === 'true' ? existing.DATABASE_PASSWORD : undefined;
+      // it does when the previous mode was already built-in, or when the next boot already dials the
+      // bundled host with it (the environment's host, else the file's, a file that names it without the
+      // flag included). Coming from external, the stored value is the external DB's credential and must
+      // not be carried into the container.
+      const storedPassword =
+        existing.POSTGRES_BUILTIN === 'true' || nextBootHost('DATABASE_HOST', existing) === 'postgres'
+          ? existing.DATABASE_PASSWORD
+          : undefined;
       updates.DATABASE_PASSWORD = database.password || storedPassword || 'openwa';
       updates.DATABASE_NAME = 'openwa';
       // Built-in Postgres is initialized with the default 'public' schema (see

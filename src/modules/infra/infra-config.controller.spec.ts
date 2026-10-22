@@ -1324,6 +1324,49 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
     expect(env).not.toContain('ExternalPw!');
   });
 
+  // The stored password belongs to the bundled container whenever the next boot already dials it with that password,
+  // whatever the flag says: an older or hand-edited file names the bundled host without the flag, and a pinned host
+  // outranks the file's.
+  describe('built-in mode over a stored password the next boot already dials the bundled host with', () => {
+    afterEach(() => {
+      delete process.env.DATABASE_HOST;
+      delete process.env.DATABASE_PASSWORD;
+      recordPinnedEnvKeys({});
+    });
+
+    it('keeps it when the file names the bundled host without the flag', () => {
+      const env = written(
+        { database: { type: 'postgres', builtIn: true } },
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=CustomPw123!\nDATABASE_NAME=openwa\n',
+      );
+      expect(env).toContain('POSTGRES_BUILTIN=true');
+      expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
+    });
+
+    it('keeps it when the environment pins the bundled host over another host in the file', () => {
+      process.env.DATABASE_HOST = 'postgres';
+      recordPinnedEnvKeys({ DATABASE_HOST: 'postgres' });
+      const env = written(
+        { database: { type: 'postgres', builtIn: true } },
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.old.example\nDATABASE_PASSWORD=CustomPw123!\n',
+      );
+      expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
+    });
+
+    // The pinned password keeps that boot past the default-secret guard; the file's is what the rule decides.
+    it('still resets it when the environment pins another host over the bundled host in the file', () => {
+      process.env.DATABASE_HOST = 'db.example.com';
+      process.env.DATABASE_PASSWORD = 'PinnedPw456!';
+      recordPinnedEnvKeys({ DATABASE_HOST: 'db.example.com', DATABASE_PASSWORD: 'PinnedPw456!' });
+      const env = written(
+        { database: { type: 'postgres', builtIn: true } },
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=ExternalPw!\n',
+      );
+      expect(env).toContain('DATABASE_PASSWORD=openwa');
+      expect(env).not.toContain('ExternalPw!');
+    });
+  });
+
   // The guard must evaluate what the next boot would SEE: load-env.ts loads with dotenv
   // override:false, so a value in the container environment (compose `environment:`) wins over the
   // saved file. Snapshot + clear every guard-relevant key so these tests are hermetic.
