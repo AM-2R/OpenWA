@@ -171,12 +171,13 @@ const errors = [];
 // them then broke the image build rather than this check. A copy from another stage, a flag, the
 // destination, a remote ADD source and `.` (the whole context) are not inputs.
 // Comment lines go first, as in BuildKit: a comment is never continued, so one that ends in a backslash must
-// not swallow the instruction below it, and one inside a continued instruction drops out of it.
+// not swallow the instruction below it, and one inside a continued instruction drops out of it. A
+// continuation is a backslash, optional blanks and CR, the line end, and any blank lines after it.
 const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
   .split('\n')
   .filter(line => !/^\s*#/.test(line))
   .join('\n')
-  .replace(/\\\n/g, ' ');
+  .replace(/\\[ \t\r]*\n(?:[ \t\r]*\n)*/g, ' ');
 const wildcard = /[*?[]/;
 function copyInputs(source) {
   // Remote, as in BuildKit, which matches the scheme in lower case only: ADD HTTPS://x/y names a context path.

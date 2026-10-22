@@ -104,12 +104,22 @@ test('a rule spelled ./data/ keeps data/ out of the context as data/ does', () =
 });
 
 test('an instruction continued over several lines is read whole', () => {
-  const run = runGate({
-    Dockerfile: 'COPY control.txt \\\n  scripts/new.js \\\n  ./scripts/\n',
-    '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n`,
-  });
-  assert.equal(run.status, 1, run.out);
-  assert.match(run.out, /rejects 'scripts\/new\.js'/);
+  // Each form builds in real BuildKit, which continues over a backslash followed by blanks or a CR, and
+  // skips blank lines inside the instruction.
+  const forms = {
+    'a backslash': 'COPY control.txt \\\n  scripts/new.js \\\n  ./scripts/\n',
+    'a backslash and a blank': 'COPY control.txt \\ \n  scripts/new.js ./scripts/\n',
+    'a backslash and two blanks': 'COPY control.txt \\  \n  scripts/new.js ./scripts/\n',
+    'a backslash and a tab': 'COPY control.txt \\\t\n  scripts/new.js ./scripts/\n',
+    'CRLF line ends': 'COPY control.txt \\\r\n  scripts/new.js ./scripts/\r\n',
+    'an empty line inside': 'COPY control.txt \\\n\n  scripts/new.js ./scripts/\n',
+    'a blank line inside': 'COPY control.txt \\\n   \n  scripts/new.js ./scripts/\n',
+  };
+  for (const [name, dockerfile] of Object.entries(forms)) {
+    const run = runGate({ Dockerfile: dockerfile, '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n` });
+    assert.equal(run.status, 1, `${name}: ${run.out}`);
+    assert.match(run.out, /rejects 'scripts\/new\.js'/, `${name}: ${run.out}`);
+  }
 });
 
 test('a comment ends with its line, whatever it ends in, and is not part of a continued instruction', () => {
