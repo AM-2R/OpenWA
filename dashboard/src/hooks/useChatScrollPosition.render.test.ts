@@ -1153,3 +1153,72 @@ test('a message announced before the reader went back for history does not pin t
     restore();
   }
 });
+
+// The thread is reused across chats, and a page asked for in one chat is not cancelled when the reader leaves it: it
+// lands after they come back, above the message the restore put them on.
+for (const scenario of [
+  { name: 'from a chat with no page out', otherFetching: false },
+  { name: 'from a chat whose own page is out', otherFetching: true },
+]) {
+  test(`an older page that lands after the reader came back ${scenario.name} holds them on their message`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const t: Thread = { rows: textRows('a', 46), top: 0 };
+    const restore = installRows(t);
+    try {
+      const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+      readerScrollsTo(el, 50); // near the top: an older page is asked for
+      hook().onOlderMessagesRequested();
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+      const rowsOfA = t.rows;
+      t.rows = textRows('b', 30); // the reader opens B before the page lands
+      rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows, fetching: scenario.otherFetching }));
+      fireEvent.scroll(el);
+      t.rows = rowsOfA; // and comes back to A, its page still out
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+      fireEvent.scroll(el);
+      assert.equal(el.scrollTop, 50, 'A did not reopen where the reader left it');
+      t.rows = [...rowsOfA, { id: 'live', h: 100 }]; // a message far below the reader while the page is out
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+      t.rows = [...textRows('p', 10), ...t.rows]; // the page lands: 1000px above the reader
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+      assert.equal(el.scrollTop, 50 + 1000, 'the reader was left on the top of the page that landed');
+    } finally {
+      restore();
+    }
+  });
+}
+
+// While a page is out, an image that decodes above the reader is left to the landing, which holds them by the message
+// they were on: a commit in between (a message far below) must not take that measure again from the moved message.
+test('an image that decodes above the reader while an older page is out is counted when the page lands', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  t.rows[2] = { id: 'a2', h: 100, img: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 450); // the reader is on a4, 50px under the top edge
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+    t.rows[2] = { id: 'a2', h: 100, img: 300 }; // the image in a2 decodes
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="a2"]') });
+    await nextFrame();
+    t.rows = [...t.rows, { id: 'live', h: 100 }]; // a message far below commits while the page is out
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+    t.rows = [...textRows('p', 10), ...t.rows]; // the page lands: 1000px above
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+    assert.equal(el.scrollTop, 450 + 300 + 1000, 'the reader was not held on the message they were on');
+  } finally {
+    restore();
+  }
+});

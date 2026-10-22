@@ -289,6 +289,14 @@ export function useChatScrollPosition(
     loadedRef.current = isLoaded;
   }, [activeChatId, isLoaded, followBottom, pinToBottom, writeScrollTop]);
 
+  const onOlderMessagesRequested = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    prevScrollHeightRef.current = el.scrollHeight;
+    olderAnchorRef.current = firstVisibleAnchor(el);
+    awaitingOlderPageRef.current = true;
+  }, []);
+
   // Older messages are prepended ABOVE the viewport, so the thread grows upward and what the user
   // was reading is pushed down by however much taller it just got. Left alone the view jumps
   // backwards at the exact moment they asked for more.
@@ -304,6 +312,9 @@ export function useChatScrollPosition(
     const el = containerRef.current;
     const wasFetching = wasFetchingOlderRef.current;
     wasFetchingOlderRef.current = isFetchingOlderMessages;
+    // A chat shown again with its older page still out (leaving does not cancel it): the switch dropped what the
+    // request recorded, so the page is held against where the restore has just put the reader instead.
+    if (isFetchingOlderMessages && !awaitingOlderPageRef.current) onOlderMessagesRequested();
     // The FALLING edge, not merely "not fetching": the request is made in a scroll handler and the
     // query only reports itself in flight a turn later, so any commit in between — a live message,
     // a media decode, another query resolving — would otherwise consume the pending correction.
@@ -371,14 +382,6 @@ export function useChatScrollPosition(
     if (!el || !pinnedRef.current || el.scrollTop === programmaticTopRef.current) return;
     if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) programmaticTopRef.current = el.scrollTop;
   });
-
-  const onOlderMessagesRequested = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    prevScrollHeightRef.current = el.scrollHeight;
-    olderAnchorRef.current = firstVisibleAnchor(el);
-    awaitingOlderPageRef.current = true;
-  }, []);
 
   const onMessageAppended = useCallback((direction: ScrollDirection) => {
     const el = containerRef.current;
