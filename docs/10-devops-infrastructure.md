@@ -510,7 +510,9 @@ WEBHOOK_DISPATCH_MAX_QUEUED=1000
 # openwa_webhook_delivery_failures_total. A webhook whose receiver never answers holds only its own
 # places, but the pool is shared: a session holds up to four at once (one per webhook past four), and
 # another session's events wait for a slot once such sessions together hold all of them, which
-# is four sessions at the defaults. There is no process-wide cap on the events waiting.
+# is four sessions at the defaults. A webhook's share is fixed when its queue is created and kept while
+# it has events, so receipt webhooks added meanwhile can briefly raise a session above four. There is
+# no process-wide cap on the events waiting.
 # Each running, parked or backoff-waiting inline delivery holds its event's inline media
 # (up to 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES as base64), about 1.3 GiB per process at the defaults
 # when every slot is taken; lower these caps or enable the queue to reduce it.
