@@ -5980,7 +5980,7 @@ On commit, plugin instance bindings are also re-applied: a session bound only by
 
 #### GET /api/infra/storage/files/count
 
-File count and total size in the active storage backend.
+File count and total size in the active storage backend. The count follows the export: on S3 a key ending in `/` (a folder placeholder) and a key that is not a safe storage path are left out of both.
 
 **Auth:** API key (ADMIN)
 
