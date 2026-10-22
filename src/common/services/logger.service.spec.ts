@@ -389,6 +389,36 @@ describe('LoggerService', () => {
         expect(getRawOutput(errorSpy)).toContain('[Unprintable]');
         expect(getRawOutput(errorSpy)).toContain('saved-trace');
       });
+
+      describe('an Error passed as the trace whose stack is not text', () => {
+        const withStack = (stack: unknown): Error => Object.assign(new Error('boom'), { stack });
+        const cyclic = (): Record<string, unknown> => {
+          const value: Record<string, unknown> = { id: 1 };
+          value.self = value;
+          return value;
+        };
+
+        it.each([
+          ['an object', () => withStack({ password: 'value-stack', frame: 'f1' }), '"password":"[REDACTED]"'],
+          ['a list of call sites', () => withStack([{ token: 'value-stack' }]), '"token":"[REDACTED]"'],
+          ['a cyclic object', () => withStack(cyclic()), '[Circular]'],
+          ['a BigInt', () => withStack(98765432109876543210n), '98765432109876543210'],
+          [
+            'nothing, with an object as the message',
+            () => Object.assign(new Error('x'), { stack: undefined, message: { password: 'value-stack' } }),
+            '"password":"[REDACTED]"',
+          ],
+        ])('writes %s as redacted text and keeps the message', (_name, make, written) => {
+          const errorSpy = jest.spyOn(console, 'error');
+
+          expect(() => logger.error('saved-message', make())).not.toThrow();
+
+          const line = getRawOutput(errorSpy);
+          expect(line).toContain('saved-message');
+          expect(line).not.toContain('value-stack');
+          expect(line.replace(/\\"/g, '"')).toContain(written);
+        });
+      });
     });
   });
 

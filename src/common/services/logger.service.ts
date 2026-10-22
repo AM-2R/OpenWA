@@ -194,12 +194,9 @@ export class LoggerService implements NestLoggerService {
     }
     let trace: string | undefined;
     try {
-      trace =
-        rawTrace === undefined || typeof rawTrace === 'string'
-          ? rawTrace
-          : rawTrace instanceof Error
-            ? (rawTrace.stack ?? rawTrace.message)
-            : stringifyMessage(rawTrace);
+      // An Error's stack is text unless something replaced it; anything that is not text is redacted like metadata.
+      const text = rawTrace instanceof Error ? (rawTrace.stack ?? rawTrace.message) : rawTrace;
+      trace = text === undefined || typeof text === 'string' ? text : stringifyMessage(text);
     } catch {
       trace = UNPRINTABLE;
     }
