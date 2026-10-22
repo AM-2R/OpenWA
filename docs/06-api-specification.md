@@ -5651,7 +5651,7 @@ Read the effective infrastructure config used to hydrate the dashboard form. Eac
 }
 ```
 
-`builtInSet` says whether each `builtIn` flag is stored (in the saved file or pinned by the environment). A Compose deployment that pins `DATABASE_HOST=postgres`, `REDIS_HOST=redis` or `S3_ENDPOINT` in `.env` never writes the flag, so there `builtIn` is `false` only because nothing says otherwise: read what runs from `GET /api/infra/status`.
+`builtInSet` says whether the saved configuration states the built-in mode of the database, Redis or storage. It is `false` when a host pinned by the environment (`DATABASE_HOST`, `REDIS_HOST`, `S3_ENDPOINT`) decides the mode, in which case `builtIn` reports the pin (`true` for the bundled host `postgres`, `redis` or `http://minio:9000`), when the saved file does not select the service (the first boot writes every flag as `false` next to a service that is not in use), and when nothing is saved. Read what runs from `GET /api/infra/status` then. A flag pinned by the environment itself counts as stated.
 
 When nothing supplies a key — no pinned environment value and the file absent or silent about it — empty-string/default values are returned (`schema='public'`, `poolSize=10`, `sslRejectUnauthorized=true`, `engine.type='whatsapp-web.js'`, `headless=true`).
 

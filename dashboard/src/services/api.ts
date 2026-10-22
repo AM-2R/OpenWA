@@ -655,8 +655,9 @@ export interface SavedConfig {
   database: {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
-    // Whether the flag is stored (saved file or environment). A deployment that pins the bundled host never
-    // writes it, and `builtIn` is then false only because nothing says otherwise: /infra/status has what runs.
+    // Whether the saved config states the built-in mode of this service. False when a host the environment
+    // pins decides it, when the file does not select the service (the first boot writes every flag as false)
+    // and when nothing is saved: the form then follows what /infra/status reports as running.
     builtInSet: boolean;
     host: string;
     port: string;
