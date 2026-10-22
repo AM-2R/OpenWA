@@ -3021,6 +3021,89 @@ describe('WebhookDeliveryService', () => {
         expect(urlsCalled()).toHaveLength(16);
       });
 
+      // The stage bounds the deliveries of one webhook, not of the event: a sibling whose receiver never answers
+      // holds only its own places, so the healthy webhook of the same session keeps its pace.
+      it("does not slow a session's healthy receipt webhook to the pace of a sibling that never answers", async () => {
+        internals().dispatchLimiter = new ConcurrencyLimiter(16, 8); // two places per webhook
+        hooksBySession['sess-m'] = [
+          createMockWebhook({ id: 'wh-ok', url: 'https://ok.example/hook', events: ['message.receipt'] }),
+          createMockWebhook({ id: 'wh-dead', url: 'https://receipt.dead.example/hook', events: ['message.receipt'] }),
+        ];
+        const receipts = burst(8, 'sess-m');
+        await settle(() => urlsCalled().filter(url => url === 'https://ok.example/hook').length === 8);
+
+        expect(urlsCalled().filter(url => url === 'https://ok.example/hook')).toHaveLength(8);
+        // The dead one has its two places held and nothing more.
+        expect(hangingReceipts).toHaveLength(2);
+
+        await drain(receipts);
+
+        expect(urlsCalled().filter(url => url.startsWith('https://receipt.'))).toHaveLength(8);
+      });
+
+      // The same with a sibling that refuses the connection: its retries, not its places, are what take time, and
+      // the healthy webhook has everything before the first of them is sent.
+      it("delivers a session's receipts to a healthy webhook before a refusing sibling retries", async () => {
+        const original = (configService.get as jest.Mock).getMockImplementation() as (key: string) => unknown;
+        (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.retryDelay' ? 400 : (original(key) ?? def),
+        );
+        try {
+          internals().dispatchLimiter = new ConcurrencyLimiter(16, 8); // two places per webhook
+          hooksBySession['sess-m'] = [
+            createMockWebhook({ id: 'wh-ok', url: 'https://ok.example/hook', events: ['message.receipt'] }),
+            createMockWebhook({
+              id: 'wh-refusing',
+              url: 'https://failing.example/hook',
+              events: ['message.receipt'],
+              retryCount: 2,
+            }),
+          ];
+          const ok = () => urlsCalled().filter(url => url === 'https://ok.example/hook').length;
+          const refusing = () => urlsCalled().filter(url => url === 'https://failing.example/hook').length;
+
+          const receipts = burst(8, 'sess-m');
+          await settle(() => ok() === 8);
+
+          expect(ok()).toBe(8);
+          // Two places for the refusing webhook, each used for a first attempt that was refused; no retry yet.
+          expect(refusing()).toBe(2);
+
+          await Promise.all(receipts);
+          expect(refusing()).toBe(16);
+        } finally {
+          (configService.get as jest.Mock).mockImplementation(original);
+        }
+      });
+
+      it("drops a webhook's excess receipts without touching its sibling's", async () => {
+        internals().dispatchLimiter = new ConcurrencyLimiter(16, 8); // two places to run and six to wait per webhook
+        hooksBySession['sess-m'] = [
+          createMockWebhook({ id: 'wh-ok', url: 'https://ok.example/hook', events: ['message.receipt'] }),
+          createMockWebhook({ id: 'wh-dead', url: 'https://receipt.dead.example/hook', events: ['message.receipt'] }),
+        ];
+        const warn = warnSpy();
+        const dropsBefore = getWebhookDeliveryFailuresTotal();
+
+        const receipts = burst(10, 'sess-m');
+        await settle(() => warn.mock.calls.length > 0);
+        await drain(receipts);
+
+        // Eight of the ten are admitted to each webhook; the two over the bound are dropped for each.
+        expect(urlsCalled().filter(url => url === 'https://ok.example/hook')).toHaveLength(8);
+        expect(urlsCalled().filter(url => url.startsWith('https://receipt.'))).toHaveLength(8);
+        expect(getWebhookDeliveryFailuresTotal() - dropsBefore).toBe(4);
+        expect(warn).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            action: 'webhook_opt_in_dropped',
+            sessionId: 'sess-m',
+            webhookId: 'wh-ok',
+            dropped: 2,
+          }),
+        );
+      });
+
       it('forgets a session once its events have settled, and counts the next burst afresh', async () => {
         const warn = warnSpy();
         for (let round = 0; round < 2; round++) {
@@ -3074,8 +3157,11 @@ describe('WebhookDeliveryService', () => {
           if (key === 'webhook.mediaInlineMaxBytes') throw new Error('config unavailable');
           return original(key) ?? def;
         });
-        await Promise.allSettled(burst(8));
+        const thrown = await Promise.allSettled(burst(8));
         (configService.get as jest.Mock).mockImplementation(original);
+
+        // It is not the stage's to hide: every dispatch reports it.
+        expect(thrown.map(result => result.status)).toEqual(Array(8).fill('rejected'));
 
         const receipts = burst(2);
         await settle(() => hangingReceipts.length > 1);

@@ -140,6 +140,20 @@ const isLimiterFull = (error: unknown): boolean =>
   error instanceof Error && error.message === 'ConcurrencyLimiter queue full';
 
 /**
+ * The stage one webhook's opt-in events pass (`webhookId` is null when the webhooks that name the event could
+ * not be listed, and one stage then serves the whole session); `dropped` counts the events it turned away.
+ */
+interface OptInStage {
+  stage: ConcurrencyLimiter;
+  dropped: number;
+  sessionId: string;
+  webhookId: string | null;
+}
+
+const describeOptInStage = ({ sessionId, webhookId }: OptInStage): string =>
+  webhookId === null ? `session ${sessionId}` : `webhook ${webhookId} of session ${sessionId}`;
+
+/**
  * The replay's retries were stopped by its aborted signal, in a backoff or just before a retry POST.
  * A POST that fails after the abort is not this: on the last attempt it is a terminal failure and is
  * reported as one.
@@ -194,24 +208,27 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly locallyPending = new Map<string, number>();
   /**
-   * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that active webhooks name, with how many
-   * name each. The promise is cached, not its result, so a burst of receipts on a cold entry shares one lookup.
+   * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that active webhooks name, with the ids of the
+   * webhooks that name each. The promise is cached, not its result, so a burst of receipts on a cold entry
+   * shares one lookup.
    */
   private readonly optInSubscriptions = new Map<
     string,
-    { named: Promise<ReadonlyMap<string, number>>; expiresAt: number }
+    { named: Promise<ReadonlyMap<string, readonly string[]>>; expiresAt: number }
   >();
   /**
-   * Per session, the stage its opt-in events (WILDCARD_EXCLUDED_EVENTS) pass before the shared dispatch
+   * Per webhook, the stage its opt-in events (WILDCARD_EXCLUDED_EVENTS) pass before the shared dispatch
    * pool. One flush of buffered receipts is thousands of dispatches in a tick: a quarter of the dispatch
-   * concurrency runs at once, shared by the webhooks that name the event since one event is a delivery to
-   * each, up to three quarters of WEBHOOK_DISPATCH_MAX_QUEUED events wait their turn (holding only the
-   * event), and the rest are dropped before they open an outbox row, a failure row or a hook call. The pool
-   * never sees more than a session's running deliveries, so a flood, or a receiver that never answers,
-   * cannot shed or hold back what another session sends. An entry lives while its session has events in
-   * the stage; `dropped` counts those turned away since it was created.
+   * concurrency runs at once, shared by the session's webhooks that name the event, up to three quarters of
+   * WEBHOOK_DISPATCH_MAX_QUEUED events wait their turn (holding only the event), and the rest are dropped
+   * before they open an outbox row, a failure row or a hook call. A stage holds one webhook's deliveries, so
+   * a receiver that never answers holds only its own places, not those of its siblings. The pool never sees
+   * more than the running deliveries of each stage, so a flood, or a receiver that never answers, cannot
+   * shed or hold back what another session sends until several sessions have such receivers at once. An
+   * entry lives while its webhook has events in the stage; `dropped` counts those turned away since it
+   * was created.
    */
-  private readonly optInStages = new Map<string, { stage: ConcurrencyLimiter; dropped: number }>();
+  private readonly optInStages = new Map<string, OptInStage>();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -306,12 +323,29 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data);
+    if (!WILDCARD_EXCLUDED_EVENTS.includes(event)) return this.fanOut(sessionId, event, data, null);
     // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
     // before the per-dispatch webhook read when no active webhook of the session names it.
-    const named = await this.webhooksNamingOptInEvent(sessionId, event);
-    if (named === 0) return;
-    let entry = this.optInStages.get(sessionId);
+    const webhookIds = await this.webhooksNamingOptInEvent(sessionId, event);
+    // One event is a delivery to each of them; each delivery waits in the stage of its own webhook. A single
+    // webhook is the common case and passes straight through: what waits in a stage is held for a flush.
+    if (webhookIds.length === 1) return this.dispatchThroughOptInStage(sessionId, event, data, webhookIds[0], 1);
+    const settled = await Promise.allSettled(
+      webhookIds.map(webhookId => this.dispatchThroughOptInStage(sessionId, event, data, webhookId, webhookIds.length)),
+    );
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+
+  private async dispatchThroughOptInStage(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    webhookId: string | null,
+    named: number,
+  ): Promise<void> {
+    const key = JSON.stringify([sessionId, webhookId]);
+    let entry = this.optInStages.get(key);
     if (!entry) {
       // A quarter of the pool runs at once, divided among the webhooks that name the event (the limiter keeps at
       // least one event running), and three quarters of the park bound wait, at least one place.
@@ -321,49 +355,71 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
           Math.max(1, Math.floor((this.dispatchMaxQueued * 3) / 4)),
         ),
         dropped: 0,
+        sessionId,
+        webhookId,
       };
-      this.optInStages.set(sessionId, entry);
+      this.optInStages.set(key, entry);
     }
     try {
-      await entry.stage.run(() => this.fanOut(sessionId, event, data));
+      await entry.stage.run(() => this.fanOut(sessionId, event, data, webhookId));
     } catch (error) {
       // Over the stage's bound, or still waiting when shutdown closed it; anything else is not ours to hide.
-      if (isLimiterFull(error)) this.noteOptInDrop(sessionId, event, entry);
+      if (isLimiterFull(error)) this.noteOptInDrop(event, entry);
       else if (!isLimiterClosed(error)) throw error;
     } finally {
-      this.releaseOptInStage(sessionId, entry);
+      this.releaseOptInStage(key, entry);
     }
   }
 
   /**
-   * An opt-in event past its session's bound: counted with the other deliveries that were never sent, and
-   * announced once per burst, when the session starts dropping. It leaves no row to replay, by design.
+   * An opt-in event past its webhook's bound: counted with the other deliveries that were never sent, and
+   * announced once per burst, when the webhook starts dropping. It leaves no row to replay, by design.
    */
-  private noteOptInDrop(sessionId: string, event: string, entry: { dropped: number }): void {
+  private noteOptInDrop(event: string, entry: OptInStage): void {
     incrementWebhookDeliveryFailures();
     if (entry.dropped++ > 0) return;
-    this.logger.warn(`Dropping ${event} events of session ${sessionId}: its queue of opt-in events is full`, {
+    const { sessionId, webhookId } = entry;
+    this.logger.warn(`Dropping ${event} events of ${describeOptInStage(entry)}: its queue of opt-in events is full`, {
       sessionId,
+      webhookId: webhookId ?? undefined,
       event,
       action: 'webhook_opt_in_dropping',
     });
   }
 
-  /** Forget a session's stage once it is idle, reporting how many events it turned away. */
-  private releaseOptInStage(sessionId: string, entry: { stage: ConcurrencyLimiter; dropped: number }): void {
-    if (entry.stage.activeCount > 0 || entry.stage.queuedCount > 0 || this.optInStages.get(sessionId) !== entry) return;
-    this.optInStages.delete(sessionId);
+  /** Forget a webhook's stage once it is idle, reporting how many events it turned away. */
+  private releaseOptInStage(key: string, entry: OptInStage): void {
+    if (entry.stage.activeCount > 0 || entry.stage.queuedCount > 0 || this.optInStages.get(key) !== entry) return;
+    this.optInStages.delete(key);
     if (entry.dropped === 0) return;
-    this.logger.warn(`Dropped ${entry.dropped} opt-in events of session ${sessionId} while its queue was full`, {
-      sessionId,
-      dropped: entry.dropped,
-      action: 'webhook_opt_in_dropped',
-    });
+    const { sessionId, webhookId } = entry;
+    this.logger.warn(
+      `Dropped ${entry.dropped} opt-in events of ${describeOptInStage(entry)} while its queue was full`,
+      {
+        sessionId,
+        webhookId: webhookId ?? undefined,
+        dropped: entry.dropped,
+        action: 'webhook_opt_in_dropped',
+      },
+    );
   }
 
-  private async fanOut(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+  /**
+   * Deliver an event to the session's matching webhooks, or only to the webhook `only` names. `only` has no
+   * default value: a parameter list with one keeps the caller's `data` reachable past the reassignment below.
+   */
+  private async fanOut(
+    sessionId: string,
+    event: string,
+    data: Record<string, unknown>,
+    only: string | null,
+  ): Promise<void> {
     const webhooks = await this.loadActiveWebhooks(sessionId, event);
-    const matchingWebhooks = this.filterMatchingWebhooks(webhooks, event, data);
+    const matchingWebhooks = this.filterMatchingWebhooks(
+      only === null ? webhooks : webhooks.filter(webhook => webhook.id === only),
+      event,
+      data,
+    );
 
     // Base idempotency key for this event occurrence. occurredAt is captured once here and reused for
     // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key
@@ -401,11 +457,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * How many active webhooks of the session name `event`, read at most once per
-   * OPT_IN_SUBSCRIPTIONS_TTL_MS. A failed lookup is not cached and counts as one, which lets the event
-   * through, so dispatch's own lookup reports the failure as before.
+   * The ids of the session's active webhooks that name `event`, read at most once per
+   * OPT_IN_SUBSCRIPTIONS_TTL_MS. A failed lookup is not cached and answers `[null]`, one delivery to every
+   * webhook, which lets the event through so dispatch's own lookup reports the failure as before.
    */
-  private async webhooksNamingOptInEvent(sessionId: string, event: string): Promise<number> {
+  private async webhooksNamingOptInEvent(sessionId: string, event: string): Promise<Array<string | null>> {
     const now = Date.now();
     let entry = this.optInSubscriptions.get(sessionId);
     if (!entry || entry.expiresAt <= now) {
@@ -413,11 +469,14 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
         named: this.webhookRepository
           .find({ select: { id: true, events: true }, where: { sessionId, active: true } })
           .then(rows => {
-            const named = new Map<string, number>();
+            const named = new Map<string, string[]>();
             for (const row of rows) {
               if (!Array.isArray(row.events)) continue;
               for (const e of new Set(row.events)) {
-                if (WILDCARD_EXCLUDED_EVENTS.includes(e)) named.set(e, (named.get(e) ?? 0) + 1);
+                if (!WILDCARD_EXCLUDED_EVENTS.includes(e)) continue;
+                const ids = named.get(e);
+                if (ids) ids.push(row.id);
+                else named.set(e, [row.id]);
               }
             }
             return named;
@@ -432,9 +491,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       entry = created;
     }
     try {
-      return (await entry.named).get(event) ?? 0;
+      return [...((await entry.named).get(event) ?? [])];
     } catch {
-      return 1;
+      return [null];
     }
   }
 
