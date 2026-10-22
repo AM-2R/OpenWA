@@ -237,12 +237,78 @@ test('Escape closes the open language menu before the phone drawer', () => {
     assert.ok(container.querySelector('.language-menu-list'));
 
     rtl.fireEvent.keyDown(document, { key: 'Escape' });
-    assert.equal(container.querySelector('.language-menu-list'), null, 'Escape left the language menu open');
+    assert.ok(container.querySelector('.language-menu-list') === null, 'Escape left the language menu open');
     assert.ok(sidebar.classList.contains('open'), 'the same Escape also closed the drawer');
 
     rtl.fireEvent.keyDown(document, { key: 'Escape' });
     assert.ok(!sidebar.classList.contains('open'), 'a second Escape left the drawer open');
   } finally {
+    resizeTo(1024);
+  }
+});
+
+// The drawer covers the page, so its Escape is the drawer's alone. The Chats page closes the open chat on an Escape
+// nobody prevented, and the emoji picker under the drawer takes the key in the capture phase: one press closed the
+// drawer and the chat behind it, or the picker nobody could see while the drawer stayed open.
+test('one Escape closes the phone drawer and nothing on the page under it', () => {
+  const seen: string[] = [];
+  // Registered before the drawer opens, as a picker or menu left open on the page is.
+  const pageCapture = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    event.preventDefault();
+    seen.push('page capture');
+  };
+  const pageBubble = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') seen.push('page bubble');
+  };
+  document.addEventListener('keydown', pageCapture, true);
+  document.addEventListener('keydown', pageBubble);
+  try {
+    resizeTo(390);
+    const { container } = renderLayout();
+    const sidebar = container.querySelector('aside.sidebar')!;
+    rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+    const link = rtl.screen.getByRole('link', { name: 'Sessions' });
+    link.focus();
+
+    const notPrevented = rtl.fireEvent.keyDown(link, { key: 'Escape' });
+    assert.ok(!sidebar.classList.contains('open'), 'Escape left the drawer open');
+    assert.equal(notPrevented, false, 'the drawer took Escape without preventing its default');
+    assert.deepEqual(seen, [], 'the page under the drawer handled the same Escape');
+
+    // Closed, the drawer leaves Escape to the page.
+    rtl.fireEvent.keyDown(document.body, { key: 'Escape' });
+    assert.deepEqual(seen, ['page capture', 'page bubble']);
+  } finally {
+    document.removeEventListener('keydown', pageCapture, true);
+    document.removeEventListener('keydown', pageBubble);
+    resizeTo(1024);
+  }
+});
+
+// A dialog renders above the drawer and dismisses itself on Escape; an Escape that commits an IME composition
+// belongs to the composition.
+test('the phone drawer leaves Escape to a dialog above it and to a composition', () => {
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  try {
+    resizeTo(390);
+    const { container } = renderLayout();
+    const sidebar = container.querySelector('aside.sidebar')!;
+    rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+
+    rtl.fireEvent.keyDown(document.body, { key: 'Escape', isComposing: true });
+    assert.ok(sidebar.classList.contains('open'), 'the Escape of a composition closed the drawer');
+
+    document.body.appendChild(dialog);
+    assert.equal(rtl.fireEvent.keyDown(document.body, { key: 'Escape' }), true, 'the drawer took the Escape');
+    assert.ok(sidebar.classList.contains('open'), 'Escape closed the drawer under a dialog');
+
+    dialog.remove();
+    rtl.fireEvent.keyDown(document.body, { key: 'Escape' });
+    assert.ok(!sidebar.classList.contains('open'), 'Escape left the drawer open once the dialog closed');
+  } finally {
+    dialog.remove();
     resizeTo(1024);
   }
 });

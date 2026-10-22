@@ -144,18 +144,24 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   }, [isMobileOpen]);
 
   // Escape dismisses the innermost overlay: while the language menu is open it takes the key, then the drawer does.
+  // The drawer covers the page, so it takes the key before the page's own Escape handlers (on window, in the capture
+  // phase) and keeps it from them: one press closed the drawer and the chat open behind it. A dialog renders above
+  // the drawer and keeps its own Escape, and so does a composition being committed by an IME.
   useEffect(() => {
     if (!isMobileOpen || isLanguageMenuOpen) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.isComposing) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
       setIsMobileOpen(false);
       // The focused link is about to slide off screen, so hand focus back to the control that opened the drawer.
       mobileMenuButtonRef.current?.focus();
     };
 
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOnEscape, true);
   }, [isMobileOpen, isLanguageMenuOpen]);
 
   useEffect(() => {
