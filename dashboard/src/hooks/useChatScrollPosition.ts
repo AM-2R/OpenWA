@@ -177,10 +177,13 @@ export function useChatScrollPosition(
   // frame held, so a flag cleared by a write that moved nothing handed the frame's one event to the reader.
   const programmaticTopRef = useRef<number | null>(null);
   // A live message the thread is to follow, until the commit that adds its row applies it (see the layout effect
-  // after the older-page landing).
-  const pendingFollowRef = useRef<{ chat: string | null; direction: ScrollDirection; geometry: ScrollGeometry } | null>(
-    null,
-  );
+  // after the older-page landing). `duringPage`: announced while an older page was out.
+  const pendingFollowRef = useRef<{
+    chat: string | null;
+    direction: ScrollDirection;
+    geometry: ScrollGeometry;
+    duringPage: boolean;
+  } | null>(null);
   // See the layout effect below.
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
@@ -300,8 +303,10 @@ export function useChatScrollPosition(
     awaitingOlderPageRef.current = false;
     // A follow still armed belongs to a message announced before the reader went back for history; the page that
     // lands is not its row, and consuming it here would take the reader from the message they were held on to the
-    // bottom.
-    pendingFollowRef.current = null;
+    // bottom. A message the reader sent while the page was out is the exception: its row can land in this same commit,
+    // and the follow below takes them to it.
+    const follow = pendingFollowRef.current;
+    if (!(follow?.direction === 'outgoing' && follow.duringPage)) pendingFollowRef.current = null;
     // How far the element the reader was on moved down. Measured on the element, not as a change of the
     // whole thread's height: a preview that swapped in below the reader, or a live message at the
     // bottom, while the page was in flight is inside that height delta and moves nothing on screen, so
@@ -367,7 +372,12 @@ export function useChatScrollPosition(
     if (direction === 'incoming' && pendingRestoreRef.current !== null) return;
     const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
     if (decideScroll(direction, geometry) === 'preserve') return;
-    pendingFollowRef.current = { chat: prevChatIdRef.current, direction, geometry };
+    pendingFollowRef.current = {
+      chat: prevChatIdRef.current,
+      direction,
+      geometry,
+      duringPage: awaitingOlderPageRef.current,
+    };
   }, []);
 
   // Media has no layout box before it decodes. While pinned, each decode re-pins to the bottom;

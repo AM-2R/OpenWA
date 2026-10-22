@@ -913,3 +913,118 @@ test('a decode after an older page landed does not apply the saved spot from bef
     restore();
   }
 });
+
+// ── A thread of message rows ─────────────────────────────────────────────────
+// Rows laid out top to bottom in the container, each an anchor; a row may hold an image, which the test grows as it
+// decodes. Positions are what a browser would report for them at the current scrollTop.
+
+type Row = { id: string; h: number; img?: number };
+type Thread = { rows: Row[]; top: number };
+
+const rowsHeight = (t: Thread) => t.rows.reduce((sum, r) => sum + r.h + (r.img ?? 0), 0);
+const rowsMax = (t: Thread) => Math.max(0, rowsHeight(t) - CLIENT_HEIGHT);
+const textRows = (prefix: string, n: number, h = 100): Row[] =>
+  Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, h }));
+
+function installRows(t: Thread): () => void {
+  const proto = window.HTMLDivElement.prototype;
+  const saved = Object.getOwnPropertyDescriptors(proto);
+  const rectSaved = window.Element.prototype.getBoundingClientRect;
+  Object.defineProperties(proto, {
+    scrollHeight: { configurable: true, get: () => rowsHeight(t) },
+    clientHeight: { configurable: true, get: () => CLIENT_HEIGHT },
+    scrollTop: {
+      configurable: true,
+      get: () => Math.min(t.top, rowsMax(t)),
+      set: (v: number) => {
+        t.top = Math.max(0, Math.min(v, rowsMax(t)));
+      },
+    },
+  });
+  const box = (y: number, h: number) =>
+    ({ top: y, bottom: y + h, left: 0, right: 0, width: 0, height: h, x: 0, y }) as DOMRect;
+  window.Element.prototype.getBoundingClientRect = function (this: Element) {
+    const id = this.getAttribute('data-id') ?? this.getAttribute('data-img');
+    let y = -Math.min(t.top, rowsMax(t));
+    for (const r of t.rows) {
+      if (r.id === id) return this.hasAttribute('data-img') ? box(y + r.h, r.img ?? 0) : box(y, r.h + (r.img ?? 0));
+      y += r.h + (r.img ?? 0);
+    }
+    return box(0, CLIENT_HEIGHT); // the container
+  };
+  return () => {
+    for (const key of ['scrollHeight', 'clientHeight', 'scrollTop'] as const) {
+      if (saved[key]) Object.defineProperty(proto, key, saved[key]);
+      else delete (proto as unknown as Record<string, unknown>)[key];
+    }
+    window.Element.prototype.getBoundingClientRect = rectSaved;
+  };
+}
+
+function RowsProbe({ chatId, rows, fetching = false }: { chatId: string; rows: Row[]; fetching?: boolean }) {
+  const result = useChatScrollPosition(chatId, true, fetching);
+  useEffect(() => {
+    hookRef.current = result;
+  });
+  return createElement(
+    'div',
+    { ref: result.containerRef, 'data-testid': 'thread' },
+    rows.map(r =>
+      createElement(
+        'div',
+        { key: r.id, 'data-id': r.id, 'data-scroll-anchor': '' },
+        r.img === undefined ? null : createElement('img', { ref: result.measureMedia, 'data-img': r.id }),
+      ),
+    ),
+  );
+}
+
+// The reader sends while an older page is out, and the page lands in the commit that adds their row: what they sent
+// is where they are taken, not the message the page holds them on.
+test('a message the reader sends while an older page is out is followed when the page lands with its row', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50); // near the top: an older page is asked for
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+    hook().onMessageAppended('outgoing');
+    t.rows = [...textRows('p', 10), ...t.rows, { id: 'own', h: 100 }];
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+    assert.equal(el.scrollTop, rowsMax(t), 'the message the reader sent was left below the fold');
+  } finally {
+    restore();
+  }
+});
+
+// A follow the thread never consumed (the message was announced but added no row) is not the reader's: it must not
+// take them to the bottom when a page lands under them later, whichever way the message went.
+test('a message announced before the reader went back for history does not pin them when the page lands', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    hook().onMessageAppended('outgoing');
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows })); // no row was added
+    await nextFrame();
+
+    readerScrollsTo(el, 50);
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+    t.rows = [...textRows('p', 10), ...t.rows];
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+    assert.equal(el.scrollTop, 50 + 1000, 'the landing page took the reader to the bottom');
+  } finally {
+    restore();
+  }
+});
