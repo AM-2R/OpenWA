@@ -30,14 +30,20 @@ export const WS_REDIS_COMMAND_TIMEOUT_MS = 2000;
 export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
 
 /**
- * Most commands the publisher keeps written and unanswered. A Redis that answers slower than events are raised
- * never trips the socket deadline, so without a cap the backlog grows with the load for as long as the slowness
- * lasts. Frames raised above the cap are dropped for the other replicas until the queue drains, with a warning
- * when dropping starts and another, with the count, when Redis catches up. 12,000 holds a full socket deadline of
- * traffic at 1,000 events a second with a fifth to spare, which measured about 25 MB of heap with 1 KiB frames.
- * It counts commands, not bytes: events with inline media are larger.
+ * Most commands the publisher keeps written and unanswered once the backlog has lasted. A Redis that answers slower
+ * than events are raised never trips the socket deadline, so without a cap the backlog grows with the load for as
+ * long as the slowness lasts. The rule: frames are dropped for the other replicas while the queue holds this many
+ * commands and has not been below half of it for longer than a command is given to be answered
+ * (WS_REDIS_COMMAND_TIMEOUT_MS), and they go on being dropped until the queue is back below half of it. A burst
+ * raised in one tick is never cut, however large, because depth alone says nothing: it is all on the queue before a
+ * reply can be read. Dropping starts with a warning and ends with another, with the count. 12,000 holds a full
+ * socket deadline of traffic at 1,000 events a second with a fifth to spare, which measured about 25 MB of heap with
+ * 1 KiB frames. It counts commands, not bytes: events with inline media are larger.
  */
 export const WS_REDIS_MAX_UNANSWERED = 12_000;
+
+/** The queue length below which a backlog counts as over, and dropped frames are published again. */
+const WS_REDIS_RESUME_UNANSWERED = WS_REDIS_MAX_UNANSWERED / 2;
 
 /**
  * Commands the client has written and not had answered. ioredis keeps them on an internal queue; if this version
@@ -106,10 +112,11 @@ export function rejectRootNamespace(server: Server): void {
  * other replicas late and after newer events. The events this node raises while it is disconnected, plus its
  * reconnect backoff of up to 5 s once Redis is back (wsRedisOptions), are dropped for the other replicas, never
  * delivered late and never twice. A Redis that keeps answering, but slower than events are raised, never looks
- * silent: it is bounded by WS_REDIS_MAX_UNANSWERED, above which frames are dropped for the other replicas until
- * it catches up. Clients on this node are served by the local broadcast and webhooks do not use this path, so
- * neither is affected. What the publisher holds is bounded by one socket deadline of traffic for a silent Redis
- * and by that cap for a slow one.
+ * silent: it is bounded by WS_REDIS_MAX_UNANSWERED, which drops frames for the other replicas once the backlog has
+ * outlived a command's deadline and until it is back below half of it (a burst raised in one tick is not cut).
+ * Clients on this node are served by the local broadcast and webhooks do not use this path, so neither is
+ * affected. What the publisher holds is bounded by one socket deadline of traffic for a silent Redis and by that
+ * cap, plus the traffic of one command deadline, for a slow one.
  */
 export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
@@ -133,7 +140,7 @@ export class RedisIoAdapter extends IoAdapter {
       // a connection it does not have, and nothing the old socket may already have delivered is sent again. An
       // event raised while disconnected is therefore dropped for the other replicas rather than replayed late.
       // A silent Redis holds at most one socket deadline of traffic; a slow one that keeps answering is held to
-      // WS_REDIS_MAX_UNANSWERED by the wrapper below.
+      // WS_REDIS_MAX_UNANSWERED (see there for the rule) by the wrapper below.
       const pubClient = new Redis({
         ...wsRedisOptions(),
         commandTimeout: WS_REDIS_COMMAND_TIMEOUT_MS,
@@ -159,21 +166,34 @@ export class RedisIoAdapter extends IoAdapter {
       // confirmed delivery is only worth a debug line. A timed-out command was still written, and a slow
       // Redis delivers it late; one rejected for lack of a connection was never sent.
       const publish = pubClient.publish.bind(pubClient);
-      let capped = 0;
+      let dropping = false;
+      let dropped = 0;
+      // When the queue was last seen below half the cap: the backlog is as old as the time since.
+      let lastBelowResume = 0;
       pubClient.publish = (channel: string, message: string | Buffer) => {
         const unanswered = unansweredCommands(pubClient);
-        if (unanswered >= WS_REDIS_MAX_UNANSWERED) {
-          // Nothing else reports a Redis that answers slowly, so the first frame of a burst is warned about.
-          if (capped++ === 0) {
-            logger.warn(
-              `Redis has ${unanswered} fan-out frames unanswered; fan-out frames are dropped for the other replicas until it catches up`,
-            );
+        const now = Date.now();
+        if (unanswered < WS_REDIS_RESUME_UNANSWERED) {
+          lastBelowResume = now;
+          if (dropping) {
+            logger.warn(`Redis caught up; ${dropped} fan-out frames were dropped for the other replicas`);
+            dropping = false;
+            dropped = 0;
           }
-          return Promise.resolve(0);
+        } else if (
+          !dropping &&
+          unanswered >= WS_REDIS_MAX_UNANSWERED &&
+          now - lastBelowResume > WS_REDIS_COMMAND_TIMEOUT_MS
+        ) {
+          // Nothing else reports a Redis that answers slowly, so the start of an episode is warned about.
+          dropping = true;
+          logger.warn(
+            `Redis has ${unanswered} fan-out frames unanswered; fan-out frames are dropped for the other replicas until it catches up`,
+          );
         }
-        if (capped > 0) {
-          logger.warn(`Redis caught up; ${capped} fan-out frames were dropped for the other replicas`);
-          capped = 0;
+        if (dropping) {
+          dropped++;
+          return Promise.resolve(0);
         }
         return publish(channel, message).catch((err: Error) => {
           logger.debug(`Redis publish not confirmed: ${err.message}`);

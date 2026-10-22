@@ -250,36 +250,69 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     expect(pub.status).toBe('ready');
   }, 15_000);
 
+  const warned = (text: string): string[] =>
+    warn.mock.calls
+      .flat()
+      .map(line => String(line))
+      .filter(line => line.includes(text));
+
+  // Every frame of a burst raised in one tick is on the queue before the first reply can be read, however healthy the
+  // peer is, so the depth of the queue alone says nothing about a Redis that is behind.
+  it('publishes every frame of a burst larger than the cap raised in one tick to a peer that answers', async () => {
+    const burst = WS_REDIS_MAX_UNANSWERED + 3000;
+
+    broadcast(burst);
+
+    expect(await waitUntil(() => redis.published.length === burst && held() === 0, 15_000)).toBe(true);
+    expect(warned('fan-out frames are dropped')).toHaveLength(0);
+    expect(warned('were dropped')).toHaveLength(0);
+  }, 30_000);
+
   // A Redis that answers, but slower than events are raised, resets the socket timer with every reply, so the socket
-  // deadline never fires and the client would hold the whole backlog. Only the cap on unanswered commands bounds it.
-  it('holds no more unanswered events than the cap when the peer answers too slowly to ever look silent', async () => {
+  // deadline never fires and the client would hold the whole backlog. Only the cap on unanswered commands bounds it,
+  // once the backlog has outlived a command's own deadline. The clock is moved by hand: the rule is about elapsed time.
+  it('holds a slow peer to the cap, warning once when dropping starts and once when it ends, however often it answers', async () => {
+    let clock = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => clock);
     const connections = redis.connections;
     redis.trickle = true;
-    const answering = setInterval(() => redis.answerOne(), 1000);
-    try {
-      broadcast(WS_REDIS_MAX_UNANSWERED + 3000);
-      await sleep(2500);
 
-      expect(held()).toBeLessThanOrEqual(WS_REDIS_MAX_UNANSWERED);
-      expect(held()).toBeGreaterThan(WS_REDIS_MAX_UNANSWERED - 10);
-      expect(redis.published.length).toBeLessThanOrEqual(WS_REDIS_MAX_UNANSWERED + 3);
-      expect(redis.connections).toBe(connections);
-      expect(pub.status).toBe('ready');
-      // Once per burst, not once per frame.
-      const capLines = warn.mock.calls.flat().filter(line => String(line).includes('fan-out frames are dropped'));
-      expect(capLines).toHaveLength(1);
-    } finally {
-      clearInterval(answering);
+    // The queue is half full, which is the last moment it counted as being on top of its work...
+    broadcast(WS_REDIS_MAX_UNANSWERED / 2);
+    // ...and it stays above that for longer than a command is given to be answered.
+    clock += WS_REDIS_COMMAND_TIMEOUT_MS + 100;
+    broadcast(WS_REDIS_MAX_UNANSWERED);
+
+    expect(held()).toBe(WS_REDIS_MAX_UNANSWERED);
+    expect(await waitUntil(() => redis.published.length >= WS_REDIS_MAX_UNANSWERED, 10_000)).toBe(true);
+    expect(redis.published.length).toBe(WS_REDIS_MAX_UNANSWERED);
+    expect(redis.connections).toBe(connections);
+    expect(pub.status).toBe('ready');
+    expect(warned('fan-out frames are dropped')).toHaveLength(1);
+
+    // Each reply frees one slot and the next frame arrives: that must not end the episode, or every reply would
+    // log two lines and let one frame through. It ends when the queue is back below half the cap.
+    for (let reply = 0; reply < 30; reply++) {
+      const before = held();
+      redis.answerOne();
+      expect(await waitUntil(() => held() < before, 3000)).toBe(true);
+      broadcast(1);
     }
+    expect(held()).toBe(WS_REDIS_MAX_UNANSWERED - 30);
+    expect(warned('fan-out frames are dropped')).toHaveLength(1);
+    expect(warned('were dropped')).toHaveLength(0);
 
     // The peer catches up: everything it owed is answered, and events are published again.
     redis.trickle = false;
     redis.answerAll();
-    expect(await waitUntil(() => held() === 0, 3000)).toBe(true);
+    expect(await waitUntil(() => held() === 0, 5000)).toBe(true);
     const published = redis.published.length;
-    broadcast(1);
-    expect(await waitUntil(() => redis.published.length === published + 1, 3000)).toBe(true);
-    expect(warn.mock.calls.flat().some(line => String(line).includes('were dropped'))).toBe(true);
+    broadcast(2);
+    expect(await waitUntil(() => redis.published.length === published + 2, 5000)).toBe(true);
+    // One line for the whole episode, with its count: 6,000 dropped by the burst and 30 while it was answering.
+    const ended = warned('were dropped');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toContain(`${WS_REDIS_MAX_UNANSWERED / 2 + 30} fan-out frames`);
   }, 30_000);
 
   it('settles a publish within its deadline, then drops the connection after the socket deadline, holds nothing more, and recovers', async () => {

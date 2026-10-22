@@ -267,18 +267,86 @@ describe('RedisIoAdapter', () => {
         }
       };
 
-      it('does not publish a frame while the queue is at the cap, and publishes again below it', async () => {
-        // The figure docs/13 quotes. A 10 s silence at 1000 events a second must still fit, with room to spare.
+      it('pins the figures docs/13 quotes, and a 10 s silence at 1000 events a second fits under them', () => {
         expect(WS_REDIS_MAX_UNANSWERED).toBe(12_000);
         expect(WS_REDIS_MAX_UNANSWERED).toBeGreaterThanOrEqual((WS_REDIS_SOCKET_TIMEOUT_MS / 1000) * 1000 * 1.2);
-        const queue = { length: WS_REDIS_MAX_UNANSWERED };
+      });
+
+      // Slowness is judged by how long the backlog has lasted, not by its depth: a burst raised in one tick is all on the
+      // queue before any reply can be read.
+      it('does not cut a deep queue that is new, however large', async () => {
+        const queue = { length: 0 };
         await withPublisher(queue, async pub => {
-          await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
-          expect(pub.sent).not.toHaveBeenCalled();
-          queue.length = WS_REDIS_MAX_UNANSWERED - 1;
+          await pub.publish('socket.io#/events#', 'frame');
+          queue.length = WS_REDIS_MAX_UNANSWERED * 2;
           await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(1);
-          expect(pub.sent).toHaveBeenCalledTimes(1);
+          expect(pub.sent).toHaveBeenCalledTimes(2);
         });
+      });
+
+      it('drops frames once the queue is at the cap and has been above half of it for longer than a command is given', async () => {
+        let clock = 1_000_000;
+        const now = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+        const queue = { length: 0 };
+        try {
+          await withPublisher(queue, async pub => {
+            await pub.publish('socket.io#/events#', 'frame');
+            queue.length = WS_REDIS_MAX_UNANSWERED / 2;
+            clock += WS_REDIS_COMMAND_TIMEOUT_MS;
+            // At the cap, but only exactly as long as a command is given: not yet.
+            queue.length = WS_REDIS_MAX_UNANSWERED;
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(1);
+            clock += 1;
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
+            expect(pub.sent).toHaveBeenCalledTimes(2);
+            // Dropping goes on until the queue is back below half the cap, not until it is below the cap.
+            queue.length = WS_REDIS_MAX_UNANSWERED - 1;
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
+            queue.length = WS_REDIS_MAX_UNANSWERED / 2;
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
+            queue.length = WS_REDIS_MAX_UNANSWERED / 2 - 1;
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(1);
+            expect(pub.sent).toHaveBeenCalledTimes(3);
+          });
+        } finally {
+          now.mockRestore();
+        }
+      });
+
+      it('warns once when an episode starts and once when it ends, each with its own count', async () => {
+        let clock = 1_000_000;
+        const now = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const lines = (text: string): string[] =>
+          warn.mock.calls.map(([line]) => String(line)).filter(line => line.includes(text));
+        const queue = { length: 0 };
+        try {
+          await withPublisher(queue, async pub => {
+            const episode = async (frames: number): Promise<void> => {
+              queue.length = 0;
+              await pub.publish('socket.io#/events#', 'frame');
+              queue.length = WS_REDIS_MAX_UNANSWERED / 2;
+              clock += WS_REDIS_COMMAND_TIMEOUT_MS + 1;
+              queue.length = WS_REDIS_MAX_UNANSWERED;
+              for (let frame = 0; frame < frames; frame++) await pub.publish('socket.io#/events#', 'frame');
+              queue.length = 0;
+              await pub.publish('socket.io#/events#', 'frame');
+              await pub.publish('socket.io#/events#', 'frame');
+            };
+
+            await episode(5);
+            await episode(2);
+
+            expect(lines('fan-out frames are dropped')).toHaveLength(2);
+            const ended = lines('were dropped');
+            expect(ended).toHaveLength(2);
+            expect(ended[0]).toContain('5 fan-out frames');
+            expect(ended[1]).toContain('2 fan-out frames');
+          });
+        } finally {
+          now.mockRestore();
+          warn.mockRestore();
+        }
       });
 
       it('applies no cap, and does not fail, when the client exposes no command queue', async () => {
