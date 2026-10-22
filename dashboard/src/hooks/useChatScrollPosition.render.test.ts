@@ -1521,3 +1521,36 @@ for (const scenario of [
     }
   });
 }
+
+// The frame of a decode that finds its chat left drops the batch it was asked for: the queue is shared by every chat
+// the container shows, and one that kept the element of the chat left would make each later decode queue behind it
+// without asking for a frame, so the reader would no longer be held.
+test('a decode whose frame runs after a chat switch does not stop the next chat from holding its reader', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  t.rows[10] = { id: 'a10', h: 100, img: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1210); // the reader reads back in A, a12 the first row they see
+    t.rows[10] = { id: 'a10', h: 100, img: 300 };
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="a10"]') });
+    const rowsOfB = textRows('b', 46);
+    rowsOfB[10] = { id: 'b10', h: 100, img: 0 };
+    t.rows = rowsOfB;
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows })); // B is opened before that decode's frame
+    await nextFrame(); // the frame finds A left
+    fireEvent.scroll(el); // the restore's own event (B opened at its bottom)
+    readerScrollsTo(el, 1210); // the reader reads back in B
+
+    t.rows[10] = { id: 'b10', h: 100, img: 300 };
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="b10"]') });
+    await nextFrame();
+    assert.equal(el.scrollTop, 1210 + 300, 'the image above the reader in B moved them off their message');
+  } finally {
+    restore();
+  }
+});
