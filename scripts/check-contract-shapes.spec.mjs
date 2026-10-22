@@ -419,19 +419,50 @@ test('schemaCoverageProblems accepts a recorded schema and rejects a record that
   assert.ok(stale.some(p => /GoneDto.*no exposed operation/.test(p)));
 });
 
-test('unexposedResources reads the README paragraph and refuses a README it cannot read', () => {
-  const names = ['docs', 'auth/*', 'audit', 'settings', 'stats', 'automation', 'infra', 'plugins'];
-  const readme = `> Deliberately **not** exposed: ${names.map(n => `\`${n}\``).join(', ')}.\n> Everything else the gateway publishes is exposed.`;
-  assert.deepEqual(
-    [...unexposedResources(readme)],
-    ['docs', 'auth', 'audit', 'settings', 'stats', 'automation', 'infra', 'plugins'],
-  );
+test('exposedSchemas reads a README entry with a sub-path as a path prefix, not as the whole resource', () => {
+  // sdk/README.md lists `auth/api-keys` and says key validation itself is exposed. Unexposing the resource
+  // `auth` dropped POST /api/auth/validate too, so its response schema was never required to be compared.
+  // `automation` unexposes the automation-rules routes, whose segment carries a suffix.
+  const spec = {
+    paths: {
+      '/api/auth/validate': { post: { responses: { 200: json(ref('ValidateDto')) } } },
+      '/api/auth/api-keys': { post: { requestBody: json(ref('KeyBodyDto')), responses: { 201: json(ref('KeyDto')) } } },
+      '/api/auth/api-keys/{id}': { get: { responses: { 200: json(ref('KeyDto')) } } },
+      '/api/auth/api-keys-other': { get: { responses: { 200: json(ref('OtherDto')) } } },
+      '/api/sessions/{sessionId}/automation-rules': { get: { responses: { 200: json(ref('RuleDto')) } } },
+    },
+    components: {
+      schemas: Object.fromEntries(
+        ['ValidateDto', 'KeyBodyDto', 'KeyDto', 'OtherDto', 'RuleDto'].map(name => [name, { type: 'object' }]),
+      ),
+    },
+  };
+  // OtherDto stays: a prefix ends at a path segment, so `auth/api-keys` does not cover `auth/api-keys-other`.
+  const found = exposedSchemas(spec, new Set(['auth/api-keys', 'automation']));
+  assert.deepEqual([...found].sort(), ['OtherDto', 'ValidateDto']);
+});
+
+test('unexposedResources reads the README paragraph as written and refuses a README it cannot read', () => {
+  const names = ['docs', 'auth/api-keys', 'audit', 'settings', 'stats', 'automation', 'infra', 'plugins'];
+  // The real README follows `auth/api-keys` with a remark that names the `auth` row of its table.
+  const readme = `> Deliberately **not** exposed: \`docs\`, \`auth/api-keys\` (key validation itself is the \`auth\` row above), ${names
+    .slice(2)
+    .map(n => `\`${n}\``)
+    .join(', ')}.\n> Everything else the gateway publishes is exposed.`;
+  // `auth/api-keys` stays whole: the entry is a path under /api/auth, not the resource `auth`.
+  assert.deepEqual([...unexposedResources(readme)], names);
   assert.throws(() => unexposedResources('no such paragraph'), /Deliberately not exposed/);
   assert.throws(
     () => unexposedResources('Deliberately **not** exposed: `docs`. Everything else the gateway publishes'),
     /only 1/,
   );
-  // The real README must still parse, or the coverage check has lost its scope.
-  const real = readFileSync(fileURLToPath(new URL('../sdk/README.md', import.meta.url)), 'utf8');
-  assert.ok(unexposedResources(real).has('audit'));
+  // The real README must still parse, or the coverage check has lost its scope: key validation is in it,
+  // the key management routes are not.
+  const real = unexposedResources(readFileSync(fileURLToPath(new URL('../sdk/README.md', import.meta.url)), 'utf8'));
+  assert.ok(real.has('audit'));
+  assert.ok(real.has('auth/api-keys') && !real.has('auth'));
+  const openapi = JSON.parse(readFileSync(fileURLToPath(new URL('../openapi.json', import.meta.url)), 'utf8'));
+  const exposed = exposedSchemas(openapi, real);
+  assert.ok(exposed.has('ValidateApiKeyResponseDto'));
+  assert.ok(!exposed.has('ApiKeyCreatedResponseDto'));
 });

@@ -1307,7 +1307,8 @@ export interface HealthReadyResponse {
 
 export interface AuthValidateResponse {
   valid: boolean;
-  role?: string;
+  /** The key's role; present only when the key is valid. */
+  role?: 'admin' | 'operator' | 'viewer';
   engineType?: string;
   scoped?: boolean;
 }

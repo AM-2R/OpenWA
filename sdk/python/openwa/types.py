@@ -1301,9 +1301,15 @@ class HealthReadyResponse(TypedDict):
 # ── Auth ──────────────────────────────────────────────────────────
 
 
-class AuthValidateResponse(TypedDict, total=False):
+class _AuthValidateRequired(TypedDict):
     valid: bool
-    role: str
+
+
+# Inherited rather than spelled NotRequired: the class-form annotations of this module are lazy, so the
+# runtime key sets (__optional_keys__) only follow the total flag.
+class AuthValidateResponse(_AuthValidateRequired, total=False):
+    # The key's role; present only when the key is valid.
+    role: Literal["admin", "operator", "viewer"]
     engineType: str
     scoped: bool
 

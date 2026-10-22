@@ -150,6 +150,7 @@ const MAPPINGS = {
     WebhookRedriveResult: 'WebhookRedriveResultDto',
     WebhookResponse: 'WebhookResponseDto',
     // Payloads that sat outside every mapping until the coverage check required one.
+    AuthValidateResponse: 'ValidateApiKeyResponseDto',
     CatalogInfo: 'CatalogDto',
     CatalogProduct: 'ProductDto',
     ChannelMessageRecord: 'ChannelMessageDto',
@@ -214,11 +215,11 @@ const MAPPINGS = {
  * added makes the shrink loud.
  */
 const MINIMUM_MAPPED = {
-  'sdk/javascript/src/types.ts': 117,
+  'sdk/javascript/src/types.ts': 118,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 129,
-  'sdk/go': 130,
-  'sdk/java': 134,
+  'sdk/python/openwa/types.py': 130,
+  'sdk/go': 131,
+  'sdk/java': 135,
 };
 
 /** Known drift, deliberately not gated yet — each line is a to-adjudicate follow-up. */
@@ -244,6 +245,8 @@ const EXCLUDED = {
       'BY DESIGN: `participants` carries no omitempty so that a non-nil slice always sends the key, empty included, and naming nobody stays a 400 instead of collapsing into the absent key that means every pending request',
     StatusRecord:
       'Type is a plain string holding text, image, video or voice; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
+    AuthValidateResponse:
+      'Role is a plain string holding admin, operator or viewer; a defined type would be a source break for callers that pass it on as a string. The other fields conform',
   },
   'sdk/java': {
     UpdateSessionConfigRequest:
@@ -252,6 +255,8 @@ const EXCLUDED = {
       'memberAddMode is a String because this record is also the PUT body; the MemberAddMode enum that GroupInfo uses would break callers that pass a string. The other components conform',
     StatusRecord:
       'type is a String holding text, image, video or voice; an enum would break callers that compare it as a string. The other components conform',
+    AuthValidateResponse:
+      'role is a String holding admin, operator or viewer; an enum would break callers that compare it as a string. The other components conform',
   },
   'dashboard/src/services/api.ts': {
     Webhook:
@@ -383,6 +388,7 @@ const PYTHON_MAPPING = {
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
   // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
   BatchError: 'BatchMessageErrorDto',
   BulkOptions: 'BulkMessageOptionsDto',
   CatalogInfo: 'CatalogDto',
@@ -514,6 +520,7 @@ const GO_MAPPING = {
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
   // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
   BatchError: 'BatchMessageErrorDto',
   BulkOptions: 'BulkMessageOptionsDto',
   CatalogInfo: 'CatalogDto',
@@ -653,6 +660,7 @@ const JAVA_MAPPING = {
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
   // Payloads that sat outside every mapping until the coverage check required one.
+  AuthValidateResponse: 'ValidateApiKeyResponseDto',
   BatchError: 'BatchMessageErrorDto',
   Call: 'ChatHistoryCallDto',
   CatalogInfo: 'CatalogDto',
@@ -1328,7 +1336,10 @@ export function parseJavaTypes(sources) {
 
 /**
  * The resources sdk/README.md declares deliberately unexposed, read from the README rather than
- * restated here, the way check-sdk-coverage.mjs reads it: a hand-copied second list is what drifts.
+ * restated here: a hand-copied second list is what drifts. Entries are kept as written, because
+ * `audit` is a whole resource while `auth/api-keys` is one path under /api/auth, next to the
+ * exposed `auth/validate`. A parenthetical is commentary on the entry before it, and its own
+ * backticks ("key validation itself is the `auth` row above") name no entry.
  */
 export function unexposedResources(readme) {
   const start = readme.indexOf('Deliberately **not** exposed');
@@ -1338,7 +1349,8 @@ export function unexposedResources(readme) {
       'sdk/README.md: could not find the "Deliberately not exposed" paragraph, so the schema coverage check cannot derive its scope.',
     );
   }
-  const names = [...readme.slice(start, end).matchAll(/`([^`]+)`/g)].map(m => m[1].split('/')[0].trim());
+  const paragraph = readme.slice(start, end).replace(/\([^)]*\)/g, '');
+  const names = [...paragraph.matchAll(/`([^`]+)`/g)].map(m => m[1].trim());
   if (names.length < 8) {
     throw new Error(`sdk/README.md: parsed only ${names.length} unexposed resources, expected the full list.`);
   }
@@ -1363,10 +1375,12 @@ export function exposedSchemas(openapi, unexposed) {
     }
     Object.values(node).forEach(visit);
   };
+  const prefixes = [...unexposed].filter(entry => entry.includes('/')).map(entry => `/api/${entry}`);
   for (const [path, item] of Object.entries(openapi.paths)) {
     const shape = path.replace(/\{[^}]*\}/g, '*');
     const resource = /^\/api\/sessions\/\*\/([^/]+)/.exec(shape)?.[1] ?? /^\/api\/([^/*]+)/.exec(shape)?.[1] ?? '';
     if (unexposed.has(resource) || unexposed.has(resource.replace(/-rules$/, ''))) continue;
+    if (prefixes.some(prefix => shape === prefix || shape.startsWith(`${prefix}/`))) continue;
     for (const operation of Object.values(item)) {
       if (!operation || typeof operation !== 'object') continue;
       visit(operation.requestBody);
