@@ -277,12 +277,15 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
 - **Default timeout** is 30s (configurable). `0` turns it off in the JavaScript,
   Python and PHP clients; the Go client reads `0` as the 30s default and the Java
   builder refuses it. The JavaScript, PHP, Go and Java clients bound the whole call,
-  response body included. The Python client's is per network operation
-  (connect, read, write, pool), so a response that keeps trickling bytes is not
-  cut off. On PHP, Guzzle 7's stream handler (a host without `ext-curl`) differs: a
-  `0` still leaves PHP's `default_socket_timeout` (60s by default) before the
-  response headers, and that wait ends with a Guzzle exception, not
-  `OpenWATimeoutException`; see the PHP README. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  response body included, except PHP on Guzzle 7's stream handler (below). The
+  Python client's is per network operation (connect, read, write, pool), so a
+  response that keeps trickling bytes is not cut off. On PHP, Guzzle 7's stream
+  handler (a host without `ext-curl`) bounds each wait instead of the whole call:
+  the wait for the response headers and each silence in the body, which can last
+  up to about twice the `timeout`. A body that keeps trickling bytes is therefore
+  not cut off. There a `0` still leaves PHP's `default_socket_timeout` (60s by
+  default) before the response headers, and that wait ends with a Guzzle
+  exception, not `OpenWATimeoutException`; see the PHP README. Path segments (chat / message ids) are percent-encoded; a base-URL path
   prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development
