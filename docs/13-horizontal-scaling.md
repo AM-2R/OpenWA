@@ -153,7 +153,8 @@
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
 > than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches
 > the other replicas late. A longer silence, a restart, a failover or an outage drops the connection a node
-> publishes on, and what was written to it may be lost with it. The events that node raises while it is
+> publishes on, and what was written to it may be lost with it, or may still reach the other replicas late
+> and after newer events, which their clients then apply out of order. The events that node raises while it is
 > disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are dropped for the clients
 > connected to the other replicas: they are not delivered late and not twice. Clients connected to the node
 > that raised an event are served directly, and webhooks do not use this path, so neither is affected. Memory

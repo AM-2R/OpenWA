@@ -100,13 +100,14 @@ export function rejectRootNamespace(server: Server): void {
  * Delivery while Redis is away or slow: the fan-out to the other replicas is best effort and keeps no replay
  * queue. A Redis that pauses for less than WS_REDIS_SOCKET_TIMEOUT_MS answers afterwards, and every event raised
  * meanwhile reaches them late. Silence for that long destroys the publisher's socket, and so does a restart, a
- * failover or an outage: what was written to the dropped connection may be lost with it. The events this node
- * raises while it is disconnected, plus its reconnect backoff of up to 5 s once Redis is back (wsRedisOptions),
- * are dropped for the other replicas, never delivered late and never twice. A Redis that keeps answering, but
- * slower than events are raised, never looks silent: it is bounded by WS_REDIS_MAX_UNANSWERED, above which
- * frames are dropped for the other replicas until it catches up. Clients on this node are served by the local
- * broadcast and webhooks do not use this path, so neither is affected. What the publisher holds is bounded by one
- * socket deadline of traffic for a silent Redis and by that cap for a slow one.
+ * failover or an outage: what was written to the dropped connection may be lost with it, or may still reach the
+ * other replicas late and after newer events. The events this node raises while it is disconnected, plus its
+ * reconnect backoff of up to 5 s once Redis is back (wsRedisOptions), are dropped for the other replicas, never
+ * delivered late and never twice. A Redis that keeps answering, but slower than events are raised, never looks
+ * silent: it is bounded by WS_REDIS_MAX_UNANSWERED, above which frames are dropped for the other replicas until
+ * it catches up. Clients on this node are served by the local broadcast and webhooks do not use this path, so
+ * neither is affected. What the publisher holds is bounded by one socket deadline of traffic for a silent Redis
+ * and by that cap for a slow one.
  */
 export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
