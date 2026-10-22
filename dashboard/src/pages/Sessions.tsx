@@ -885,7 +885,18 @@ export function Sessions() {
                       maxLength={15}
                       placeholder={t('sessions.pairing.phonePlaceholder')}
                       value={phoneNumber}
-                      onChange={e => setPhoneNumber(normalizePhoneText(e.target.value).replace(/\D/g, ''))}
+                      // A composition in progress is left as typed, since rewriting it garbles what the IME commits;
+                      // it is read when the composition ends. Pasted and directly typed text is read at once.
+                      onChange={e =>
+                        setPhoneNumber(
+                          (e.nativeEvent as InputEvent).isComposing
+                            ? e.target.value
+                            : normalizePhoneText(e.target.value).replace(/\D/g, ''),
+                        )
+                      }
+                      onCompositionEnd={e =>
+                        setPhoneNumber(normalizePhoneText(e.currentTarget.value).replace(/\D/g, ''))
+                      }
                       onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
                     />
                     <p className="input-hint" style={{ marginBottom: '1.5rem' }}>

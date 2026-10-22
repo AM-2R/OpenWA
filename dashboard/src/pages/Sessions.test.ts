@@ -655,6 +655,35 @@ test('a pairing phone number typed in native-script or full-width digits is kept
   }
 });
 
+// An IME composition in progress is the field's own text: a controlled input that rewrites it mid-composition garbles
+// what the IME then commits. The digits are read when the composition ends; pasted and directly typed text is read at once.
+test('the pairing phone field leaves a composition in progress alone and reads it when it ends', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+  await screen.findByAltText('QR');
+  fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+  const fullwidth = (ascii: string) => [...ascii].map(d => String.fromCharCode(0xff10 + Number(d))).join('');
+
+  fireEvent.compositionStart(phoneInput);
+  fireEvent.input(phoneInput, { target: { value: fullwidth('6') }, isComposing: true });
+  assert.equal(phoneInput.value, fullwidth('6'));
+  fireEvent.input(phoneInput, { target: { value: fullwidth('62') }, isComposing: true });
+  assert.equal(phoneInput.value, fullwidth('62'));
+
+  fireEvent.compositionEnd(phoneInput);
+  assert.equal(phoneInput.value, '62');
+
+  // Outside a composition the text is read at once, as before.
+  fireEvent.input(phoneInput, { target: { value: fullwidth('628123456789') } });
+  assert.equal(phoneInput.value, '628123456789');
+});
+
 // Nothing server-side refuses a pairing code for a number linked elsewhere, so the panel has to say
 // what it can cost before the operator types one.
 test('the phone pairing tab warns that a code can unlink an existing session', async () => {
