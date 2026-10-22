@@ -107,7 +107,7 @@ test('an unscoped admin key still checks for a newer release', async () => {
   await rtl.waitFor(() => assert.ok(requested.some(url => url.includes('/infra/update-check'))));
 });
 
-// The Number Checker is open to every role: a viewer sees the page and why its Check button is off.
+// The sidebar offers the Number Checker to every role; a viewer key gets the page with its Check buttons disabled.
 for (const userRole of ['admin', 'operator', 'viewer'] as const) {
   test(`the Number Checker is offered to ${userRole} keys`, () => {
     renderLayout(false, userRole);
