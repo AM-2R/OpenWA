@@ -44,7 +44,8 @@ export interface ChatStateStore {
    * Like {@link remember}, but first folds the rows filed under `twins` (other spellings of the chat)
    * onto `chatId`: all the rows, read from the table and merged by {@link mergeTwinStates}, are the
    * merge base, and the twin rows are deleted once the result is written. `create` applies as in
-   * {@link remember} when no twin row is found.
+   * {@link remember} when no twin row is found. Writes of the twins wait for it, so none can land between
+   * the read of a twin row and its delete.
    */
   fold(
     sessionId: string,
@@ -157,7 +158,10 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private readonly sessionWrites = new Map<string, SessionWrites>();
   private warnedEviction = false;
   private readonly maxEntries: number;
-  /** One write chain per chat, so each remember() merges onto the state the previous one left. */
+  /**
+   * One write chain per chat, so each remember() merges onto the state the previous one left. A fold
+   * holds the chains of its twins as well (see {@link enqueue}).
+   */
   private readonly writes = new KeyedMutationQueue();
   /**
    * A load (reload, refreshSession, a read-through) reads the table while writes go on, so its rows can
@@ -243,7 +247,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   remember(sessionId: string, chatId: string, patch: Partial<ChatStateValue>, create = true): Promise<void> {
     const k = this.key(sessionId, chatId);
     const generation = this.writesOf(sessionId).generation;
-    return this.enqueue(sessionId, k, async () => {
+    return this.enqueue(sessionId, [k], async () => {
       await this.applyPatch(k, sessionId, chatId, patch, generation, create);
     });
   }
@@ -257,21 +261,36 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   ): Promise<void> {
     const k = this.key(sessionId, chatId);
     const generation = this.writesOf(sessionId).generation;
-    return this.enqueue(sessionId, k, () => this.applyFold(k, sessionId, chatId, twins, patch, generation, create));
+    const keys = [...new Set([k, ...twins.map(twin => this.key(sessionId, twin))])];
+    return this.enqueue(sessionId, keys, () => this.applyFold(k, sessionId, chatId, twins, patch, generation, create));
   }
 
-  /** Queues work on the chat's write chain and counts it under the session until it settles. */
-  private enqueue(sessionId: string, k: string, work: () => Promise<void>): Promise<void> {
+  /**
+   * Queues work on the write chain of each key and counts it under the session until it settles. The
+   * work starts once it is first in line on all of them and holds them until it ends. Every chain is
+   * joined in this one synchronous step, so they all order their work alike and two works sharing
+   * chains can never each wait for the other; the work itself must not queue on a chain it holds.
+   */
+  private enqueue(sessionId: string, keys: string[], work: () => Promise<void>): Promise<void> {
     const { pending } = this.writesOf(sessionId);
-    this.inFlight.set(k, (this.inFlight.get(k) ?? 0) + 1);
-    // Settled inside the chain, before the work counts as done, so a load never sees the chat idle
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    const turns = keys.map(k => {
+      this.inFlight.set(k, (this.inFlight.get(k) ?? 0) + 1);
+      return new Promise<void>(turn =>
+        this.writes.enqueue(k, () => {
+          turn();
+          return held;
+        }),
+      );
+    });
+    // Settled inside the chains, before the work counts as done, so a load never sees the chat idle
     // without also seeing the change.
-    const done = new Promise<void>((resolve, reject) =>
-      this.writes.enqueue(k, () =>
-        work()
-          .finally(() => this.settled(k))
-          .then(resolve, reject),
-      ),
+    const done = Promise.all(turns).then(() =>
+      work().finally(() => {
+        for (const k of keys) this.settled(k);
+        release();
+      }),
     );
     pending.add(done);
     const settle = () => pending.delete(done);
@@ -363,19 +382,29 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     const merged = mergeTwinStates(rows)!;
     const base = Object.fromEntries(FIELDS.filter(f => saw(merged, f)).map(f => [f, merged[f]]));
     if (await this.applyPatch(k, sessionId, chatId, { ...base, ...patch }, generation)) {
-      await this.forget(sessionId, found);
+      // Deleted here, not through forget(), which would queue behind this fold on the chains it holds.
+      await Promise.all(
+        found.map(twin => {
+          const tk = this.key(sessionId, twin);
+          this.states.delete(tk);
+          this.markAbsent(tk);
+          return this.drop(sessionId, twin);
+        }),
+      );
     }
   }
 
-  /** The row as the table holds it: the cache when it has the key or knows it absent, else a query. */
+  /**
+   * The row as the table holds it: the cache when it has the key or knows it absent, else a query. The
+   * fold holds the chain of every key it reads, so no write or forget of the chat lands between the read
+   * and its answer, and a miss is recorded like a listing's, or every fold of a lid-addressed chat would
+   * query its twin again.
+   */
   private async peek(k: string, sessionId: string, chatId: string): Promise<ChatStateValue | undefined> {
     const cached = this.states.get(k);
     if (cached || this.completeSessions.has(sessionId) || this.absent.has(k)) return cached;
-    const since = this.touchSeq;
     const row = await this.repo.findOne({ where: { sessionId, chatId } });
-    // Recorded like a listing's miss, or every fold of a lid-addressed chat queries its twin again; not when a
-    // write or forget of the chat came after the read began, which the answer cannot tell.
-    if (!row && !this.states.has(k) && !this.changedSince(k, since)) this.markAbsent(k);
+    if (!row && !this.states.has(k)) this.markAbsent(k);
     return row ? fromRow(row) : undefined;
   }
 
@@ -525,19 +554,23 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
         const k = this.key(sessionId, chatId);
         this.states.delete(k);
         this.markAbsent(k);
-        return this.enqueue(sessionId, k, async () => {
-          try {
-            await this.repo.delete({ sessionId, chatId });
-            this.markAbsent(k);
-          } catch (err) {
-            this.logger.warn(
-              `Failed to forget chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          this.states.delete(k);
-        });
+        return this.enqueue(sessionId, [k], () => this.drop(sessionId, chatId));
       }),
     );
+  }
+
+  /** Deletes the chat's row; run with the chat's write chain held. */
+  private async drop(sessionId: string, chatId: string): Promise<void> {
+    const k = this.key(sessionId, chatId);
+    try {
+      await this.repo.delete({ sessionId, chatId });
+      this.markAbsent(k);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to forget chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    this.states.delete(k);
   }
 
   /**

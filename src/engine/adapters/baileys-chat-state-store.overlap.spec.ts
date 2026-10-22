@@ -1,5 +1,5 @@
 import { Repository } from 'typeorm';
-import { ChatStateField, ChatStateStoreService } from './baileys-chat-state-store.service';
+import { ChatStateField, ChatStateStoreService, mergeTwinStates } from './baileys-chat-state-store.service';
 import { ChatState } from './baileys-chat-state.entity';
 
 const KEY = (s: string, c: string): string => `${s}\u0000${c}`;
@@ -217,26 +217,114 @@ describe('ChatStateStoreService loads that overlap a write, a forget or an unlin
     expect(svc.get('s', 'c')?.archived).toBe(true);
   });
 
-  it('does not leave a written twin chat hidden behind a no-row answer a fold read before its write', async () => {
-    const t = scriptedRepo();
-    const svc = storeOf(t);
-    const fold = svc.fold('s', 'p@s.whatsapp.net', ['l@lid'], { archived: true });
-    const write = svc.remember('s', 'l@lid', { pinned: true });
-    const reload = svc.reload();
-    const snapshot = await t.start('find'); // the reload reads the empty table
-    await t.run('findOne', 'l@lid'); // the write finds no row, caches its change and submits the upsert
-    await snapshot(); // the reload applies its answer and drops what the write cached
-    await reload;
-    await t.run('findOne', 'p@s.whatsapp.net'); // the fold reads its own chat: no row
-    const twinRead = await t.start('findOne', 'l@lid'); // then its twin: still no row
-    await t.run('upsert', 'l@lid'); // the write lands
-    await twinRead(); // the old no-row answer arrives
-    await t.drain();
-    await Promise.all([fold, write]);
-    expect(t.rows.get(KEY('s', 'l@lid'))?.pinned).toBe(true);
-    svc.get('s', 'l@lid'); // a chat list read must warm from the table, not trust an absent mark
-    await t.drain();
-    expect(svc.get('s', 'l@lid')?.pinned).toBe(true);
+  describe('a fold of a chat and a write of its twin', () => {
+    const P = 'p@s.whatsapp.net';
+    const L = 'l@lid';
+    /** The chat as a listing reads it: its rows merged field by field. */
+    const view = (t: ReturnType<typeof scriptedRepo>) =>
+      mergeTwinStates(
+        [...t.rows.values()].map(r => ({
+          muteEndTime: r.muteEndTime,
+          archived: r.archived,
+          pinned: r.pinned,
+          updatedAt: r.updatedAt?.getTime(),
+          observed: r.observed == null ? undefined : (r.observed.split(',').filter(Boolean) as ChatStateField[]),
+        })),
+      );
+
+    it('does not leave a written twin chat hidden behind a no-row answer a fold read before its write', async () => {
+      const t = scriptedRepo();
+      const svc = storeOf(t);
+      const fold = svc.fold('s', P, [L], { archived: true });
+      const write = svc.remember('s', L, { pinned: true });
+      const reload = svc.reload();
+      const snapshot = await t.start('find'); // the reload reads the empty table
+      await t.run('findOne', P); // the fold reads its own chat: no row
+      await t.run('findOne', L); // then its twin: no row, and the write of the twin waits for the fold
+      await snapshot();
+      await reload;
+      await t.drain();
+      await Promise.all([fold, write]);
+      expect(t.rows.get(KEY('s', L))?.pinned).toBe(true);
+      svc.get('s', L); // a chat list read must warm from the table, not trust an absent mark
+      await t.drain();
+      expect(svc.get('s', L)?.pinned).toBe(true);
+    });
+
+    it('keeps what a fold merged when a write of the twin in the same tick changes nothing', async () => {
+      const all = 'muteEndTime,archived,pinned';
+      const t = scriptedRepo([
+        { sessionId: 's', chatId: P, muteEndTime: 1234, observed: all, updatedAt: new Date(2) },
+        { sessionId: 's', chatId: L, muteEndTime: 555, archived: true, observed: all, updatedAt: new Date(3) },
+      ]);
+      const svc = storeOf(t);
+      const fold = svc.fold('s', P, [L], { pinned: true });
+      const write = svc.remember('s', L, { archived: true }); // already archived
+      await t.drain();
+      await Promise.all([fold, write]);
+      expect(view(t)).toMatchObject({ muteEndTime: 555, archived: true, pinned: true });
+    });
+
+    it('keeps a write of the twin that starts after the fold read the twin', async () => {
+      const t = scriptedRepo([{ sessionId: 's', chatId: L, muteEndTime: 1234, observed: 'muteEndTime' }]);
+      const svc = storeOf(t);
+      const fold = svc.fold('s', P, [L], { archived: true });
+      await t.run('findOne', P);
+      await t.run('findOne', L); // the fold has read the twin, muted until 1234
+      const write = svc.remember('s', L, { muteEndTime: 1001 });
+      await t.drain();
+      await Promise.all([fold, write]);
+      expect(view(t)).toMatchObject({ muteEndTime: 1001, archived: true });
+    });
+
+    it.each([
+      ['has a row', [{ sessionId: 's', chatId: L, archived: false, observed: 'archived', updatedAt: new Date(5) }]],
+      ['has no row', []],
+    ])('keeps a pin of the twin issued while the fold reads the twin, which %s', async (_name, twinRows) => {
+      const t = scriptedRepo([
+        { sessionId: 's', chatId: P, pinned: false, observed: 'pinned', updatedAt: new Date(3) },
+        ...twinRows,
+      ]);
+      const svc = storeOf(t);
+      const fold = svc.fold('s', P, [L], { muteEndTime: 5000 });
+      await t.run('findOne', P);
+      const twinRead = await t.start('findOne', L); // the twin is read, its answer is still out
+      const write = svc.remember('s', L, { pinned: true });
+      await twinRead();
+      await t.drain();
+      await Promise.all([fold, write]);
+      expect(view(t)).toMatchObject({ pinned: true, muteEndTime: 5000 });
+    });
+
+    it('counts the twin of a fold as changing only until the fold ends', async () => {
+      const t = scriptedRepo();
+      const svc = storeOf(t);
+      const fold = svc.fold('s', P, [L], { archived: true });
+      await t.drain();
+      await fold;
+      const pin = svc.remember('s', L, { pinned: true });
+      await t.drain();
+      await pin;
+      const reload = svc.reload();
+      await t.drain();
+      await reload;
+      expect(svc.get('s', L)?.pinned).toBe(true); // a reload sets aside the row of a chat still changing
+    });
+
+    it("lets folds that name each other's chat as a twin, or one twin twice, all finish", async () => {
+      const t = scriptedRepo([{ sessionId: 's', chatId: L, pinned: true, observed: 'pinned' }]);
+      const svc = storeOf(t);
+      let finished = false;
+      void Promise.all([
+        svc.fold('s', P, [L], { archived: true }),
+        svc.fold('s', L, [P], { muteEndTime: 1 }),
+        svc.fold('s', P, [L, L], { pinned: true }),
+      ]).then(() => (finished = true));
+      await t.drain(); // answers every query the folds make: one still waiting after that waits forever
+      await settle();
+      expect(finished).toBe(true);
+      expect(view(t)).toMatchObject({ pinned: true, archived: true, muteEndTime: 1 });
+    });
   });
 
   it('does not index an older read-through answer once cache pressure evicted the written chat', async () => {
