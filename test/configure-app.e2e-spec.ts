@@ -18,7 +18,8 @@ import { NestFactory } from '@nestjs/core';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { request as httpRequest } from 'http';
+import { request as httpRequest, type Server } from 'http';
+import type { AddressInfo } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { configureApp } from '../src/configure-app';
@@ -238,6 +239,54 @@ describe('production HTTP surface (configureApp)', () => {
     expect(res.headers['x-request-id']).toBeDefined();
     // A browser can read the refusal only if it carries the CORS headers.
     expect(res.headers['access-control-allow-origin']).toBe('https://allowed.example');
+  });
+
+  // The depth is read from the raw bytes, so the refusal does not wait for the parse: a body that is deeper than
+  // the cap and never closes is refused for its depth, not for being invalid JSON.
+  it('refuses a body for its depth before it is parsed', async () => {
+    const res = await request(app.getHttpServer()).post('/api/echo').type('json').send('['.repeat(101));
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      message: 'Request body must not nest objects or arrays more than 100 levels deep',
+    });
+  });
+
+  it('does not count brackets inside a string as nesting', async () => {
+    const text = `${'['.repeat(5000)}\\"${'{'.repeat(5000)}`;
+    const res = await request(app.getHttpServer()).post('/api/echo').type('json').send(`{"text":"${text}"}`);
+
+    expect(res.status).toBe(201);
+  });
+
+  // The raw scan reads UTF-8. A body in another UTF charset is decoded by the parser first, so it is walked
+  // after the parse instead and meets the same limit. Sent with node's http client: supertest would turn a
+  // Buffer into JSON.
+  it.each([
+    [100, 201],
+    [101, 400],
+  ])('holds a UTF-16 body nested %i levels to the same limit (%i)', async (levels, status) => {
+    const bytes = Buffer.from(nestedObjects(levels), 'utf16le');
+    const { port } = (app.getHttpServer() as Server).address() as AddressInfo;
+    const answered = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/api/echo',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-16le', 'Content-Length': String(bytes.length) },
+        },
+        res => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on('error', reject);
+      req.end(bytes);
+    });
+
+    expect(answered).toBe(status);
   });
 
   it('answers a DTO route 400, not 500, for a body nested thousands of levels deep', async () => {

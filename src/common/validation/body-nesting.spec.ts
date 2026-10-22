@@ -1,4 +1,4 @@
-import { exceedsBodyNesting, MAX_BODY_NESTING } from './body-nesting';
+import { exceedsBodyNesting, exceedsJsonNesting, MAX_BODY_NESTING } from './body-nesting';
 
 // One value holding `levels` nested containers: {} is one level, {a:{}} is two.
 const objects = (levels: number): unknown => {
@@ -11,6 +11,26 @@ const arrays = (levels: number): unknown => {
   for (let i = 1; i < levels; i++) value = [value];
   return value;
 };
+// The same documents as JSON text: '{"a":{}}' and '[[]]' are two levels.
+const objectText = (levels: number): string => '{"a":'.repeat(levels - 1) + '{}' + '}'.repeat(levels - 1);
+const arrayText = (levels: number): string => '['.repeat(levels) + ']'.repeat(levels);
+const mixedText = (levels: number): string => {
+  let text = '0';
+  for (let i = 0; i < levels; i++) text = i % 2 === 0 ? `[${text}]` : `{"a":${text}}`;
+  return text;
+};
+const scan = (text: string): boolean => exceedsJsonNesting(Buffer.from(text));
+
+describe('the nesting limit on the raw bytes', () => {
+  it.each([
+    ['objects', objectText],
+    ['arrays', arrayText],
+    ['alternating objects and arrays', mixedText],
+  ])('admits 100 levels of %s and refuses 101', (_kind, build) => {
+    expect(scan(build(100))).toBe(false);
+    expect(scan(build(101))).toBe(true);
+  });
+});
 
 describe('exceedsBodyNesting', () => {
   it.each([
@@ -40,4 +60,115 @@ describe('exceedsBodyNesting', () => {
   it.each([[undefined], [null], ['text'], [5], [true], [{}], [[]]])('passes the flat value %j', value => {
     expect(exceedsBodyNesting(value)).toBe(false);
   });
+});
+
+describe('exceedsJsonNesting', () => {
+  it('counts the deepest branch, not the breadth', () => {
+    const wide = `{"items":[${Array.from({ length: 5000 }, () => '{"tags":["a","b"],"meta":{"k":[1]}}').join(',')}]}`;
+    expect(scan(wide)).toBe(false);
+    // The wrapper adds two levels around the deeper branch: 99 + 2 is 101, 98 + 2 is 100.
+    expect(scan(`{"items":[${objectText(97)},${objectText(99)}]}`)).toBe(true);
+    expect(scan(`{"items":[${objectText(97)},${objectText(98)}]}`)).toBe(false);
+  });
+
+  it('does not count brackets and braces inside strings', () => {
+    expect(scan(JSON.stringify({ text: '['.repeat(5000) + '{'.repeat(5000) }))).toBe(false);
+    expect(scan(JSON.stringify({ ['['.repeat(500)]: 1 }))).toBe(false);
+  });
+
+  it('reads an escaped quote as part of the string, so what follows it is still inside', () => {
+    expect(scan('{"a":"say \\"' + '['.repeat(500) + '\\" now"}')).toBe(false);
+  });
+
+  it('reads an escaped backslash as complete, so a quote after it ends the string', () => {
+    // "\\" is one backslash; the quote closes the string and the brackets that follow are structure.
+    expect(scan('["\\\\",' + '['.repeat(101) + ']'.repeat(101) + ']')).toBe(true);
+    expect(scan('["\\\\",' + '['.repeat(98) + ']'.repeat(98) + ']')).toBe(false);
+  });
+
+  it('is not fooled by non-ASCII text around the structure', () => {
+    const text = JSON.stringify({ 'ключ[': ['日本語[[[', '\u{1F600}"', 'é\\'], nested: objects(98) });
+    expect(scan(text)).toBe(false);
+    expect(scan(`["日本語",${arrayText(100)}]`)).toBe(true);
+  });
+
+  it('decides on the first level past the cap, before reading the rest of the body', () => {
+    // Never closed and not valid JSON: the answer must not depend on reading it to the end.
+    expect(scan('['.repeat(101))).toBe(true);
+    expect(scan('['.repeat(100))).toBe(false);
+  });
+
+  it('answers for a body nested 100000 levels, and for an array of 8 million empty arrays', () => {
+    expect(scan(arrayText(100_000))).toBe(true);
+    expect(exceedsJsonNesting(Buffer.from('[' + '[],'.repeat(8_000_000) + '[]]'))).toBe(false);
+  });
+
+  // The scan has to agree with the walk over the parsed value, for any text. Random documents built around the
+  // cap, with keys and strings made of the characters that matter to the scan.
+  it('agrees with the walk over the parsed value on random documents around the cap', () => {
+    let seed = 20261022;
+    const next = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const pieces = [
+      '',
+      'a',
+      '[',
+      ']',
+      '{',
+      '}',
+      '"',
+      '\\',
+      '\\"',
+      '[[[[',
+      '"}]',
+      'é',
+      '日本',
+      '\u{1F600}',
+      '\u0000',
+      ':,',
+    ];
+    const text = (): string => pieces[Math.floor(next() * pieces.length)] + pieces[Math.floor(next() * pieces.length)];
+    const leaf = (): unknown => [text(), 1, true, null, text()][Math.floor(next() * 5)];
+    for (let levels = 95; levels <= 105; levels++) {
+      for (let n = 0; n < 40; n++) {
+        let value: unknown = leaf();
+        for (let i = 0; i < levels; i++) {
+          value = next() < 0.5 ? [leaf(), value, leaf()] : { [text()]: leaf(), [`k${text()}`]: value };
+        }
+        const json = JSON.stringify(value);
+        expect(scan(json)).toBe(levels > MAX_BODY_NESTING);
+        expect(exceedsBodyNesting(JSON.parse(json))).toBe(levels > MAX_BODY_NESTING);
+      }
+    }
+  });
+
+  // The scan runs on every JSON body before authentication, so it has to cost a small fraction of the parse
+  // that follows it. A walk over the parsed value cost 0.4 to 1.8 times the parse on these shapes.
+  it.each([
+    ['many keys', (bytes: number) => `{${Array.from({ length: bytes / 10 }, (_, i) => `"k${i}":0`).join(',')}}`],
+    ['many small containers', (bytes: number) => `[${'[0],'.repeat(bytes / 4 - 1)}[0]]`],
+    ['many empty arrays', (bytes: number) => `[${'[],'.repeat(bytes / 3 - 1)}[]]`],
+  ])(
+    'reads a body of %s in under half the time JSON.parse takes',
+    (_shape, make) => {
+      const body = make(12_000_000);
+      const bytes = Buffer.from(body);
+      const since = (start: bigint): number => Number(process.hrtime.bigint() - start) / 1e6;
+
+      const parseStart = process.hrtime.bigint();
+      JSON.parse(body);
+      const parseMs = since(parseStart);
+
+      let scanMs = Infinity;
+      for (let run = 0; run < 3; run++) {
+        const start = process.hrtime.bigint();
+        expect(exceedsJsonNesting(bytes)).toBe(false);
+        scanMs = Math.min(scanMs, since(start));
+      }
+      expect(scanMs).toBeLessThan(parseMs / 2);
+    },
+    60_000,
+  );
 });
