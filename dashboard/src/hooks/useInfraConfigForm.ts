@@ -122,10 +122,6 @@ export function useInfraConfigForm(
   // operator's in-progress, unsaved edits. A successful save restarts → full page reload, re-arming it.
   const formHydrated = useRef(false);
 
-  // The built-in flags are seeded from what is RUNNING, so until the operator flips one it is an
-  // observation, not a choice. A save then carries the stored flag instead (see builtInToSave).
-  const builtInTouched = useRef({ database: false, redis: false, storage: false });
-
   // The engine radio seeds ONCE from the saved file (see the effect below), then is never re-stamped by
   // a background refetch. `engineTouched` additionally wins over a late first resolution: if the
   // operator clicked a different engine before the seed resolved, the delayed seed must not revert
@@ -141,11 +137,13 @@ export function useInfraConfigForm(
   // operator's intent, so it supplies every selection and detail field: the running process is stale from
   // the moment a change is saved until the server restarts, and a form seeded from it writes that stale
   // value back over the saved one on the next save of ANY field, deleting the stored settings of the
-  // service it switched away from (the engine radio below learned the same, #1082). Only what the saved
-  // config cannot say comes from the live /status: whether a bundled container is actually running (#488),
-  // and a host, port or path nothing has saved. One effect once both exist also keeps the result from
-  // depending on which read settled last. Secrets are never returned, so their inputs stay empty; an empty
-  // submit preserves the stored secret on the backend (#226).
+  // service it switched away from (the engine radio below learned the same, #1082). That holds for the Use
+  // Built-in toggles too: shown from what runs, one that reads "external" invites typing an external host
+  // and credentials that the gateway drops under the stored bundled mode. What is running is reported by the
+  // badges and the pending-restart notes. Only a host, port or path nothing has saved comes from the live
+  // /status. One effect once both exist also keeps the result from depending on which read settled last.
+  // Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored secret on
+  // the backend (#226).
   useEffect(() => {
     if (!infraStatus || !savedConfig || formHydrated.current) return;
     formHydrated.current = true;
@@ -161,14 +159,13 @@ export function useInfraConfigForm(
       poolSize: database.poolSize,
       sslEnabled: database.sslEnabled,
       sslRejectUnauthorized: database.sslRejectUnauthorized,
-      // builtIn reflects whether OpenWA's bundled container is actually running (live), not saved intent.
-      builtIn: infraStatus.database.builtIn,
+      builtIn: database.builtIn,
     }));
     setRedisConfig(prev => ({
       ...prev,
       host: redis.host || infraStatus.redis.host,
       port: redis.port || String(infraStatus.redis.port),
-      builtIn: infraStatus.redis.builtIn,
+      builtIn: redis.builtIn,
     }));
     setRedisEnabledState(redis.enabled);
     setQueueEnabled(queue.enabled);
@@ -179,7 +176,7 @@ export function useInfraConfigForm(
       s3Bucket: storage.s3Bucket || prev.s3Bucket,
       s3Region: storage.s3Region || prev.s3Region,
       s3Endpoint: storage.s3Endpoint || prev.s3Endpoint,
-      builtIn: infraStatus.storage.builtIn,
+      builtIn: storage.builtIn,
     }));
     setEngineConfig(prev => ({
       ...prev,
@@ -205,18 +202,12 @@ export function useInfraConfigForm(
     setEngineConfig(prev => (prev.type === seed ? prev : { ...prev, type: seed }));
   }, [savedConfig]);
 
-  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) => {
-    if (key === 'builtIn') builtInTouched.current.database = true;
+  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) =>
     setDbConfig(prev => ({ ...prev, [key]: value }));
-  };
-  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) => {
-    if (key === 'builtIn') builtInTouched.current.redis = true;
+  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
     setRedisConfig(prev => ({ ...prev, [key]: value }));
-  };
-  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) => {
-    if (key === 'builtIn') builtInTouched.current.storage = true;
+  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
     setStorageConfig(prev => ({ ...prev, [key]: value }));
-  };
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
     if (key === 'type') engineTouched.current = true;
     setEngineConfig(prev => ({ ...prev, [key]: value }));
@@ -230,34 +221,26 @@ export function useInfraConfigForm(
 
   const setRedisConnected = (connected: boolean) => setRedisConfig(prev => ({ ...prev, connected }));
 
-  // The flag a save carries: the operator's flip, else the stored one. Until it is flipped, the flag shown
-  // is what runs, and writing that back would turn a bundled service into an external one (or the reverse)
-  // that was saved and is waiting for a restart, along with the credentials that service owns. It is always
-  // sent, never left out: the backend builds the Docker profile list from it.
-  const builtInToSave = (section: 'database' | 'redis' | 'storage', shown: boolean): boolean =>
-    builtInTouched.current[section] ? shown : (savedConfig?.[section].builtIn ?? shown);
-
   const buildSavePayload = (): SaveConfigPayload => ({
     // A bundled container never receives a typed password (the field is hidden once built-in is on,
     // but a value typed before the toggle survives in state). '' means "unchanged" on the backend.
     // An emptied pool size is NaN, which JSON writes as null and the backend refuses: leave it out.
     database: {
       ...dbConfig,
-      builtIn: builtInToSave('database', dbConfig.builtIn),
-      password: builtInToSave('database', dbConfig.builtIn) ? '' : dbConfig.password,
+      password: dbConfig.builtIn ? '' : dbConfig.password,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
     // `connected` is runtime-only status, not persisted configuration. Keep it out of the
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {
       enabled: redisEnabled,
-      builtIn: builtInToSave('redis', redisConfig.builtIn),
+      builtIn: redisConfig.builtIn,
       host: redisConfig.host,
       port: redisConfig.port,
-      password: builtInToSave('redis', redisConfig.builtIn) ? '' : redisConfig.password,
+      password: redisConfig.builtIn ? '' : redisConfig.password,
     },
     queue: { enabled: queueEnabled },
-    storage: { ...storageConfig, builtIn: builtInToSave('storage', storageConfig.builtIn) },
+    storage: { ...storageConfig },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState
     // default, and sending that would persist ENGINE_TYPE and silently flip the engine on the next

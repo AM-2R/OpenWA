@@ -166,47 +166,82 @@ const RUNNING_BUILTIN: InfraStatus = {
   engine: { type: 'whatsapp-web.js', headless: true },
 };
 
-test('a built-in flag the operator has not touched is saved as it is stored, not as it runs', () => {
-  const { result } = renderForm({ status: RUNNING_BUILTIN, saved: SAVED });
-  rtl.act(() => result.current.updateDbConfig('password', 'typed-db-secret'));
+// The operator saved bundled containers and has not restarted: external services run now.
+const STORED_BUILTIN: SavedConfig = {
+  ...SAVED,
+  database: { ...SAVED.database, builtIn: true },
+  redis: { ...SAVED.redis, builtIn: true },
+  storage: { ...SAVED.storage, builtIn: true },
+};
 
-  const { database, redis, storage } = result.current.buildSavePayload();
+const shownFlags = (form: ReturnType<typeof renderForm>['result']['current']) => [
+  form.dbConfig.builtIn,
+  form.redisConfig.builtIn,
+  form.storageConfig.builtIn,
+];
 
-  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [false, false, false]);
-  // Still an external database, so what was typed for it is sent.
-  assert.equal(database?.password, 'typed-db-secret');
+// The toggles are the saved choice like every other selection. Shown from what runs, one that reads "external"
+// invites typing an external host and credentials that the gateway then drops under the stored bundled mode.
+test('the built-in toggles show what was saved, not what runs', () => {
+  const external = renderForm({ status: RUNNING_BUILTIN, saved: SAVED });
+  assert.deepEqual(shownFlags(external.result.current), [false, false, false]);
+  rtl.cleanup();
+
+  const bundled = renderForm({ status: RUNNING, saved: STORED_BUILTIN });
+  assert.deepEqual(shownFlags(bundled.result.current), [true, true, true]);
 });
 
-test('a stored built-in container is kept when the page runs an external one, and never gets a typed password', () => {
-  const storedBuiltIn: SavedConfig = {
-    ...SAVED,
-    database: { ...SAVED.database, builtIn: true },
-    redis: { ...SAVED.redis, builtIn: true },
-    storage: { ...SAVED.storage, builtIn: true },
-  };
-  const { result } = renderForm({ status: RUNNING, saved: storedBuiltIn });
+for (const order of ['status first', 'config first'] as const) {
+  test(`the built-in toggles show what was saved when the reads settle ${order}`, () => {
+    const { result, rerender } = renderForm(order === 'status first' ? { status: RUNNING } : { saved: STORED_BUILTIN });
+    rerender({ status: RUNNING, saved: STORED_BUILTIN });
+
+    assert.deepEqual(shownFlags(result.current), [true, true, true]);
+  });
+}
+
+test('a save carries the built-in flag the form shows', () => {
+  for (const [status, saved] of [
+    [RUNNING_BUILTIN, SAVED],
+    [RUNNING, STORED_BUILTIN],
+  ] as const) {
+    const { result } = renderForm({ status, saved });
+    rtl.act(() => result.current.updateDbConfig('host', 'db.external.example'));
+
+    const { database, redis, storage } = result.current.buildSavePayload();
+
+    assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], shownFlags(result.current));
+    rtl.cleanup();
+  }
+});
+
+test('external values typed after flipping a stored bundled container off are saved with the external flag', () => {
+  const { result } = renderForm({ status: RUNNING, saved: STORED_BUILTIN });
+  rtl.act(() => {
+    result.current.updateDbConfig('builtIn', false);
+    result.current.updateDbConfig('host', 'db.external.example');
+    result.current.updateStorageConfig('builtIn', false);
+    result.current.updateStorageConfig('s3Bucket', 'ext-bucket');
+  });
+
+  const { database, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual(
+    [database?.builtIn, database?.host, storage?.builtIn, storage?.s3Bucket],
+    [false, 'db.external.example', false, 'ext-bucket'],
+  );
+});
+
+test('a bundled container never gets a typed password', () => {
+  const { result } = renderForm({ status: RUNNING, saved: STORED_BUILTIN });
   rtl.act(() => {
     result.current.updateDbConfig('password', 'typed-db-secret');
     result.current.updateRedisConfig('password', 'typed-redis-secret');
   });
 
-  const { database, redis, storage } = result.current.buildSavePayload();
+  const { database, redis } = result.current.buildSavePayload();
 
-  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [true, true, true]);
   assert.deepEqual([database?.password, redis?.password], ['', '']);
-});
-
-test('a built-in flag the operator flipped is saved as flipped', () => {
-  const { result } = renderForm({ status: RUNNING_BUILTIN, saved: SAVED });
-  rtl.act(() => {
-    result.current.updateDbConfig('builtIn', true);
-    result.current.updateRedisConfig('builtIn', true);
-    result.current.updateStorageConfig('builtIn', true);
-  });
-
-  const { database, redis, storage } = result.current.buildSavePayload();
-
-  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [true, true, true]);
 });
 
 test('a refetch after the form is seeded does not overwrite an edit in progress', () => {

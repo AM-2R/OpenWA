@@ -712,6 +712,88 @@ test('a queue switch saved and left for a restart shows the pending-restart note
   assert.equal(screen.getAllByText(PENDING_RESTART_NOTE).length, 1, 'the note belongs to the queue alone');
 });
 
+// ── A built-in switch saved and not restarted for ────────────────────────────
+// Same service, other mode: the type is unchanged, so only the Use Built-in toggle differs from what runs.
+
+const STORAGE_WARNING = 'Existing media files are not moved to the new storage backend';
+
+const RUNNING_EXTERNAL: InfraStatus = {
+  ...INFRA_STATUS,
+  storage: { type: 's3', bucket: 'media', builtIn: false, s3Available: true },
+};
+const SAVED_BUNDLED: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: { ...SAVED_CONFIG.database, builtIn: true },
+  storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: true },
+};
+const RUNNING_BUNDLED: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: true, type: 'postgres', host: 'postgres', builtIn: true },
+  redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true },
+  storage: { type: 's3', bucket: 'openwa', builtIn: true, s3Available: true },
+};
+const SAVED_EXTERNAL: SavedConfig = {
+  ...SAVED_CONFIG,
+  redis: { enabled: true, builtIn: false, host: 'redis.internal', port: '6379', passwordSet: false },
+  storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: false },
+};
+
+test('the built-in toggles show what was saved, and a later save warns of the switch it applies', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_EXTERNAL, saved: SAVED_BUNDLED };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, true);
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, true);
+
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
+  within(dialog).getByText(STORAGE_WARNING, { exact: false });
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database?: { builtIn?: boolean };
+    storage?: { builtIn?: boolean };
+  };
+  assert.deepEqual([body.database?.builtIn, body.storage?.builtIn], [true, true]);
+});
+
+test('a switch from bundled to external services is warned of and stops the bundled containers', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_BUNDLED, saved: SAVED_EXTERNAL };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, false);
+  assert.equal(toggleInput(container, 'Use Built-in Redis Container').checked, false);
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, false);
+
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database?: { builtIn?: boolean };
+    redis?: { builtIn?: boolean };
+    storage?: { builtIn?: boolean };
+  };
+  assert.deepEqual([body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn], [false, false, false]);
+
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, {
+    profiles: [],
+    profilesToRemove: ['postgres', 'redis', 'minio'],
+  });
+});
+
 test('the pending-restart note survives a successful save', async () => {
   const { screen, waitFor, fireEvent } = rtl;
   resetFetchCalls();
