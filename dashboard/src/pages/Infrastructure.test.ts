@@ -18,6 +18,7 @@ import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpe
 import {
   EXPECTED_MODE,
   FILE_STATES,
+  HOST_SPELLINGS,
   PIN_STATES,
   SERVICES,
   pinnedHost,
@@ -2111,6 +2112,98 @@ test('a host pinned to the container name still reaches the container, which is 
   assert.deepEqual(names, ['openwa-redis', 'openwa-minio']);
   assert.deepEqual(body, { profiles: ['postgres'], profilesToRemove: ['redis', 'minio'] });
 });
+
+// Every spelling of the bundled host the server reads as the bundled container (the shared table), taken i-th for
+// each service at once: its alias, another letter case, a trailing dot, the container name.
+const spellingRounds = Math.max(...Object.values(HOST_SPELLINGS).map(s => s.reach.length));
+const spelling = (service: ServiceName, round: number) =>
+  HOST_SPELLINGS[service].reach[round % HOST_SPELLINGS[service].reach.length];
+
+for (let round = 0; round < spellingRounds; round++) {
+  const db = spelling('database', round);
+  const redisHost = spelling('redis', round);
+  const s3 = spelling('storage', round);
+
+  // A pin that still reaches the container: the server keeps it, so the page neither asks for nor names its stop.
+  test(`hosts pinned to ${JSON.stringify([db, redisHost, s3])} keep the containers OpenWA created`, async () => {
+    resetFetchCalls();
+    const status: InfraStatus = {
+      ...PINNED_AWAY,
+      database: { ...PINNED_AWAY.database, host: db, builtIn: true },
+      redis: { ...PINNED_AWAY.redis, host: redisHost, builtIn: true },
+      storage: { ...PINNED_AWAY.storage, endpoint: s3, bucket: 'openwa', builtIn: true },
+    };
+    const saved: SavedConfig = {
+      ...PINNED_AWAY_SAVED,
+      database: { ...PINNED_AWAY_SAVED.database, host: db, builtIn: true },
+      redis: { ...PINNED_AWAY_SAVED.redis, host: redisHost, builtIn: true },
+      storage: { ...PINNED_AWAY_SAVED.storage, s3Endpoint: s3, s3Bucket: 'openwa', builtIn: true },
+    };
+    overrides = { status, saved, saveProfiles: ['postgres', 'redis', 'minio'] };
+
+    const { dialogText, names, body } = await saveAndRestart();
+
+    assert.deepEqual(names, []);
+    assert.doesNotMatch(dialogText, /openwa-/);
+    assert.deepEqual(body, { profiles: ['postgres', 'redis', 'minio'], profilesToRemove: [] });
+  });
+
+  // A saved built-in choice beside a stopped container the server already dials switches nothing.
+  test(`no pending note beside a stopped container the server dials as ${JSON.stringify([db, redisHost, s3])}`, async () => {
+    const { screen } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: {
+        ...RUNNING_BUNDLED,
+        database: { ...RUNNING_BUNDLED.database, host: db, builtIn: false, running: false },
+        redis: { ...RUNNING_BUNDLED.redis, host: redisHost, builtIn: false, running: false },
+        storage: { ...RUNNING_BUNDLED.storage, endpoint: s3, builtIn: false, running: false },
+      },
+      saved: {
+        ...SAVED_BUNDLED,
+        database: { ...SAVED_BUNDLED.database, host: db },
+        redis: { enabled: true, builtIn: true, builtInSet: true, host: redisHost, port: '6379', passwordSet: false },
+        storage: { ...SAVED_BUNDLED.storage, s3Endpoint: s3 },
+      },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    assert.equal(
+      screen.queryByText(PENDING_BUILT_IN_NOTE) === null,
+      true,
+      'a pending switch the restart would not make',
+    );
+  });
+
+  // The bundled container under another spelling is the database and storage the server runs on now: no switch.
+  test(`no data-backend warning for a built-in save over ${JSON.stringify([db, s3])}`, async () => {
+    const { screen, fireEvent } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: {
+        ...RUNNING_BUNDLED,
+        database: { ...RUNNING_BUNDLED.database, host: db },
+        storage: { ...RUNNING_BUNDLED.storage, endpoint: s3 },
+      },
+      saved: {
+        ...SAVED_BUNDLED,
+        database: { ...SAVED_BUNDLED.database, host: db, builtInSet: true },
+        storage: { ...SAVED_BUNDLED.storage, s3Endpoint: s3, s3Bucket: 'openwa', builtInSet: true },
+      },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    fireEvent.click(toggleInput(container, 'Headless Mode'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+    const dialog = await screen.findByRole('dialog');
+    assert.doesNotMatch(dialog.textContent ?? '', /The new database starts empty|not moved to the new storage/);
+  });
+}
 
 // ── Restart-flow timer cleanup on unmount ────────────────────────────────────
 

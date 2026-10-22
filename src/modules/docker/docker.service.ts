@@ -3,6 +3,7 @@ import { createLogger } from '../../common/services/logger.service';
 import Docker from 'dockerode';
 import { isEnvPinned, isOsProvidedEnv } from '../../config/env-precedence';
 import { readGeneratedEnv } from '../infra/generated-env';
+import { BUNDLED_SERVICE_ENV, namesBundledContainer } from './bundled-host';
 
 /**
  * The only Docker profiles OpenWA manages (and may start/stop). Used to bound teardown so a
@@ -18,32 +19,6 @@ export function datastoreInUse(profile: string, read: (key: string) => string | 
   if (profile === 'postgres') return read('DATABASE_TYPE') === 'postgres';
   if (profile === 'minio') return read('STORAGE_TYPE') === 's3';
   return ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'].some(key => read(key) === 'true');
-}
-
-/** The env key and value that point the app at each managed profile's bundled container. */
-export const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
-  postgres: ['DATABASE_HOST', 'postgres'],
-  redis: ['REDIS_HOST', 'redis'],
-  minio: ['S3_ENDPOINT', 'http://minio:9000'],
-};
-
-/**
- * Whether a host (for minio, the host of an S3 endpoint) reaches the profile's bundled container: its network alias
- * (the profile name) or its container name, in any letter case and with or without the trailing dot of an absolute
- * DNS name.
- */
-export function namesBundledContainer(profile: string, value: string | undefined): boolean {
-  if (!BUNDLED_SERVICE_ENV[profile] || value === undefined) return false;
-  let host = value.trim();
-  if (profile === 'minio') {
-    try {
-      host = new URL(host).hostname;
-    } catch {
-      return false;
-    }
-  }
-  host = host.toLowerCase().replace(/\.$/, '');
-  return host === profile || host === `openwa-${profile}`;
 }
 
 /**

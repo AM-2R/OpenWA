@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { API_BASE_URL, infraApi, type SavedConfig } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
+import { CONTAINER_OF, namesBundledContainer, sameHost } from '../utils/bundledHost';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
 import { savedBuiltIn, useInfraConfigForm } from '../hooks/useInfraConfigForm';
@@ -36,32 +37,6 @@ interface QueueStats {
   pending: number;
   completed: number;
   failed: number;
-}
-
-// The container each managed profile runs, as the restart dialog names it.
-const CONTAINER_OF: Record<string, string> = {
-  postgres: 'openwa-postgres',
-  redis: 'openwa-redis',
-  minio: 'openwa-minio',
-};
-
-/**
- * Whether a host (for minio, the host of an S3 endpoint) reaches the profile's bundled container: its network alias
- * (the profile name) or its container name, in any letter case, with or without a trailing dot. The same rule as the
- * server's namesBundledContainer, which never lets a restart stop such a container.
- */
-function namesBundledContainer(profile: string, value: string | undefined): boolean {
-  if (!CONTAINER_OF[profile] || value === undefined) return false;
-  let host = value.trim();
-  if (profile === 'minio') {
-    try {
-      host = new URL(host).hostname;
-    } catch {
-      return false;
-    }
-  }
-  host = host.toLowerCase().replace(/\.$/, '');
-  return host === profile || host === CONTAINER_OF[profile];
 }
 
 /** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
@@ -99,11 +74,11 @@ export function Infrastructure() {
       // move before it happens. A switch is a next boot that connects somewhere else than the server does
       // now: another type, host, port or database name, or another S3 endpoint or bucket. The next boot
       // connects to a value the environment pins whatever the form says, and to the bundled container for
-      // a built-in choice. Whether that container runs right now is no part of it: a stopped one is started
-      // again on the same volume. /status reports the type, host, endpoint and bucket in use; the port and
-      // the database name are not on it, so those compare with the saved config as the page loaded it. A
-      // key with nothing saved reads '', and runs on the same fallback the form was seeded with. A new local
-      // path is no switch.
+      // a built-in choice; two spellings of that container are one host. Whether it runs right now is no part
+      // of it: a stopped one is started again on the same volume. /status reports the type, host, endpoint and
+      // bucket in use; the port and the database name are not on it, so those compare with the saved config as
+      // the page loaded it. A key with nothing saved reads '', and runs on the same fallback the form was seeded
+      // with. A new local path is no switch.
       const loaded = loadedConfig.current;
       const pinned = (key: string) => (infraStatus?.envPinned?.includes(key) ? loaded : undefined);
       const db = configForm.dbConfig;
@@ -117,7 +92,7 @@ export function Infrastructure() {
       const dbSwitch =
         !!infraStatus &&
         (dbType !== infraStatus.database.type ||
-          (dbType === 'postgres' && (dbHost !== infraStatus.database.host || dbExternalRetarget)));
+          (dbType === 'postgres' && (!sameHost('postgres', dbHost, infraStatus.database.host) || dbExternalRetarget)));
       const storage = configForm.storageConfig;
       const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
       // The storage section takes the bundled bucket for a flag sent as true only: beside a pinned endpoint an untouched
@@ -130,7 +105,7 @@ export function Infrastructure() {
         !!infraStatus &&
         (storageType !== infraStatus.storage.type ||
           (storageType === 's3' &&
-            (endpoint !== (infraStatus.storage.endpoint ?? '') ||
+            (!sameHost('minio', endpoint, infraStatus.storage.endpoint ?? '') ||
               bucket !== (infraStatus.storage.bucket || 'openwa'))));
       // The built-in containers running now, so the restart stops each one the new config dropped. With no
       // status read there is nothing to go on, and nothing is stopped.
@@ -365,7 +340,7 @@ export function Infrastructure() {
                 infraStatus.database.type === 'postgres' && savedConfig.database.type === 'postgres',
                 infraStatus.database.builtIn,
                 savedBuiltIn(savedConfig.database, infraStatus.database.builtIn),
-                infraStatus.database.host === 'postgres',
+                namesBundledContainer('postgres', infraStatus.database.host),
               )}
               {pinNote('DATABASE_HOST')}
 
@@ -670,7 +645,7 @@ export function Infrastructure() {
                 infraStatus.redis.enabled && savedConfig.redis.enabled,
                 infraStatus.redis.builtIn,
                 savedBuiltIn(savedConfig.redis, infraStatus.redis.builtIn),
-                infraStatus.redis.host === 'redis',
+                namesBundledContainer('redis', infraStatus.redis.host),
               )}
               {pinNote('REDIS_HOST')}
 
@@ -871,7 +846,7 @@ export function Infrastructure() {
                   infraStatus.storage.type === 's3' && savedConfig.storage.type === 's3',
                   infraStatus.storage.builtIn,
                   savedBuiltIn(savedConfig.storage, infraStatus.storage.builtIn),
-                  infraStatus.storage.endpoint === 'http://minio:9000',
+                  namesBundledContainer('minio', infraStatus.storage.endpoint),
                 )}
                 {pinNote('S3_ENDPOINT')}
 
