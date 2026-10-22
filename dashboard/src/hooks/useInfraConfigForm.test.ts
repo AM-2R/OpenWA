@@ -371,3 +371,39 @@ test('editing a field of a pinned database or storage card sends its type, a Red
 
   assert.deepEqual([database?.type, redis?.enabled, storage?.type], ['postgres', undefined, 's3']);
 });
+
+// A pinned host decides the built-in mode at every boot, so the flag the toggle shows is no choice either. Sent, a
+// flag of true writes the bundled credentials over stored ones the pinned host may still need; untouched, it is left
+// out and the gateway keeps the stored flag.
+const PINNED_HOSTS: InfraStatus = { ...RUNNING, envPinned: ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT'] };
+
+test('a built-in flag beside a pinned host is left out of a save until its toggle is used', () => {
+  const { result } = renderForm({ status: PINNED_HOSTS, saved: SAVED });
+
+  const untouched = result.current.buildSavePayload();
+  assert.deepEqual(
+    [untouched.database?.builtIn, untouched.redis?.builtIn, untouched.storage?.builtIn],
+    [undefined, undefined, undefined],
+  );
+
+  rtl.act(() => {
+    result.current.updateDbConfig('builtIn', true);
+    result.current.updateRedisConfig('builtIn', true);
+    result.current.updateStorageConfig('builtIn', true);
+  });
+  const touched = result.current.buildSavePayload();
+  assert.deepEqual([touched.database?.builtIn, touched.redis?.builtIn, touched.storage?.builtIn], [true, true, true]);
+});
+
+test('another edit in the card keeps a built-in flag beside a pinned host out', () => {
+  const { result } = renderForm({ status: PINNED_HOSTS, saved: SAVED });
+
+  rtl.act(() => {
+    result.current.updateDbConfig('sslEnabled', false);
+    result.current.updateRedisConfig('port', '6390');
+    result.current.updateStorageConfig('s3Bucket', 'media-2');
+  });
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [undefined, undefined, undefined]);
+});

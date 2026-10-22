@@ -142,6 +142,10 @@ export function useInfraConfigForm(
   const dbTouched = useRef(false);
   const storageTouched = useRef(false);
   const redisEnabledTouched = useRef(false);
+  // Whether the operator has used each Use Built-in toggle here; beside a pinned host an unused one is left out.
+  const dbBuiltInTouched = useRef(false);
+  const redisBuiltInTouched = useRef(false);
+  const storageBuiltInTouched = useRef(false);
 
   /** Whether engineConfig.type reflects a real value (seeded from the saved config or user-picked)
    * rather than the useState default — the save payload omits `type` when it doesn't. */
@@ -218,12 +222,16 @@ export function useInfraConfigForm(
 
   const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) => {
     dbTouched.current = true;
+    if (key === 'builtIn') dbBuiltInTouched.current = true;
     setDbConfig(prev => ({ ...prev, [key]: value }));
   };
-  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
+  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) => {
+    if (key === 'builtIn') redisBuiltInTouched.current = true;
     setRedisConfig(prev => ({ ...prev, [key]: value }));
+  };
   const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) => {
     storageTouched.current = true;
+    if (key === 'builtIn') storageBuiltInTouched.current = true;
     setStorageConfig(prev => ({ ...prev, [key]: value }));
   };
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
@@ -245,7 +253,9 @@ export function useInfraConfigForm(
   // reveal (#1082), and drop the stored settings of the mode it replaces. Untouched, it is left out, and the
   // gateway keeps the stored selection. Any edit in the database or storage card sends it: the edited fields belong
   // to the mode the card shows, and a stored selection of the other mode would drop them. Read at save time, like
-  // the engine pin below.
+  // the engine pin below. A pinned host decides the built-in mode the same way, and a flag of true sent beside it
+  // writes the bundled credentials over stored ones the pinned host may still need, so an unused toggle there is
+  // left out too and the gateway keeps the stored flag.
   const pinnedSeed = (key: string, touched: { current: boolean }) =>
     !touched.current && !!infraStatus?.envPinned?.includes(key);
 
@@ -256,6 +266,7 @@ export function useInfraConfigForm(
     database: {
       ...dbConfig,
       type: pinnedSeed('DATABASE_TYPE', dbTouched) ? undefined : dbConfig.type,
+      builtIn: pinnedSeed('DATABASE_HOST', dbBuiltInTouched) ? undefined : dbConfig.builtIn,
       password: dbConfig.builtIn ? '' : dbConfig.password,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
@@ -263,7 +274,7 @@ export function useInfraConfigForm(
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {
       enabled: pinnedSeed('REDIS_ENABLED', redisEnabledTouched) ? undefined : redisEnabled,
-      builtIn: redisConfig.builtIn,
+      builtIn: pinnedSeed('REDIS_HOST', redisBuiltInTouched) ? undefined : redisConfig.builtIn,
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.builtIn ? '' : redisConfig.password,
@@ -272,6 +283,7 @@ export function useInfraConfigForm(
     storage: {
       ...storageConfig,
       type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
+      builtIn: pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) ? undefined : storageConfig.builtIn,
     },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState

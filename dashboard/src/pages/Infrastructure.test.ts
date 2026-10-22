@@ -1464,9 +1464,11 @@ COMBOS.forEach((_, i) => {
       redis?: { builtIn?: boolean };
       storage?: { builtIn?: boolean };
     };
+    // A pinned host decides the mode whatever the flag says, so the untouched flag beside it is left out.
+    const sentFlag = (c: Combo) => (c.pin === 'none' ? shownMode(c) : undefined);
     assert.deepEqual(
       [body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn],
-      [shownMode(database), shownMode(redis), shownMode(storage)],
+      [sentFlag(database), sentFlag(redis), sentFlag(storage)],
       'the flags the save sends',
     );
     // Only a database or storage the next boot connects to somewhere else starts empty after the restart.

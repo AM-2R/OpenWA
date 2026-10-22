@@ -966,6 +966,35 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       expect(env).not.toMatch(/^DATABASE_HOST=/m);
     });
 
+    // The page leaves out an untouched flag beside a pinned host. The stored external flag is inherited then, so the
+    // credentials the pinned host may need stay as stored, where a flag of true would write the bundled ones.
+    it('keeps stored external credentials when the flag is left out beside a pinned bundled host', () => {
+      pin({ DATABASE_TYPE: 'postgres', DATABASE_HOST: 'postgres', S3_ENDPOINT: 'http://minio:9000' });
+      const stored = STORED_EXTERNAL.replace('S3_ENDPOINT=https://s3.example.com\n', '') + 'POSTGRES_SCHEMA=custom\n';
+
+      const env = written(
+        {
+          database: { host: 'postgres', username: 'app', database: 'appdb', schema: 'custom', password: '' },
+          storage: { s3Bucket: 'media', s3Endpoint: 'http://minio:9000', s3AccessKey: '', s3SecretKey: '' },
+        },
+        stored,
+      );
+
+      for (const line of [
+        'POSTGRES_BUILTIN=false',
+        'DATABASE_USERNAME=app',
+        'DATABASE_PASSWORD=Str0ng!Passw0rd',
+        'DATABASE_NAME=appdb',
+        'POSTGRES_SCHEMA=custom',
+        'MINIO_BUILTIN=false',
+        'S3_BUCKET=media',
+        'S3_ACCESS_KEY_ID=ak-strong',
+        'S3_SECRET_ACCESS_KEY=sk-strong',
+      ]) {
+        expect(env).toContain(line);
+      }
+    });
+
     it('still writes a type that is sent', () => {
       pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
 
