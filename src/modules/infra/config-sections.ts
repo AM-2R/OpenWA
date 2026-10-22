@@ -231,10 +231,15 @@ export function applyStorageSection(
   } else {
     staleKeys.add('STORAGE_LOCAL_PATH');
     if (storage.builtIn === true) {
-      // Built-in MinIO - use container name as endpoint
+      // Built-in MinIO - use container name as endpoint. The bundled keys are only the DEFAULT, as for the database
+      // password: keys the next boot already dials the bundled endpoint with (the flag already set, or the bundled
+      // endpoint pinned or stored) are the ones that container was created with, and are kept.
+      const keepKeys =
+        existing.MINIO_BUILTIN === 'true' || nextBootHost('S3_ENDPOINT', existing) === 'http://minio:9000';
       updates.S3_ENDPOINT = 'http://minio:9000';
-      updates.S3_ACCESS_KEY_ID = 'minioadmin';
-      updates.S3_SECRET_ACCESS_KEY = 'minioadmin';
+      updates.S3_ACCESS_KEY_ID = (keepKeys && (existing.S3_ACCESS_KEY_ID || existing.S3_ACCESS_KEY)) || 'minioadmin';
+      updates.S3_SECRET_ACCESS_KEY =
+        (keepKeys && (existing.S3_SECRET_ACCESS_KEY || existing.S3_SECRET_KEY)) || 'minioadmin';
       updates.S3_BUCKET = 'openwa';
       updates.S3_REGION = 'us-east-1';
       profiles.push('minio');

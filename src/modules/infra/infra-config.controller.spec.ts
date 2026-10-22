@@ -1367,6 +1367,64 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
     });
   });
 
+  // The bundled MinIO is created with the keys the next boot reads, like the database password above.
+  describe('built-in storage over stored keys the next boot already dials the bundled endpoint with', () => {
+    const KEYS = 'S3_ACCESS_KEY_ID=StoredKey12345\nS3_SECRET_ACCESS_KEY=StoredSecret1234567890\n';
+
+    afterEach(() => {
+      delete process.env.S3_ENDPOINT;
+      recordPinnedEnvKeys({});
+    });
+
+    it('keeps them when the flag is already set', () => {
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=http://minio:9000\nS3_BUCKET=openwa\n' + KEYS,
+      );
+      expect(env).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+      expect(env).toContain('S3_SECRET_ACCESS_KEY=StoredSecret1234567890');
+    });
+
+    it('keeps them when the file names the bundled endpoint without the flag', () => {
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_ENDPOINT=http://minio:9000\nS3_BUCKET=openwa\n' + KEYS,
+      );
+      expect(env).toContain('MINIO_BUILTIN=true');
+      expect(env).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+      expect(env).toContain('S3_SECRET_ACCESS_KEY=StoredSecret1234567890');
+    });
+
+    it('keeps them when the environment pins the bundled endpoint', () => {
+      process.env.S3_ENDPOINT = 'http://minio:9000';
+      recordPinnedEnvKeys({ S3_ENDPOINT: 'http://minio:9000' });
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_BUCKET=media\n' + KEYS,
+      );
+      expect(env).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+    });
+
+    it('keeps the legacy names the bundled container was created with', () => {
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=http://minio:9000\nS3_ACCESS_KEY=LegacyKey12345\nS3_SECRET_KEY=LegacySecret1234567890\n',
+      );
+      expect(env).toContain('S3_ACCESS_KEY_ID=LegacyKey12345');
+      expect(env).toContain('S3_SECRET_ACCESS_KEY=LegacySecret1234567890');
+    });
+
+    it('still resets the keys of another endpoint', () => {
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_ENDPOINT=https://s3.example.com\nS3_BUCKET=media\n' + KEYS,
+      );
+      expect(env).toContain('S3_ACCESS_KEY_ID=minioadmin');
+      expect(env).toContain('S3_SECRET_ACCESS_KEY=minioadmin');
+      expect(env).not.toContain('StoredKey12345');
+    });
+  });
+
   // The guard must evaluate what the next boot would SEE: load-env.ts loads with dotenv
   // override:false, so a value in the container environment (compose `environment:`) wins over the
   // saved file. Snapshot + clear every guard-relevant key so these tests are hermetic.
