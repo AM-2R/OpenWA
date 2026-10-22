@@ -856,6 +856,26 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(store.lidsForPhone('628111')).toEqual([]);
   });
 
+  it('lets a later session clear a phone once the session that stored it is released', async () => {
+    await store.remember('111', '628111', 's1');
+    await store.remember('222', '628222', 's9');
+    const stamp = new Date('2020-01-01T00:00:00.000Z');
+    await repo.update({ lid: '111' }, { updatedAt: stamp });
+
+    await store.releaseSession('s1');
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: null, updatedAt: stamp });
+    expect(await row('222')).toMatchObject({ phone: '628222', sessionId: 's9' });
+    await store.remember('111', null, 's2');
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: 's2' });
+  });
+
+  it('releaseSession never throws', async () => {
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+
+    await expect(store.releaseSession('s1')).resolves.toBeUndefined();
+  });
+
   it('a phone from any session still replaces the row', async () => {
     await store.remember('111', null, 's1');
     await store.remember('111', '628111', 's2');

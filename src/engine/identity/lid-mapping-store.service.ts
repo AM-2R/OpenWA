@@ -329,6 +329,20 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   }
 
   /**
+   * Hand a deleted session's rows to no session. Its id never comes back (a re-created session gets a
+   * new one), so without this no later negative could clear a phone it stored. The rows stay: the table
+   * is shared. Never throws: the session is already gone.
+   */
+  async releaseSession(sessionId: string): Promise<void> {
+    try {
+      // updatedAt is kept: no mapping changed, and the preload ranks rows by it.
+      await this.repo.update({ sessionId }, { sessionId: null, updatedAt: () => '"updatedAt"' });
+    } catch (err) {
+      this.logger.warn(`Could not release lid mappings: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
    * Repository fallback for a cache miss. Rows past the preload cap (or evicted by the LRU) are
    * still persisted, so a miss is warmed from the table: THIS lookup still returns undefined —
    * the sync read contract can't await, and callers fall back to engine re-resolution, but the
