@@ -10,6 +10,11 @@
   margin-bottom: 2rem;
 }
 
+/* A long title and the badge beside it (de, es, tr) take two rows on a narrow screen instead of running past it. */
+.number-checker .page-header__title-group {
+  flex-wrap: wrap;
+}
+
 .number-checker .nc-alert {
   display: flex;
   align-items: center;
@@ -65,6 +70,7 @@
 .number-checker /* Tabs */
 .nc-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 1.5rem;
@@ -567,6 +573,8 @@
 
 .number-checker .nc-format-pill {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.78rem;

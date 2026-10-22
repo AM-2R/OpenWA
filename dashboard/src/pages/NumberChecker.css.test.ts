@@ -19,3 +19,21 @@ test('the table container scrolls sideways', () => {
   assert.ok(rule, 'no rule for the table container');
   assert.match(rule[1], /overflow-x:\s*auto/);
 });
+
+// Long labels in the other languages ("Massenpruefung", a Telugu export button) do not fit one row at 320 to 390 px.
+for (const [what, selector] of [
+  ['the mode tab strip', '\\.nc-tabs'],
+  ['the page header title row, so its badge drops below the title', '\\.page-header__title-group'],
+  ['the format preview pill', '\\.nc-format-pill'],
+] as const) {
+  test(`${what} wraps instead of running past the screen`, () => {
+    const rules = [...css.matchAll(new RegExp(`\\.number-checker[^{]*${selector}\\s*\\{([^}]*)\\}`, 'g'))].map(
+      m => m[1],
+    );
+    assert.ok(rules.length > 0, `no rule for ${what}`);
+    assert.ok(
+      rules.some(rule => /flex-wrap:\s*wrap/.test(rule)),
+      `${what} does not wrap`,
+    );
+  });
+}

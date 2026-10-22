@@ -833,7 +833,7 @@ export function NumberChecker() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {!isCheckingBatch ? (
               <button
                 className="nc-btn nc-btn-primary"

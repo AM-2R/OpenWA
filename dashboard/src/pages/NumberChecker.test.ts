@@ -486,6 +486,18 @@ test('NumberChecker: a finished single check is announced through a status regio
   assert.match(region.textContent ?? '', /\+6581234567.*Registered on WhatsApp/);
 });
 
+test('NumberChecker: the Start and Export buttons wrap onto another row instead of running past a narrow screen', async () => {
+  stubLookups(registered);
+  const { container } = renderComponent();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: '911111111111' } });
+  startBatch();
+  await rtl.screen.findByText('+911111111111');
+  const row = rtl.screen.getByRole('button', { name: /Export Results/i }).parentElement as HTMLElement;
+  assert.equal(row.style.display, 'flex');
+  assert.equal(row.style.flexWrap, 'wrap');
+  assert.equal(row.contains(container.querySelector('.nc-btn-primary')), true);
+});
+
 test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
