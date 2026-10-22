@@ -1250,6 +1250,10 @@ export function Chats() {
     refetchOnWindowFocus: query => query.state.status === 'error',
   });
   const savedContactKeys = useMemo(() => savedContactKeySet(contactsQuery.data), [contactsQuery.data]);
+  // A read that failed with nothing earlier to go by. The retry's own read is pending again, so the failure is
+  // told by the query's error count rather than its status, which keeps the Retry button on screen throughout.
+  const contactsFailed =
+    chatFilter === 'unknown' && contactsQuery.data === undefined && contactsQuery.errorUpdateCount > 0;
 
   const searching = searchQuery.trim() !== '';
   const searchedChats = filterChats(chats, searchQuery);
@@ -1689,9 +1693,14 @@ export function Chats() {
             }
             formatChatTime={formatChatTime}
             chatsTab={{
-              // Unknown is decided by the address book: until it loads the list would claim no chat matches.
+              // Unknown is decided by the address book: until it loads the list would claim no chat matches, and
+              // when it cannot be read the list says so instead.
               loading:
-                loadingChats || (chatFilter === 'unknown' && Boolean(selectedSessionId) && contactsQuery.isPending),
+                loadingChats ||
+                (chatFilter === 'unknown' && Boolean(selectedSessionId) && contactsQuery.isPending && !contactsFailed),
+              filterError: contactsFailed
+                ? { retrying: contactsQuery.isFetching, onRetry: () => void contactsQuery.refetch() }
+                : undefined,
               chats: filteredChats,
               activeChatId: activeChat?.id,
               pictures: listPics.data,

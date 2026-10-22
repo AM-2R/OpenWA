@@ -2305,6 +2305,50 @@ test('the Unknown filter waits for the address book instead of listing nothing',
   assert.ok(!screen.queryByText('Alice'), 'a saved contact is listed as unknown');
 });
 
+test('the Unknown filter says the address book could not be read, and Retry reads it again', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listExtra = true;
+  failContacts = true;
+  renderPage();
+  await screen.findByText('Bobby');
+  fireEvent.click(screen.getByRole('button', { name: 'Unknown' }));
+
+  await screen.findByText('Could not load contacts');
+  assert.ok(!screen.queryByText('No chats match this filter'), 'a failed read was reported as no matching chat');
+  assert.equal(contactReads().length, 1);
+
+  // The retry keeps the keyboard where it was while the read runs, and says it is busy.
+  failContacts = false;
+  const release = hold('contacts');
+  const retry = screen.getByRole('button', { name: 'Retry' });
+  retry.focus();
+  fireEvent.click(retry);
+  await waitFor(() => assert.equal(contactReads().length, 2));
+  assert.equal(document.activeElement === retry, true, `focus is on "${focusedName()}", not on Retry`);
+  assert.equal(retry.getAttribute('aria-disabled'), 'true');
+
+  release();
+  await screen.findByText('Bobby');
+  assert.ok(!screen.queryByText('Could not load contacts'), 'the failed state stayed after the read succeeded');
+  assert.ok(!screen.queryByText('Alice'), 'a saved contact is listed as unknown');
+});
+
+test('a later address book read that fails keeps the Unknown list it already has', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listExtra = true;
+  renderPage();
+  await screen.findByText('Bobby');
+  fireEvent.click(screen.getByRole('button', { name: 'Unknown' }));
+  await screen.findByText('Bobby');
+
+  failContacts = true;
+  await queryClients[0].invalidateQueries({ queryKey: ['contacts', SESSION.id] });
+  await waitFor(() => assert.equal(contactReads().length, 2));
+  await settle();
+  assert.ok(screen.getByText('Bobby'), 'the list it had was dropped');
+  assert.ok(!screen.queryByText('Could not load contacts'), 'a failed refresh hid a list that was still good');
+});
+
 test('the address book is not read again when the window regains focus, unless the last read failed', async () => {
   const { screen, fireEvent, act, waitFor } = rtl;
   renderPage();
