@@ -796,6 +796,10 @@ export class WwebjsLifecycle {
     this.host.getCallbacks().onDisconnected?.(reason);
   }
 
+  /** How many times, and how far apart, {@link reportOnceGone} looks for puppeteer to mark a page gone. */
+  private static readonly PAGE_GONE_POLLS = 25;
+  private static readonly PAGE_GONE_POLL_MS = 20;
+
   /**
    * Error-message signatures of a dead page/transport: Puppeteer raises these when the browser
    * process, the renderer, or the CDP connection is gone (e.g. 'Protocol error: Target closed').
@@ -847,6 +851,38 @@ export class WwebjsLifecycle {
     if (!this.isPageTransportError(error)) {
       return;
     }
+    this.reportDeath(error, context);
+  }
+
+  /**
+   * For a best-effort read that carries on after a failure, which must not take the session down on an
+   * error's text: a page-side exception can quote "connection closed" about WhatsApp Web's own socket while
+   * the page is fine. Puppeteer rejects a call pending on a dying page a few milliseconds BEFORE it marks
+   * the page closed or the browser disconnected (measured with Chromium stopped by SIGTERM and with a tab
+   * closed from outside; a killed browser already reads disconnected), so the page gets a short while to
+   * show it is gone. A page that still reads alive after that is not reported and the caller carries on.
+   */
+  async reportOnceGone(error: unknown, context: string): Promise<void> {
+    if (!this.isPageTransportError(error)) return;
+    // Counted in polls rather than elapsed time: every poll hands the event loop a turn, which is when
+    // puppeteer's close events are delivered, even if the process was starved for longer than the wait.
+    for (let polls = 0; polls < WwebjsLifecycle.PAGE_GONE_POLLS; polls++) {
+      if (this.status !== EngineStatus.READY || this.isPageGone()) break;
+      await new Promise(resolve => setTimeout(resolve, WwebjsLifecycle.PAGE_GONE_POLL_MS));
+    }
+    // Not READY any more means a death listener or a teardown got there first and owns the report.
+    if (this.status !== EngineStatus.READY) return;
+    if (!this.isPageGone()) {
+      this.host.logger.warn(`Page transport error during ${context} while the page is alive, not a death`, {
+        error: error instanceof Error ? error.message : String(error),
+        action: 'page_transport_error_page_alive',
+      });
+      return;
+    }
+    this.reportDeath(error, context);
+  }
+
+  private reportDeath(error: unknown, context: string): void {
     // Inside the navigation re-inject window the same signatures ride a HEALING page: an in-flight
     // evaluate killed by the navigation keeps its 'Protocol error' prefix (puppeteer only rewrites
     // the shapes that END with a context-gone suffix), and a navigating page transiently detaches
@@ -868,6 +904,15 @@ export class WwebjsLifecycle {
       error: error instanceof Error ? error.message : String(error),
     });
     this.handlePuppeteerDeath(`Page transport error during ${context}`);
+  }
+
+  /** Whether puppeteer itself reports the page closed or the browser disconnected (not an error's text). */
+  private isPageGone(): boolean {
+    const { pupBrowser, pupPage } = (this.client ?? {}) as unknown as {
+      pupBrowser?: { isConnected?: () => boolean };
+      pupPage?: { isClosed?: () => boolean };
+    };
+    return pupPage?.isClosed?.() === true || pupBrowser?.isConnected?.() === false;
   }
 
   markReadyFromClientInfo(): void {

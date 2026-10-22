@@ -24,6 +24,12 @@ export interface WwebjsEngineHost {
   readonly logger: ReturnType<typeof createLogger>;
   isPageTransportError(error: unknown): boolean;
   reportIfPageTransportError(error: unknown, context: string): void;
+  /**
+   * For a best-effort read that carries on after a failure: reports a death only once puppeteer's page or
+   * browser reads gone (it is given a moment to), never on the error's text alone. Optional so a host built
+   * without it keeps the text-free behaviour of simply carrying on.
+   */
+  reportOnceGone?(error: unknown, context: string): Promise<void>;
   ensureNotChannelRecipient(chatId: string): void;
   getNumberId(number: string): Promise<string | null>;
   capInboundMediaFor(

@@ -183,6 +183,7 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
       logger: this.logger,
       isPageTransportError: error => this.isPageTransportError(error),
       reportIfPageTransportError: (error, context) => this.reportIfPageTransportError(error, context),
+      reportOnceGone: (error, context) => this.lifecycle.reportOnceGone(error, context),
       ensureNotChannelRecipient: chatId => this.ensureNotChannelRecipient(chatId),
       // The raw answer, `@lid` included: the send resolver addresses a migrated contact by it, while the
       // public getNumberId reports the neutral phone id.

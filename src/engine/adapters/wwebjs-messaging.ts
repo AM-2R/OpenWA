@@ -799,8 +799,10 @@ export class WwebjsMessaging {
           };
         } catch (error) {
           // A page that died under the read is not a read that merely failed. Chromium stopped from
-          // outside rejects this call before any death listener runs, so report it for the check below.
-          this.host.reportIfPageTransportError(error, 'forwardMessage');
+          // outside rejects this call before any death listener runs, so report it for the check below,
+          // but only once the page itself reads gone: a live page whose exception merely says "connection
+          // closed" is a read that failed, and the forward goes on.
+          await this.host.reportOnceGone?.(error, 'forwardMessage');
           this.host.logger.warn(`Could not read the destination chat before forwarding: ${String(error)}`);
         }
         // The read above is a page round trip a teardown can land in. Its failure only leaves the copy

@@ -386,6 +386,60 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
     expect(adapter.getStatus()).toBe(EngineStatus.READY);
   });
 
+  // A page-side exception reaches Node as "Evaluation failed: ..." and can quote WhatsApp Web's own socket
+  // ("connection closed"), or a transport phrase of the caller's own making. With the page alive that is a
+  // failed read, not a death: the forward goes on as it did before the read reported anything.
+  it.each([
+    ['Evaluation failed: Error: connection closed'],
+    ['Evaluation failed: Error: Protocol error: target closed'],
+  ])('lets a forward go on when the destination read says "%s" and the page is alive', async message => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+    const destination = { fetchMessages: () => Promise.reject(new Error(message)) };
+    const { adapter } = readyAdapter({
+      pupPage: { isClosed: () => false },
+      pupBrowser: { isConnected: () => true },
+      getNumberId: () => Promise.resolve(found(CHAT)),
+      getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+
+    await expect(adapter.forwardMessage('src@c.us', CHAT, 'M1')).resolves.toEqual({
+      id: '',
+      timestamp: expect.any(Number) as unknown,
+    });
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+  });
+
+  // Puppeteer rejects a call pending on a dying page a few milliseconds before it marks the page closed
+  // (measured with Chromium stopped by SIGTERM and a tab closed from outside), so the flags read alive at
+  // the moment the read fails.
+  it('still refuses a forward when the page reads gone only a moment after its destination read failed', async () => {
+    const forward = jest.fn();
+    const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
+    const destination = { fetchMessages: () => Promise.reject(closedTarget()) };
+    let closed = false;
+    const { adapter } = readyAdapter({
+      pupPage: { isClosed: () => closed },
+      pupBrowser: { isConnected: () => true },
+      getNumberId: () => Promise.resolve(found(CHAT)),
+      getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+    setTimeout(() => (closed = true), 60);
+
+    const result = await outcomeOf(adapter.forwardMessage('src@c.us', CHAT, 'M1'));
+
+    expect(result).toEqual({ error: expect.any(EngineNotReadyError) as unknown });
+    expect(forward).not.toHaveBeenCalled();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
   it('keeps a send that was already on the wire an outcome-unknown failure', async () => {
     const onWire = gate();
     const sendMessage = jest.fn(() =>
@@ -472,6 +526,7 @@ const DEATH_CASES: DeathCase[] = [
       const source = { fetchMessages: () => Promise.resolve([{ id: { _serialized: 'M1' }, forward }]) };
       return {
         client: {
+          pupPage: { isClosed: () => true },
           getNumberId: () => Promise.resolve(found(CHAT)),
           getChatById: (id: string) => (id === 'src@c.us' ? Promise.resolve(source) : Promise.reject(closedTarget())),
         },
@@ -488,6 +543,8 @@ const DEATH_CASES: DeathCase[] = [
       const destination = { fetchMessages: () => Promise.reject(closedTarget()) };
       return {
         client: {
+          pupPage: { isClosed: () => false },
+          pupBrowser: { isConnected: () => false },
           getNumberId: () => Promise.resolve(found(CHAT)),
           getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
         },
