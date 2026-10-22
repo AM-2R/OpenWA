@@ -3,7 +3,7 @@ import { PluginCapabilityContext } from './plugin-capability-context';
 import { PluginHostServices } from './plugin-host-services';
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginInstance, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
-import { createLogger, LogFormat, LoggerService } from '../../common/services/logger.service';
+import { createLogger, LogFormat, LoggerService, LogLevel } from '../../common/services/logger.service';
 
 describe('the logger a plugin gets', () => {
   const manifest: PluginManifest = {
@@ -211,6 +211,79 @@ describe('the logger a plugin gets', () => {
         warn.mockRestore();
         LoggerService.setLogFormat(null);
       }
+    });
+  });
+
+  // Plugin code is not type checked and can pass anything: no argument may make the call throw into the plugin, and
+  // every line keeps the plugin id.
+  describe('an argument that throws when it is read', () => {
+    const trap = (): never => {
+      throw new Error('trap');
+    };
+    const revoked = (target: object): object => {
+      const { proxy, revoke } = Proxy.revocable(target, {});
+      revoke();
+      return proxy;
+    };
+    // The lines of the nine calls below, in the order they were made, whatever console method each went to.
+    const written = (make: () => unknown): Record<string, unknown>[] => {
+      LoggerService.setLogFormat(LogFormat.JSON);
+      LoggerService.setLogLevel(LogLevel.DEBUG);
+      const lines: Record<string, unknown>[] = [];
+      const spies = [jest.spyOn(console, 'log'), jest.spyOn(console, 'warn'), jest.spyOn(console, 'error')];
+      for (const spy of spies)
+        spy.mockImplementation((line: string) => lines.push(JSON.parse(line) as Record<string, unknown>));
+      try {
+        const { logger } = setup(createLogger('Plugins'));
+        const meta = (): Record<string, unknown> => make() as Record<string, unknown>;
+        logger.log(make() as string);
+        logger.debug(make() as string);
+        logger.warn(make() as string);
+        logger.error(make() as string);
+        logger.error('m', make());
+        logger.log('m', meta());
+        logger.debug('m', meta());
+        logger.warn('m', meta());
+        logger.error('m', undefined, meta());
+        return lines;
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+        LoggerService.setLogFormat(null);
+        LoggerService.setLogLevel(LogLevel.INFO);
+      }
+    };
+
+    it.each([
+      ['a Proxy whose getPrototypeOf trap throws', (): unknown => new Proxy({ a: 1 }, { getPrototypeOf: trap })],
+      ['a Proxy whose get trap throws', (): unknown => new Proxy({ a: 1 }, { get: trap })],
+      ['a Proxy whose ownKeys trap throws', (): unknown => new Proxy({ a: 1 }, { ownKeys: trap })],
+      ['a revoked Proxy', (): unknown => revoked({ a: 1 })],
+      ['a revoked Proxy of an array', (): unknown => revoked([1])],
+      ['an object whose toString throws', (): unknown => ({ toString: trap, valueOf: trap })],
+      ['an object without a prototype', (): unknown => Object.create(null) as object],
+      ['a Symbol', (): unknown => Symbol('s')],
+      [
+        'an Error whose message getter throws',
+        (): unknown => Object.defineProperty(new Error('x'), 'message', { get: trap }),
+      ],
+      [
+        'an Error behind a Proxy whose getPrototypeOf trap throws',
+        (): unknown => new Proxy(new Error('x'), { getPrototypeOf: trap }),
+      ],
+    ])('writes every line with the plugin id when the message, error or meta is %s', (_name, make) => {
+      const all = written(make);
+
+      expect(all).toHaveLength(9);
+      for (const line of all) expect(line).toMatchObject({ pluginId: 'p1' });
+    });
+
+    it('writes what it can read: the text String gives, the marker for the rest, a Proxy meta by its own properties', () => {
+      expect(written(() => Symbol('s'))[0]).toMatchObject({ message: '[p1] Symbol(s)' });
+      expect(written(() => Object.create(null) as object)[0]).toMatchObject({ message: '[p1] [Unprintable]' });
+      const message = Object.defineProperty(new Error('x'), 'message', { get: trap });
+      expect(written(() => message)[4]).toMatchObject({ message: '[p1] m', trace: '[Unprintable]' });
+      expect(written(() => new Proxy({ a: 1 }, { getPrototypeOf: trap }))[5]).toMatchObject({ a: 1, pluginId: 'p1' });
+      expect(written(() => revoked({ a: 1 }))[5]).toMatchObject({ metadata: '[Unreadable]', pluginId: 'p1' });
     });
   });
 

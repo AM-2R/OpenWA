@@ -218,7 +218,7 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
 }
 
 /** Written in place of a message or trace that cannot be read. */
-const UNPRINTABLE = '[Unprintable]';
+export const UNPRINTABLE = '[Unprintable]';
 
 /**
  * What a value that could not be turned into JSON is written as: a primitive as it prints, anything else not at all.
