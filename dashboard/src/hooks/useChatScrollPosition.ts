@@ -215,6 +215,13 @@ export function useChatScrollPosition(
     [pinToBottom],
   );
 
+  // Remember where the reader is in a chat, by the one rule every writer of the map follows: at the bottom is a
+  // state, not an offset, because the thread keeps growing under a reader who follows it.
+  const rememberPosition = useCallback((chatId: string, el: HTMLDivElement) => {
+    if (isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight)) scrollMap.current.delete(chatId);
+    else scrollMap.current.set(chatId, el.scrollTop);
+  }, []);
+
   // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
   // pins; any scroll away (only ever the user's) unpins. The SAME listener saves the visible
   // chat's scrollTop on every genuine user scroll, so the per-chat position map always holds the
@@ -235,12 +242,7 @@ export function useChatScrollPosition(
       const atBottom = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
       pinnedRef.current = atBottom;
       const visibleChatId = prevChatIdRef.current;
-      if (visibleChatId && loadedRef.current) {
-        // At the bottom is a state, not an offset: the thread keeps growing under a reader who follows it, so a
-        // chat left there is opened at its newest message, not at the offset it had when the reader scrolled.
-        if (atBottom) scrollMap.current.delete(visibleChatId);
-        else scrollMap.current.set(visibleChatId, el.scrollTop);
-      }
+      if (visibleChatId && loadedRef.current) rememberPosition(visibleChatId, el);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -317,7 +319,7 @@ export function useChatScrollPosition(
       // last REAL scroll left there, which is necessarily above the paging threshold (that is
       // what triggered this fetch). Leaving without scrolling again and coming back would restore
       // to that stale, too-high spot instead of the corrected one actually being read.
-      if (activeChatId !== null) scrollMap.current.set(activeChatId, corrected);
+      if (activeChatId !== null) rememberPosition(activeChatId, el);
     }
   });
 
@@ -417,12 +419,11 @@ export function useChatScrollPosition(
         // Add to the LIVE scrollTop, not a value captured at event time: a sibling element decoding
         // in the same frame has its own rAF that already moved scrollTop, and this one must stack on
         // top of it. A captured absolute would re-assert the pre-sibling position and lose the sum.
-        const next = cur.scrollTop + grew;
-        writeScrollTop(cur, next);
-        if (activeChatId !== null) scrollMap.current.set(activeChatId, next);
+        writeScrollTop(cur, cur.scrollTop + grew);
+        if (activeChatId !== null) rememberPosition(activeChatId, cur);
       });
     },
-    [activeChatId, followBottom, writeScrollTop],
+    [activeChatId, followBottom, rememberPosition, writeScrollTop],
   );
 
   return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested };

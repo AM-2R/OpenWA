@@ -756,3 +756,34 @@ test('a message announced without growing the thread does not pin the reader whe
     restore();
   }
 });
+
+// An older page lands under a reader who jumped to the bottom while it was in flight. The landing holds them there,
+// and where it leaves them is the bottom only until something arrives below.
+test('a chat left at the bottom after an older page landed under the reader comes back at the bottom', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50); // near the top: an older page is asked for
+    hook().onOlderMessagesRequested();
+    rerender(createElement(Probe, { chatId: 'A', fetching: true }));
+    readerScrollsTo(el, g.height - CLIENT_HEIGHT); // the reader jumps to the bottom while it is out
+    g.height += 4600; // the page lands above them
+    rerender(createElement(Probe, { chatId: 'A', fetching: false }));
+    await nextFrame();
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the landing did not hold the reader at the bottom');
+    fireEvent.scroll(el);
+
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader leaves A at its bottom
+    fireEvent.scroll(el);
+    g.height += 200; // two messages reach A's cached thread meanwhile
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'A reopened above the messages that arrived');
+  } finally {
+    restore();
+  }
+});
