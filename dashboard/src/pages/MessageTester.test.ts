@@ -355,6 +355,36 @@ test('a 502 from a reverse proxy stops the run, since the gateway behind it is d
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
 });
 
+// The list is read from a textarea that holds up to 2 MiB, so it is parsed when the list changes, not on every render.
+test('the recipient list is parsed when it changes, not on every other keystroke', async () => {
+  stubGroupGateway([]);
+  window.sessionStorage.setItem('openwa_user_role', 'admin');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  const { container } = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+
+  // Count the line splits of the list. Swapped by hand: the test runner does not restore a symbol-keyed method.
+  const list = '628111222333\n628222333444';
+  let parses = 0;
+  const split = RegExp.prototype[Symbol.split];
+  RegExp.prototype[Symbol.split] = function (this: RegExp, text: string, limit?: number) {
+    if (text === list) parses++;
+    return split.call(this, text, limit);
+  };
+  try {
+    type(container, '#mt-11', list);
+    const afterList = parses;
+    assert.ok(afterList >= 1, 'the list was not parsed');
+    for (const text of ['a', 'ab', 'abc']) type(container, '#mt-12', text);
+    assert.equal(parses, afterList);
+  } finally {
+    RegExp.prototype[Symbol.split] = split;
+  }
+});
+
 test('an empty message or a media type with no file or URL keeps Send disabled', async () => {
   stubGroupGateway([
     { id: 'g1@g.us', name: 'Family' },

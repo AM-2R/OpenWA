@@ -14,12 +14,8 @@ function asciiDigit(digit: string): string {
 // script's decimal digits as ASCII ones. Only that block is folded: a general compatibility fold would also turn
 // circled and superscript numbers and fractions, which are list bullets and footnote marks, into digits.
 export function normalizePhoneText(text: string): string {
-  return [...text]
-    .map(ch => {
-      const code = ch.codePointAt(0)!;
-      return code >= 0xff01 && code <= 0xff5e ? String.fromCharCode(code - 0xfee0) : ch;
-    })
-    .join('')
+  return text
+    .replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
     .replace(/\p{Cf}/gu, '')
-    .replace(/\p{Nd}/gu, asciiDigit);
+    .replace(/(?![0-9])\p{Nd}/gu, asciiDigit);
 }

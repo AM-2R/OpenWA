@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, CheckCircle, XCircle, Loader2, Upload, X, Plus, AlertCircle } from 'lucide-react';
 import {
@@ -331,7 +331,7 @@ export function MessageTester() {
   };
 
   const isMediaMessageType = mediaMessageTypes.includes(messageType);
-  const bulkRecipientList = parseBulkRecipients(bulkRecipients);
+  const bulkRecipientList = useMemo(() => parseBulkRecipients(bulkRecipients), [bulkRecipients]);
   const pollOptionsFilled = pollOptions.map(o => o.trim()).filter(o => o.length > 0);
   const lat = parseFloat(latitude);
   const lng = parseFloat(longitude);

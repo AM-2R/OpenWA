@@ -30,3 +30,20 @@ test('ASCII text, letters and punctuation come back unchanged', () => {
   assert.equal(normalizePhoneText('+62 (812) 345-6789, abc\n'), '+62 (812) 345-6789, abc\n');
   assert.equal(normalizePhoneText(''), '');
 });
+
+// Nearly every number is plain ASCII, so it must cost no per-character work: mapping every digit made a 2 MiB
+// recipient list about ten times slower to parse, and the recipient list is parsed while typing.
+test('ASCII text is returned without any per-character mapping', t => {
+  let calls = 0;
+  const original = String.prototype.codePointAt;
+  t.mock.method(String.prototype, 'codePointAt', function (this: string, index: number) {
+    calls++;
+    return original.call(this, index);
+  });
+  const text = '6281234567890\n+62 (812) 345-6789, abc\n'.repeat(50);
+  assert.equal(normalizePhoneText(text), text);
+  assert.equal(calls, 0);
+  // Control: a native-script digit does go through the mapper.
+  assert.equal(normalizePhoneText(char(0x0662)), '2');
+  assert.ok(calls > 0);
+});
