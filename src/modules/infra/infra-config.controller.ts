@@ -480,9 +480,10 @@ export class InfraConfigController {
       // data/.env.generated carries POSTGRES_BUILTIN=false, so a bare compose-profile restart would
       // otherwise tear down the very backend the app is running on. The dashboard fills this list from the
       // live /infra/status at save time: the builtIn services minus the new profiles, plus a running container
-      // OpenWA created whose host the environment pins elsewhere, less any the saved config read back still
-      // reaches. A container is left running when that status read had failed, or when the next boot still
-      // dials it (dropped above).
+      // OpenWA created whose host the environment pins elsewhere, less any whose next-boot host (the pinned one,
+      // else the saved config read back) still reaches it, and less any whose host it could not read. A
+      // container is left running when that status read had failed, or when the next boot still dials it
+      // (dropped above).
       // Only ever tear down OpenWA-managed services. An arbitrary profile name (or the empty string)
       // would otherwise reach stopManagedService and, via container-name matching, could stop an unrelated
       // container — so constrain teardown to the managed allowlist and drop anything else.

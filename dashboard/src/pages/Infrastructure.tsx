@@ -39,6 +39,9 @@ interface QueueStats {
   failed: number;
 }
 
+// The key that holds each managed profile's host.
+const HOST_KEY: Record<string, string> = { postgres: 'DATABASE_HOST', redis: 'REDIS_HOST', minio: 'S3_ENDPOINT' };
+
 /** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
 const nextBootHost = (profile: string, config: SavedConfig): string =>
   profile === 'postgres' ? config.database.host : profile === 'redis' ? config.redis.host : config.storage.s3Endpoint;
@@ -125,15 +128,18 @@ export function Infrastructure() {
       )
         .filter(([profile, up, host]) => up && host !== undefined && !namesBundledContainer(profile, host))
         .map(([profile]): string => profile);
-      // The server never stops a container the next boot still reaches, read from the file this save wrote, so the
-      // page reads that file back and asks for (and names) only the others. Without the read, the server decides.
-      // The form is seeded once, so the refetch keeps any edit in progress.
+      // The server never stops a container the next boot still reaches: the host the environment pins, else the one in
+      // the file this save wrote. A pinned host is the one the page loaded; the saved one the page reads back. It asks
+      // for (and names) only the containers neither reaches, and none whose host it could not read, so the dialog lists
+      // what the server stops. The form is seeded once, so the refetch keeps any edit in progress.
       const saved = await queryClient
         .fetchQuery({ queryKey: ['infra', 'config'], queryFn: infraApi.getConfig, staleTime: 0 })
         .catch(() => undefined);
-      const toStop = [...running, ...pinnedAway].filter(
-        profile => !saved || !namesBundledContainer(profile, nextBootHost(profile, saved)),
-      );
+      const next = (profile: string) => pinned(HOST_KEY[profile]) ?? saved;
+      const toStop = [...running, ...pinnedAway].filter(profile => {
+        const config = next(profile);
+        return !!config && !namesBundledContainer(profile, nextBootHost(profile, config));
+      });
       restartFlow.open({
         profiles: profiles.filter(p => !pinnedAway.includes(p)),
         running: toStop,

@@ -1972,6 +1972,64 @@ test('a built-in Redis switched off but left on the bundled host is neither stop
   assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: [] });
 });
 
+// The server reads the saved host from the file the save wrote. Without the read-back the page cannot know it, so it
+// neither asks to stop that container nor names it: the dialog lists only what the server stops.
+test('a built-in Redis left on the bundled host is neither stopped nor named when the read-back fails', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const redis = { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false };
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true, running: true },
+    },
+    saved: { ...SAVED_CONFIG, redis },
+    savedAfterSaveFails: true,
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  const builtInRedis = toggleInput(container, 'Use Built-in Redis Container');
+  await waitFor(() => assert.equal(builtInRedis.checked, true));
+  fireEvent.click(builtInRedis);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.doesNotMatch(dialog.textContent ?? '', /openwa-/);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: [] });
+});
+
+// A pinned host is known without the read-back: one that reaches the container keeps it.
+test('bundled containers the pinned hosts reach are neither stopped nor named when the read-back fails', async () => {
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_BUNDLED, envPinned: ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT'] },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, builtIn: true, builtInSet: false, host: 'postgres' },
+      redis: { enabled: true, builtIn: true, builtInSet: false, host: 'redis', port: '6379', passwordSet: false },
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        builtIn: true,
+        builtInSet: false,
+        s3Bucket: 'openwa',
+        s3Endpoint: 'http://minio:9000',
+      },
+    },
+    savedAfterSaveFails: true,
+  };
+
+  const { dialogText, names, body } = await saveAndRestart();
+
+  assert.deepEqual(names, []);
+  assert.doesNotMatch(dialogText, /openwa-/);
+  assert.deepEqual(body, { profiles: [], profilesToRemove: [] });
+});
+
 test('bundled containers the environment pins the hosts to are neither stopped nor named', async () => {
   const { screen, waitFor, fireEvent, within } = rtl;
   resetFetchCalls();
