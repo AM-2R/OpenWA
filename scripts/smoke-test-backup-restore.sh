@@ -89,6 +89,9 @@
 #       link to /, one of those followed by .. or a link whose target ends in one, or a link to / whose
 #       name is not valid UTF-8, ahead of the writability check a non-root user would stop at (skipped
 #       where a user can write /)
+#   (as) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that names an
+#       existing directory (the workspace's parent, the data dir, another directory, a link to one),
+#       before it copies, writes into or changes the mode of it
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2700,6 +2703,35 @@ if [ "$ROOT_SAFE" -eq 1 ]; then
 else
   echo "SKIP: (ar) the / cases, which need a user who cannot write /"
 fi
+
+echo ""
+echo "==> (as) restore refuses a database or key file target that is a directory"
+# These targets are files. A directory there was copied whole into the safety snapshot, received the file inside
+# it, and then lost its search bit to the chmod 0600 that follows a database or key file, so the workspace's own
+# parent could become untraversable for its owner. tree_digest does not see a mode, so it is read separately.
+AS="$WORK/as"
+mkdir -p "$AS/top/proj/data" "$AS/other/sub" "$AS/home"
+printf 'as-keep\n' >"$AS/top/keep.txt"
+printf 'as-keep\n' >"$AS/other/keep.txt"
+ln -s other "$AS/otherlink"
+dir_mode() {
+  for bit in 400 200 100 040 020 010 004 002 001; do
+    if [ -n "$(find "$1/." -maxdepth 0 -perm -"$bit")" ]; then printf 1; else printf 0; fi
+  done
+}
+for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
+  as_var="${target%% *}"
+  as_label="${target#* }"
+  for as_dir in "$AS/top" "$AS/top/proj/data" "$AS/other" "$AS/otherlink"; do
+    as_mode="$(dir_mode "$as_dir")"
+    refused_restore "$AS" "as: $as_var=${as_dir#"$AS"/}" "refusing to replace $as_label target that is a directory" "$AS/top/proj" "$ARCHIVE_AP" \
+      OPENWA_DATA_DIR="$AS/top/proj/data" "$as_var=$as_dir"
+    if [ "$(dir_mode "$as_dir")" != "$as_mode" ]; then
+      fail "(as: $as_var=${as_dir#"$AS"/}) the refused restore changed the mode of the directory: $as_mode to $(dir_mode "$as_dir")"
+    fi
+  done
+done
+pass "(as) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE naming a directory are refused before anything is copied or changed"
 
 echo ""
 echo "All smoke tests passed!"

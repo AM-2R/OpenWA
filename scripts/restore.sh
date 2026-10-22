@@ -164,6 +164,16 @@ refuse_root_target() {
   fi
 }
 
+# refuse_directory_target <path> <label>: a database or key file is a file. Given a directory (the workspace's
+# parent, say, from a typo in a path) the restore copied it whole into the safety snapshot, wrote the file
+# inside it, and then took the search bit off it with the chmod 0600 that follows a database or key file.
+refuse_directory_target() {
+  if [ -d "$1" ]; then
+    log "ERROR: refusing to replace $2 target that is a directory: $1"
+    exit 1
+  fi
+}
+
 replace_tree() {
   source_dir="$1"
   target_dir="$2"
@@ -254,6 +264,7 @@ restore_db() {
   resolved_db="$(resolve_path "$2")"
   if [ "$PHASE" = snapshot ]; then
     refuse_root_target "$2" "$3"
+    refuse_directory_target "$2" "$3"
     openwa_writable "$2" || refuse_unwritable "$2" "$3"
     for db in "$2" "$resolved_db"; do
       for sfx in -wal -shm -journal; do
@@ -483,6 +494,7 @@ restore_targets() {
 restore_admin_key() {
   if [ "$PHASE" = snapshot ]; then
     refuse_root_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
+    refuse_directory_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     openwa_writable "$ADMIN_KEY_FILE" || refuse_unwritable "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     snapshot_external "$ADMIN_KEY_FILE"
     return
