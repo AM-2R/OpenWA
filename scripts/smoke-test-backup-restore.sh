@@ -1018,7 +1018,7 @@ if [ "$(id -u)" -ne 0 ]; then
     rm -f "$U/live/$f"
     expect_untouched "$f"
   done
-  pass "(u) an unwritable state or database target stops the restore before anything is written"
+  pass "(u) an unwritable state or database target stops the restore before it replaces anything"
 else
   echo "SKIP: (u) running as root, which ignores the permission bits this case relies on"
 fi
@@ -2296,8 +2296,9 @@ fi
 pass "(al) a failed tar exits non-zero and leaves nothing in BACKUP_DIR"
 
 # tree_digest <dir>: every path and file checksum below <dir>, apart from the restore's own safety
-# snapshots (<name>.pre-restore-<time>). The data-dir snapshot is taken before the state dirs are checked,
-# so a refusal of one can leave a copy of the data dir behind.
+# snapshots (<name>.pre-restore-<time>). A refusal in the snapshot pass can leave such snapshots behind: one
+# of the data dir, taken first, and one of each external target checked before the refused one. The data dir
+# the restore creates when there is none is not pruned, so the cases below start with one.
 tree_digest() {
   (
     cd "$1"
