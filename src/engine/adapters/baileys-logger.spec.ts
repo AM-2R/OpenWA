@@ -130,6 +130,18 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line).toContain('"password":"[redacted]","visible":"v"');
   });
 
+  it('writes an array subclass as the plain array it holds', () => {
+    class Rows extends Array<unknown> {
+      toJSON(): string[] {
+        return ['replaced'];
+      }
+    }
+
+    expect(write({ rows: Rows.from([1, { password: 'p' }]) }, 'x')).toMatchObject({
+      rows: [1, { password: '[redacted]' }],
+    });
+  });
+
   it('writes a sparse array of the largest length as [Truncated] at once', () => {
     const list: unknown[] = [];
     list.length = 2 ** 32 - 1;

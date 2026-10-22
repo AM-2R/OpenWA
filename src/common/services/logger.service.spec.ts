@@ -302,6 +302,23 @@ describe('LoggerService', () => {
     });
   });
 
+  describe('an array subclass', () => {
+    class Rows extends Array<unknown> {
+      toJSON(): string[] {
+        return ['replaced'];
+      }
+    }
+
+    it('is written as the plain array it holds, in the metadata and as the message', () => {
+      logger.log('saved', { rows: Rows.from([1, { token: 't' }]) });
+      logger.log(Rows.from([1, 2]));
+
+      const calls = consoleSpy.mock.calls as string[][];
+      expect(JSON.parse(calls[0][0])).toMatchObject({ rows: [1, { token: '[REDACTED]' }] });
+      expect(JSON.parse(calls[1][0])).toMatchObject({ message: '[1,2]' });
+    });
+  });
+
   // Nest passes the framework's own message and trace through, so the two slots hold whatever it was handed.
   describe('a message or trace that cannot be read', () => {
     const revokedProxy = (): object => {
@@ -651,6 +668,15 @@ describe('redactSecrets', () => {
 
     expect(copy.error).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
     expect(copy.error.stack).toContain('Error: boom');
+  });
+
+  it('copies an array as a plain array, whatever class it is an instance of', () => {
+    class Rows extends Array<unknown> {}
+
+    const copy = redactSecrets({ rows: Rows.from([1, { token: 't' }]) }) as { rows: unknown[] };
+
+    expect(Object.getPrototypeOf(copy.rows)).toBe(Array.prototype);
+    expect(copy.rows).toEqual([1, { token: '[REDACTED]' }]);
   });
 
   describe('an array longer than one call may walk', () => {

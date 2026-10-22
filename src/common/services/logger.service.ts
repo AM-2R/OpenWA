@@ -64,8 +64,11 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     if (deep && --budget.nodes < 0) return '[Truncated]';
     const parents = [...path, node];
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
-    if (Array.isArray(node))
-      return node.length > (deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH) ? '[Truncated]' : node.map(copy);
+    if (Array.isArray(node)) {
+      if (node.length > (deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH)) return '[Truncated]';
+      // A plain Array read by index: map would build the copy through the constructor of an Array subclass.
+      return Array.from({ length: node.length }, (_, index) => copy(node[index]));
+    }
     const props = node as Record<string, unknown>;
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
