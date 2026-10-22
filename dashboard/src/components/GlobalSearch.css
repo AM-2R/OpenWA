@@ -84,6 +84,11 @@
   outline-offset: -2px;
 }
 
+/* The brand tint under focus is darker than the hover fill, and the muted meta line is 4.35:1 on it. */
+.global-search-hit:focus-visible .global-search-hit-meta {
+  color: var(--text-secondary);
+}
+
 .global-search-hit:last-child {
   border-bottom: 0;
 }

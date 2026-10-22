@@ -55,3 +55,11 @@ test('chat menu entries and search hits draw a ring on keyboard focus', () => {
     assert.match(rule.body, /outline:\s*2px solid var\(--primary\)/, selector);
   }
 });
+
+// The soft brand fill a focused hit paints is a tint: the muted meta line (the chat id and the time) measures 4.35:1
+// on it in the light theme and 3.98:1 in the dark one, where the plain hover fill it replaced gave 4.55:1 and 6.96:1.
+test('the meta line of a keyboard-focused search hit takes the secondary text colour', () => {
+  const rule = all.find(r => r.selectors.includes('.global-search-hit:focus-visible .global-search-hit-meta'));
+  assert.ok(rule, 'a focused hit leaves its meta line muted on the brand tint');
+  assert.match(rule.body, /(?:^|;)\s*color:\s*var\(--text-secondary\)/);
+});

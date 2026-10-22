@@ -181,6 +181,14 @@ test('muted text on a tinted row uses --text-secondary, which clears AA on the t
     ['Chats.css', '.chats-page .chat-item-card.active .chat-item-snippet', 0.08, 0.08, '--bg-white'],
     // The selected template row is --primary-soft: 12 percent in light, 18 percent in dark.
     ['Templates.css', '.templates-page .template-list-item.selected .template-list-meta', 0.12, 0.18, '--bg-light'],
+    // The focused search hit is --primary-soft over the results panel, which is --bg-white.
+    [
+      '../components/GlobalSearch.css',
+      '.global-search-hit:focus-visible .global-search-hit-meta',
+      0.12,
+      0.18,
+      '--bg-white',
+    ],
   ];
   for (const [file, selector, light, dark, surface] of rules) {
     const rule = new RegExp(`${selector.replace(/[.]/g, '\\.')}[^{]*\\{[^}]*color:\\s*var\\((--[\\w-]+)\\)`).exec(
