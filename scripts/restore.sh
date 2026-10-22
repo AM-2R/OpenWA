@@ -79,22 +79,33 @@ DATA_DIR="${OPENWA_DATA_DIR:-./data}"
 RESTORE_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RESOLVED_CWD="$(pwd -P)"
 
-# Resolve symlinks in the nearest existing ancestor as well as lexical '..' segments. This matters for
-# destructive targets such as /mount-link/sessions: path.resolve alone would not reveal that mount-link
-# points at the workspace, home directory, or another broad protected target.
+# Resolve a path the way the kernel does: left to right, following every symlink and applying each '..' to
+# the physical directory reached so far. Folding '..' lexically first would read <link to />/.. as the link's
+# parent directory when the kernel resolves it to /, and a guard on that value would pass what it must refuse.
+# The part past the first component that does not exist cannot hold a link, so '..' there is plain text. This
+# matters for destructive targets such as /mount-link/sessions: path.resolve alone would not reveal that
+# mount-link points at the workspace, home directory, or another broad protected target.
 resolve_path() {
   node -e '
     const fs = require("fs");
     const path = require("path");
-    let current = path.resolve(process.argv[1]);
+    const raw = process.argv[1];
+    const absolute = raw.startsWith("/") ? raw : process.cwd() + "/" + raw;
+    let physical = "/";
     const missing = [];
-    while (!fs.existsSync(current)) {
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      missing.unshift(path.basename(current));
-      current = parent;
+    for (const segment of absolute.split("/")) {
+      if (segment === "" || segment === ".") continue;
+      if (missing.length > 0) {
+        if (segment === "..") missing.pop();
+        else missing.push(segment);
+      } else if (segment === "..") {
+        physical = path.dirname(physical);
+      } else {
+        const next = path.join(physical, segment);
+        if (fs.existsSync(next)) physical = fs.realpathSync(next);
+        else missing.push(segment);
+      }
     }
-    const physical = fs.existsSync(current) ? fs.realpathSync(current) : current;
     console.log(path.join(physical, ...missing));
   ' "$1"
 }

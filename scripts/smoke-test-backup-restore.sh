@@ -69,21 +69,22 @@
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
 #   (am) restore refuses an OPENWA_DATA_DIR that is ., ./, .., ../, /, the working directory, a parent of
-#       it, a link to it or the home directory, before it reads the archive (the / case is skipped
-#       where a user can write /)
-#   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to /, the working
-#       directory, the data dir, the home directory or a directory around the workspace or the data
-#       dir, before it replaces anything (the data-dir safety snapshot is taken first; the / cases are
+#       it, a link to it or the home directory, before it reads the archive; and, behind a cp that
+#       stops at /, //, /., /./, /.. and a link to / with or without a trailing .. (the / cases are
 #       skipped where a user can write /)
+#   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to / with or without a
+#       trailing .., the working directory, the data dir, the home directory or a directory around the
+#       workspace or the data dir, before it replaces anything (the data-dir safety snapshot is taken
+#       first; the / cases are skipped where a user can write /)
 #   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
 #   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, beside the file a
 #       link points at and beside the link's own name, and an external database's are kept in its
 #       snapshot
-#   (ar) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that is /, //, /. or a
-#       link to /, ahead of the writability check a non-root user would stop at (skipped where a user can
-#       write /)
+#   (ar) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that is /, //, /., a
+#       link to / or one of those followed by .., ahead of the writability check a non-root user would
+#       stop at (skipped where a user can write /)
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2412,7 +2413,14 @@ EOF
   else
     [ $? -eq 97 ] || fail "(am) the cp that guards the root cases did not stop at /"
   fi
-  ln -s / "$AM/rootlink"
+  # A link to /, followed by .., is / to the kernel: it resolves the link before it takes the parent. A
+  # resolution that folds the .. first reads the directory holding the link, so the links sit in a directory of
+  # their own that no other check refuses (not above the working directory, say). The spellings go through a
+  # second link to that link, and through a link to the directory holding it.
+  mkdir -p "$AM/links"
+  ln -s / "$AM/links/rootlink"
+  ln -s rootlink "$AM/links/rootlink2"
+  ln -s "$AM/links" "$AM/links/self"
   am_root() {
     am_refused "$AM" "am: $1" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$2"
   }
@@ -2420,8 +2428,11 @@ EOF
   am_root "/." /.
   am_root "/./" /./
   am_root "/.." /..
-  am_root "link to /" "$AM/rootlink"
-  pass "(am) //, /., /./, /.. and a link to / are refused as OPENWA_DATA_DIR, before the archive is read"
+  am_root "link to /" "$AM/links/rootlink"
+  am_root "link to / and .." "$AM/links/rootlink/.."
+  am_root "link to a link to / and .." "$AM/links/rootlink2/.."
+  am_root "link to a directory holding a link to / and .." "$AM/links/self/rootlink/.."
+  pass "(am) //, /., /./, /.., a link to / and a link to / followed by .. are refused as OPENWA_DATA_DIR, before the archive is read"
 else
   echo "SKIP: (am) the / case, which needs a user who cannot write /"
 fi
@@ -2447,6 +2458,9 @@ refused_restore "$AN" "an: around the workspace" 'whatsapp-web.js sessions targe
 refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target that contains the data directory' \
   "$AN/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AN/vol/data" SESSION_DATA_PATH="$AN/vol"
 AN_UNSAFE='refusing to replace unsafe whatsapp-web.js sessions target'
+# Past a directory that does not exist nothing can be a link, and the kernel cannot walk through it at all, so
+# a .. there is plain text and is folded: this one is the data dir.
+refused_restore "$AN" "an: missing dir and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/work/data/missing/.."
 for literal in . ./ .. ../; do
   refused_restore "$AN" "an: $literal" "$AN_UNSAFE: $literal" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$literal"
 done
@@ -2454,11 +2468,21 @@ pass "(an) a state dir that is ., ./, .., ../, the workspace, the data dir, the 
 if [ "$ROOT_SAFE" -eq 1 ]; then
   refused_restore "$AN" "an: /" 'refusing to replace unsafe whatsapp-web.js sessions target: /' \
     "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=/
-  mkdir -p "$AN/rootlink"
+  mkdir -p "$AN/rootlink" "$AN/work/data/sub"
   ln -s / "$AN/rootlink/root"
-  # Only the resolved comparison sees / behind a link; the literal check never matches it.
+  ln -s root "$AN/rootlink/root2"
+  ln -s / "$AN/work/data/sub/rootlink"
+  # Only the resolved comparison sees / behind a link; the literal check never matches it. With .. after the
+  # link, the kernel takes the parent of what the link points at, so <link>/.. is /, which is what the find
+  # that empties the target acts on; a resolution that folds .. first reads the link's own directory. The last
+  # spelling is a link inside the data dir, whose folded form lies under it and so would not be snapshotted.
   refused_restore "$AN" "an: link to /" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/rootlink/root"
-  pass "(an) / and a link to / are refused as a state dir"
+  refused_restore "$AN" "an: link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN/rootlink/root/.."
+  refused_restore "$AN" "an: link to a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/rootlink/root2/.."
+  refused_restore "$AN" "an: link to / in the data dir and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+    SESSION_DATA_PATH="$AN/work/data/sub/rootlink/.."
+  pass "(an) / and a link to / with or without a trailing .. are refused as a state dir"
 else
   echo "SKIP: (an) the / cases, which need a user who cannot write /"
 fi
@@ -2595,16 +2619,18 @@ if [ "$ROOT_SAFE" -eq 1 ]; then
   AR="$WORK/ar"
   mkdir -p "$AR/work/data" "$AR/home"
   printf 'ar-keep\n' >"$AR/work/data/keep.txt"
-  ln -s / "$AR/rootlink"
+  mkdir -p "$AR/links"
+  ln -s / "$AR/links/rootlink"
+  ln -s rootlink "$AR/links/rootlink2"
   for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
     ar_var="${target%% *}"
     ar_label="${target#* }"
-    for ar_spelling in / // /. "$AR/rootlink"; do
+    for ar_spelling in / // /. "$AR/links/rootlink" "$AR/links/rootlink/.." "$AR/links/rootlink2/.."; do
       refused_restore "$AR" "ar: $ar_var=$ar_spelling" "refusing to replace broad $ar_label target" "$AR/work" "$ARCHIVE_AP" \
         PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$AR/work/data" "$ar_var=$ar_spelling"
     done
   done
-  pass "(ar) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE as /, //, /. or a link to / are refused"
+  pass "(ar) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE as /, //, /., a link to / or one of those followed by .. are refused"
 else
   echo "SKIP: (ar) the / cases, which need a user who cannot write /"
 fi
