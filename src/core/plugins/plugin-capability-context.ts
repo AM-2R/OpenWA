@@ -56,6 +56,9 @@ export function dispatchConversationMedia(
   }
 }
 
+/** The trace for a plugin's ctx.logger.error: an Error's message, or the text of whatever else was passed. */
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 /**
  * The capability surface a plugin actually touches: ctx.messages, ctx.engine, ctx.net, ctx.storage,
  * ctx.conversations, ctx.handover, ctx.mappings — and the gates in front of every one of them.
@@ -229,11 +232,10 @@ export class PluginCapabilityContext {
       warn: (message, meta) =>
         this.logger.warn(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
       error: (message, error, meta) =>
-        this.logger.error(
-          `[${plugin.manifest.id}] ${message}`,
-          error instanceof Error ? error.message : String(error),
-          { ...meta, pluginId: plugin.manifest.id },
-        ),
+        this.logger.error(`[${plugin.manifest.id}] ${message}`, error === undefined ? undefined : errorText(error), {
+          ...meta,
+          pluginId: plugin.manifest.id,
+        }),
     };
   }
 

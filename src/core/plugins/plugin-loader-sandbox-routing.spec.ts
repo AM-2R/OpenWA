@@ -756,17 +756,17 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('error', 'long', { error: 'e'.repeat(10000) });
     loader.capturedOnLog!('error', 'nullmeta', null as unknown as Record<string, unknown>);
 
-    expect(errorSpy).toHaveBeenNthCalledWith(1, '[p1] big', 'undefined', {
+    expect(errorSpy).toHaveBeenNthCalledWith(1, '[p1] big', undefined, {
       error: 'boom',
       metaTruncated: true,
       metaLength: 20026,
       pluginId: 'p1',
     });
-    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', 'undefined', { error: 'boom', pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', undefined, { error: 'boom', pluginId: 'p1' });
     const longMeta = errorSpy.mock.calls[2][2] as { error: string; metaTruncated: boolean };
     expect(longMeta.metaTruncated).toBe(true);
     expect(longMeta.error).toBe(`${'e'.repeat(8192)}…[truncated]`);
-    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', 'undefined', { pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', undefined, { pluginId: 'p1' });
   });
 
   // postMessage keeps shared references shared, so a meta that is small to hold writes out, at every use, as JSON
@@ -806,7 +806,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('error', 'fan-out', { error: 'boom', fan: fanOut(8) });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(errorSpy).toHaveBeenCalledWith('[p1] fan-out', 'undefined', {
+      expect(errorSpy).toHaveBeenCalledWith('[p1] fan-out', undefined, {
         error: 'boom',
         metaTruncated: true,
         pluginId: 'p1',
