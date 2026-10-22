@@ -109,8 +109,9 @@ const NUMBER_NAMED_CONTACT = {
 let listExtra = false;
 // The phone the gateway resolves a privacy id to, by id; an id it knows nothing about answers null.
 const lidPhones: Record<string, string> = {};
-// When true, resolving a privacy id fails as it does while the engine is busy.
+// When true, resolving a privacy id fails as it does while the engine is busy; `failingLidIds` fails only those.
 let failLidPhones = false;
+const failingLidIds = new Set<string>();
 // When true, it answers a phone that is no string, which nothing in the page expects.
 let garbleLidPhones = false;
 // When true, the number check answers that the number is not on WhatsApp.
@@ -289,7 +290,7 @@ function installFetchStub(): void {
     }
     if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
       const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
-      if (failLidPhones) return Promise.resolve(jsonResponse({ message: 'busy' }, 503));
+      if (failLidPhones || failingLidIds.has(id)) return Promise.resolve(jsonResponse({ message: 'busy' }, 503));
       if (garbleLidPhones) return Promise.resolve(jsonResponse({ contactId: id, phone: 15550009999 }));
       return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
     }
@@ -363,6 +364,7 @@ afterEach(async () => {
   listDuplicateContact = false;
   failContacts = false;
   failLidPhones = false;
+  failingLidIds.clear();
   garbleLidPhones = false;
   numberNotRegistered = false;
   extraLidChats = 0;
@@ -532,6 +534,22 @@ test('a privacy id the engine cannot resolve right now does not stop a chat from
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
   await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
+});
+
+test('one privacy id whose lookup fails does not hide the chat another privacy id holds', async () => {
+  const { screen, waitFor } = rtl;
+  extraLidChats = 2;
+  // The newer chat's lookup answers 503 while the older one resolves to the typed number.
+  failingLidIds.add(extraLidChat(0).id);
+  lidPhones[extraLidChat(1).id] = '15550009999';
+  const { container } = renderPage();
+  await screen.findByText('Lid 0');
+  const before = listedChatCards(container);
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
+  assert.equal(container.querySelector('.room-header .room-contact-info h3')?.textContent, 'Lid 1');
+  assert.equal(listedChatCards(container), before, 'a second chat was added beside the one the list holds');
 });
 
 test('an answer about a privacy id that the page cannot read does not stop a chat from opening', async () => {
