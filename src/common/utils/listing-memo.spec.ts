@@ -88,6 +88,87 @@ describe('ListingMemo', () => {
     expect(load).toHaveBeenCalledTimes(4);
   });
 
+  describe('eviction of an idle list', () => {
+    const entryCount = (memo: ListingMemo<{ id: string }>) => memo['entries'].size;
+
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('releases an expired list although no session reads it again', async () => {
+      const memo = new ListingMemo<{ id: string }>();
+      const load = list('a');
+      await memo.read('s1', 0, load);
+      await memo.read('s2', 0, load);
+      jest.advanceTimersByTime(LISTING_MEMO_TTL_MS - 1);
+      expect(entryCount(memo)).toBe(2);
+      jest.advanceTimersByTime(1);
+      expect(entryCount(memo)).toBe(0);
+      await memo.read('s1', 1000, load);
+      expect(load).toHaveBeenCalledTimes(3);
+    });
+
+    it('starts the clock when the read ends, not when it starts', async () => {
+      const memo = new ListingMemo<{ id: string }>();
+      let finish: (items: { id: string }[]) => void = () => undefined;
+      const pending = memo.read('s1', 0, () => new Promise(resolve => (finish = resolve)));
+      jest.advanceTimersByTime(LISTING_MEMO_TTL_MS * 3);
+      expect(entryCount(memo)).toBe(1);
+      finish([{ id: 'a' }]);
+      await pending;
+      jest.advanceTimersByTime(LISTING_MEMO_TTL_MS - 1);
+      expect(entryCount(memo)).toBe(1);
+      jest.advanceTimersByTime(1);
+      expect(entryCount(memo)).toBe(0);
+    });
+
+    it('clears the timer when the entry is dropped', async () => {
+      const memo = new ListingMemo<{ id: string }>();
+      await memo.read('s1', 0, list('a'));
+      expect(jest.getTimerCount()).toBe(1);
+      memo.drop('s1');
+      expect(jest.getTimerCount()).toBe(0);
+      expect(entryCount(memo)).toBe(0);
+    });
+
+    it('leaves no timer behind for a drop in flight or a failed read', async () => {
+      const memo = new ListingMemo<{ id: string }>();
+      let finish: (items: { id: string }[]) => void = () => undefined;
+      const pending = memo.read('s1', 0, () => new Promise(resolve => (finish = resolve)));
+      memo.drop('s1');
+      finish([{ id: 'a' }]);
+      await pending;
+      await expect(memo.read('s2', 0, () => Promise.reject(new Error('page died')))).rejects.toThrow('page died');
+      expect(jest.getTimerCount()).toBe(0);
+      expect(entryCount(memo)).toBe(0);
+    });
+
+    it('does not let the timer of a replaced list evict the list that replaced it', async () => {
+      const memo = new ListingMemo<{ id: string }>();
+      const load = list('a');
+      await memo.read('s1', 0, load);
+      jest.advanceTimersByTime(LISTING_MEMO_TTL_MS - 1000);
+      await memo.read('s1', 0, load);
+      expect(jest.getTimerCount()).toBe(1);
+      jest.advanceTimersByTime(1000);
+      expect(entryCount(memo)).toBe(1);
+      await memo.read('s1', 1000, load);
+      expect(load).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(LISTING_MEMO_TTL_MS - 1000);
+      expect(entryCount(memo)).toBe(0);
+    });
+  });
+
+  it('does not let the eviction timer keep the process alive', async () => {
+    const set = jest.spyOn(global, 'setTimeout');
+    await new ListingMemo<{ id: string }>(12_345).read('s1', 0, list('a'));
+    const timers = set.mock.calls.flatMap(([, delay], i) =>
+      delay === 12_345 ? [set.mock.results[i].value as NodeJS.Timeout] : [],
+    );
+    expect(timers).toHaveLength(1);
+    expect(timers[0].hasRef()).toBe(false);
+    clearTimeout(timers[0]);
+  });
+
   it('hands every caller its own copy of the list', async () => {
     const memo = new ListingMemo<{ id: string }>();
     const first = await memo.read('s1', 0, list('a', 'b'));
