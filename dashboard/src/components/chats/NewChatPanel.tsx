@@ -130,7 +130,8 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
   const typedNumber = toInternationalDigits(query);
   // Placed in sentences (the start and add buttons, the not-registered toast), so it goes in as an isolate.
   const typedNumberLabel = typedNumber ? isolateNumber(formatPhoneForDisplay(typedNumber) ?? `+${typedNumber}`) : '';
-  const showNumberHint = Boolean(query.trim()) && !typedNumber && /^[\d\s+()-]+$/.test(query.trim());
+  const showNumberHint =
+    Boolean(query.trim()) && !typedNumber && /^[\d\s+()-]+$/.test(normalizePhoneText(query).trim());
 
   // Resolve a typed number to its canonical WhatsApp id. The send routes accept an unregistered number
   // without an error, so this check is the only thing that keeps a chat from going nowhere. An answer

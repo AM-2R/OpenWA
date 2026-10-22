@@ -17,6 +17,7 @@ import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
+import { normalizePhoneText } from '../../utils/phone';
 import ChatAvatar from './ChatAvatar';
 
 // The gateway's caps (CreateGroupDto / GroupDescriptionDto).
@@ -141,6 +142,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // --- Participants ---
   const [pending, setPending] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
+  // The gateway takes ASCII digits, whatever script the operator typed them in.
+  const memberDigits = normalizePhoneText(newMember).replace(/\D/g, '');
   // The gateway answers 200 for a membership write even when it refused some participants, and says
   // which in `results`. Returns whether every participant was accepted.
   const runMemberAction = async (key: string, action: () => Promise<GroupParticipantsAck>): Promise<boolean> => {
@@ -163,7 +166,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
   // A number is checked first, as in the new-chat panel: the gateway resolves it to the id WhatsApp uses.
   const addMember = async () => {
     const added = await runMemberAction('add', async () => {
-      const digits = newMember.replace(/\D/g, '').replace(/^00/, '');
+      const digits = memberDigits.replace(/^00/, '');
       const check = await contactApi.checkNumber(session.id, digits);
       if (!check.exists || !check.whatsappId) {
         const number = isolateNumber(formatPhoneForDisplay(digits) ?? `+${digits}`);
@@ -319,7 +322,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               className="group-info-add"
               onSubmit={e => {
                 e.preventDefault();
-                if (newMember.replace(/\D/g, '').length >= 7) void addMember();
+                if (memberDigits.length >= 7) void addMember();
               }}
             >
               <input
@@ -329,11 +332,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                 placeholder={t('chats.group.addPlaceholder')}
                 aria-label={t('chats.group.addPlaceholder')}
               />
-              <button
-                type="submit"
-                className="btn-primary"
-                disabled={newMember.replace(/\D/g, '').length < 7 || pending !== null}
-              >
+              <button type="submit" className="btn-primary" disabled={memberDigits.length < 7 || pending !== null}>
                 {pending === 'add' ? <Loader2 className="animate-spin" size={16} /> : <UserPlus size={16} />}
                 {t('chats.group.add')}
               </button>

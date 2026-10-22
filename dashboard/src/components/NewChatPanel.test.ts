@@ -97,3 +97,17 @@ for (const [script, zero] of [
     assert.ok(rtl.screen.getByText('Anna'));
   });
 }
+
+// A query that reads as a number, but is not one that can start a chat, is told to carry the country code: in the
+// digits of any script, as it is in ASCII.
+for (const [script, zero] of [
+  ['ASCII', 0x30],
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a short number typed in ${script} digits gets the country code hint`, async () => {
+    renderPanel();
+    rtl.fireEvent.change(search(), { target: { value: native('628123', zero) } });
+    assert.ok(await rtl.screen.findByText(/with the country code/));
+  });
+}
