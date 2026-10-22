@@ -192,6 +192,27 @@ test('every status text twin clears 4.5:1 on the translucent fill its own rule p
   assert.deepEqual(offenders, []);
 });
 
+// A badge inside a tinted card sits on both tints: the Not Registered badge paints 15 percent red over the 4 percent red
+// of its result card, which leaves --error-text at 4.38:1 where the pair over plain white measured 4.57:1.
+test('the Not Registered badge clears 4.5:1 on its tint over the tint of its result card', () => {
+  const css = read('NumberChecker.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const alphaOf = (selector: string): number => {
+    const rule = new RegExp(
+      `${selector.replace(/[.]/g, '\\.')}\\s*\\{[^}]*background:\\s*rgba\\(239,\\s*68,\\s*68,\\s*([\\d.]+)\\)`,
+    ).exec(css);
+    assert.ok(rule, `NumberChecker.css has no red tint for ${selector}`);
+    return Number(rule[1]);
+  };
+  const badge = alphaOf('.number-checker .nc-status-badge.unregistered');
+  const card = alphaOf('.number-checker .nc-result-card.not-found');
+  const light = blockAfter(LIGHT);
+  const red = rgb(hexOf(light, '--error'));
+  // The result card sits in .nc-card, which is --bg-white.
+  const tint = mix(red, badge, mix(red, card, rgb(hexOf(light, '--bg-white'))));
+  const ratio = contrast(rgb(hexOf(light, '--error-text')), tint);
+  assert.ok(ratio >= 4.5, `--error-text on the badge over the card is ${ratio.toFixed(2)}:1`);
+});
+
 // WCAG 2.2 SC 1.4.11 asks 3:1 of a keyboard focus indicator against what it is drawn on: the page and card surfaces
 // and the soft brand tint of a focused menu entry or search hit. The brand fill measured 1.98:1 on white.
 test('the focus ring clears 3:1 on every surface it is drawn on, in both themes', () => {
