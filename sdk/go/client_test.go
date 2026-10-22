@@ -1952,3 +1952,54 @@ func TestRetryKeepsIdempotencyKey(t *testing.T) {
 		}
 	}
 }
+
+// The status font ids are the wire values of the Baileys protocol's ExtendedTextMessage.FontType. The
+// constants carry the protocol's names; the first-release names for the same ids stay as deprecated
+// aliases so existing code keeps compiling and sending the same numbers.
+func TestStatusFontConstants(t *testing.T) {
+	cases := []struct {
+		name string
+		got  StatusFont
+		want int
+	}{
+		{"SYSTEM", StatusFontDefault, 0},
+		{"SYSTEM_TEXT", StatusFontSystemText, 1},
+		{"FB_SCRIPT", StatusFontFBScript, 2},
+		{"SYSTEM_BOLD", StatusFontBold, 6},
+		{"MORNINGBREEZE_REGULAR", StatusFontMorningBreezeRegular, 7},
+		{"CALISTOGA_REGULAR", StatusFontCalistogaRegular, 8},
+		{"EXO2_EXTRABOLD", StatusFontExo2ExtraBold, 9},
+		{"COURIERPRIME_BOLD", StatusFontCourierPrimeBold, 10},
+	}
+	for _, c := range cases {
+		if int(c.got) != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+
+	aliases := []struct {
+		name string
+		old  StatusFont
+		want StatusFont
+	}{
+		{"StatusFontSerif", StatusFontSerif, StatusFontSystemText},
+		{"StatusFontNorican", StatusFontNorican, StatusFontFBScript},
+		{"StatusFontOswald", StatusFontOswald, StatusFontMorningBreezeRegular},
+		{"StatusFontDamion", StatusFontDamion, StatusFontCalistogaRegular},
+		{"StatusFontMorningbreeze", StatusFontMorningbreeze, StatusFontExo2ExtraBold},
+		{"StatusFontBryndan", StatusFontBryndan, StatusFontCourierPrimeBold},
+	}
+	for _, a := range aliases {
+		if a.old != a.want {
+			t.Errorf("%s = %d, want the wire value %d it always had", a.name, a.old, a.want)
+		}
+	}
+
+	body, err := json.Marshal(SendTextStatusRequest{Text: "hi", Font: Ptr(StatusFontCourierPrimeBold)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"font":10`) {
+		t.Errorf("font did not marshal as a bare number: %s", body)
+	}
+}
