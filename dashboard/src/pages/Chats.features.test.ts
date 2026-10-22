@@ -33,6 +33,8 @@ function hold(name: string): () => void {
 // When true, the chat and contact writes answer HTTP 200 with `{ success: false }`, as an engine that
 // declined to act does.
 let declineWrites = false;
+// When true, the mark-as-read answers HTTP 200 with `{ success: false }`, as an engine with nothing to acknowledge does.
+let declineReads = false;
 // The profile pictures the batch route serves, by chat id; an id with none answers null.
 const pictureFor: Record<string, string> = {};
 
@@ -336,7 +338,8 @@ function installFetchStub(): void {
       return gated('thread', () => jsonResponse({ messages: [...aliceThread].reverse(), total: aliceThread.length }));
     }
     if (method === 'GET' && /\/messages\/[^/]+\/history/.test(path)) return Promise.resolve(jsonResponse([]));
-    if (method === 'POST' && path === `${base}/chats/read`) return gated('read', () => jsonResponse({ success: true }));
+    if (method === 'POST' && path === `${base}/chats/read`)
+      return gated('read', () => jsonResponse({ success: !declineReads }));
     if (method === 'POST' && path === `${base}/groups`) {
       return gated('createGroup', () => jsonResponse({ id: GROUP_ID, name: (body as { name: string }).name }, 201));
     }
@@ -392,6 +395,7 @@ afterEach(async () => {
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
   aliceThread = [];
   declineWrites = false;
+  declineReads = false;
   for (const id of Object.keys(pictureFor)) delete pictureFor[id];
   gates.clear();
   listGroup = false;
@@ -2773,6 +2777,102 @@ test('a message that reaches the open chat while the tab is hidden is marked rea
   });
   await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'the withheld read did not follow'), { timeout: 3_000 });
   assert.ok(!screen.queryByLabelText(/unread message/), 'the open chat was badged');
+});
+
+test('a list asked for before the open chat read went out leaves no badge on it once the read did', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+
+  // What the gateway reports for Alice: one unread message from the moment it arrived until a read reaches it.
+  const readsAtArrival = readsOf(CHAT.id).length;
+  Object.defineProperty(aliceNow, 'unreadCount', {
+    enumerable: true,
+    configurable: true,
+    get: () => (readsOf(CHAT.id).length > readsAtArrival ? 0 : 1),
+  });
+  const listReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path.includes('/chats?')).length;
+  // The tab is visible: the read is due a debounce after the message, and a list asked for inside it still counts it.
+  receiveFromAlice('wamid.visible.badge', 'are you there?');
+  const before = listReads();
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.visible',
+    chatId: '15550002222@c.us',
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.ok(listReads() > before, 'the edit did not reload the list'), { timeout: 3_000 });
+  await settle();
+  assert.equal(readsOf(CHAT.id).length, readsAtArrival, 'the read went out before the list was asked for');
+
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, readsAtArrival + 1, 'the read did not go out'), {
+    timeout: 3_000,
+  });
+  await settle();
+  await settle();
+  assert.ok(!screen.queryByLabelText('1 unread message'), 'the open chat keeps a badge after its read went out');
+});
+
+test('a read the engine declines leaves the open chat showing what the gateway still counts', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+
+  declineReads = true;
+  const readsAtArrival = readsOf(CHAT.id).length;
+  aliceNow.unreadCount = 1;
+  const listReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path.includes('/chats?')).length;
+  receiveFromAlice('wamid.declined', 'are you there?');
+  const before = listReads();
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.declined',
+    chatId: '15550002222@c.us',
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.ok(listReads() > before, 'the edit did not reload the list'), { timeout: 3_000 });
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, readsAtArrival + 1, 'the read did not go out'), {
+    timeout: 3_000,
+  });
+  await settle();
+  await settle();
+  assert.ok(screen.queryByLabelText('1 unread message'), 'a read nothing acknowledged hid the count the gateway keeps');
+});
+
+test('a chat left before its read is acknowledged keeps the unread count it gathered meanwhile', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listExtra = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+
+  // A message into the open chat queues its read; the chat is left, and another message arrives before the read.
+  const readsAtArrival = readsOf(CHAT.id).length;
+  receiveFromAlice('wamid.first', 'are you there?');
+  fireEvent.click(screen.getByText('Bobby'));
+  await waitFor(() =>
+    assert.equal(container.querySelector('.room-header .room-contact-info h3')?.textContent, 'Bobby'),
+  );
+  receiveFromAlice('wamid.second', 'hello?');
+  await waitFor(() => assert.ok(screen.queryByLabelText('1 unread message'), 'the chat left did not gather a count'));
+
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, readsAtArrival + 1, 'the queued read did not go out'), {
+    timeout: 3_000,
+  });
+  await settle();
+  await settle();
+  assert.ok(screen.queryByLabelText('1 unread message'), 'the read of a chat left hid the count it gathered since');
 });
 
 test('a tab that comes back a second time with nothing new owes no second read', async () => {

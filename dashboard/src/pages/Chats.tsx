@@ -600,6 +600,8 @@ export function Chats() {
   // Baileys acknowledges the messages a read names, and without any only the newest one it holds. A read names the
   // incoming messages of the thread that an earlier read has not acknowledged (the ones it named, per chat).
   const [acknowledged] = useState(() => new Map<string, Set<string>>());
+  // The read the gateway last acknowledged for the chat on screen (see the effect that zeroes its row).
+  const [readAck, setReadAck] = useState<{ sessionId: string; chatId: string } | null>(null);
   const markReadCoalescer = useMemo(
     () =>
       createTrailingCoalescer<string>(chatId => {
@@ -619,7 +621,10 @@ export function Chats() {
         }
         const read = sessionApi.markChatRead(selectedSessionId, chatId, named).then(
           result => {
-            if (!result.success || named.length === 0) return;
+            if (!result.success) return;
+            // The chat still open has nothing unread now (see the effect on readAck).
+            setReadAck({ sessionId: selectedSessionId, chatId });
+            if (named.length === 0) return;
             const sent = acknowledged.get(key) ?? new Set<string>();
             for (const id of named) sent.add(id);
             acknowledged.set(key, sent);
@@ -682,6 +687,15 @@ export function Chats() {
     },
     [],
   );
+
+  // A list asked for before a read reached the gateway still counts what came before it, so once the gateway has
+  // acknowledged the read the row of the chat still open is zeroed through the remembered patches, which keep the
+  // zero over such a list. A chat that was left in the meantime keeps whatever count it has gathered since.
+  useEffect(() => {
+    if (readAck && canWrite && readAck.sessionId === selectedSessionId && readAck.chatId === activeChat?.id) {
+      markRowRead(readAck.chatId);
+    }
+  }, [readAck, canWrite, selectedSessionId, activeChat?.id, markRowRead]);
 
   // The read withheld from a hidden tab is sent when the tab is visible again, if its chat is still the open one.
   useEffect(() => {
