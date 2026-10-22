@@ -59,10 +59,15 @@ export function createBaileysLogger(): BaileysLogger {
       const head = { ts: new Date().toISOString(), level: lvl, context: 'baileys-wire' };
       let line: string;
       try {
+        // An array over the length limit comes back as the marker text: one field, not a record to spread.
+        const copy = typeof obj === 'string' ? undefined : redactSecrets(obj, REDACTION);
         const rec =
           typeof obj === 'string'
             ? { msg: obj }
-            : { ...(redactSecrets(obj, REDACTION) as Record<string, unknown>), ...(msg ? { msg } : {}) };
+            : {
+                ...(typeof copy === 'string' ? { metadata: copy } : (copy as Record<string, unknown>)),
+                ...(msg ? { msg } : {}),
+              };
         line = JSON.stringify({ ...head, ...rec });
       } catch {
         // A getter or proxy trap in the record threw. This runs inside Baileys and must not throw: write the message alone.

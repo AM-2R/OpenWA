@@ -232,9 +232,9 @@ export class LoggerService implements NestLoggerService {
     };
     let output: string;
     try {
-      output = render(
-        typeof context === 'object' && context !== null ? (redactSecrets(context) as Record<string, unknown>) : {},
-      );
+      const copy = typeof context === 'object' && context !== null ? redactSecrets(context) : {};
+      // An array over the length limit comes back as the marker text: one field, not a record to spread.
+      output = render(typeof copy === 'string' ? { metadata: copy } : (copy as Record<string, unknown>));
     } catch {
       // A getter or proxy trap in the caller's metadata threw. The line is still worth writing, without that metadata.
       output = render({ metadata: '[Unreadable]' });

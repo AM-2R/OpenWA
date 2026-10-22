@@ -302,6 +302,24 @@ describe('LoggerService', () => {
     });
   });
 
+  describe('an array given as the metadata itself', () => {
+    const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+
+    it('is written as one [Truncated] field when it is longer than the limit', () => {
+      logger.log('saved', new Array<number>(1_000_001).fill(0) as never);
+
+      expect(parsed()).toMatchObject({ message: 'saved', metadata: '[Truncated]' });
+      expect(parsed()).not.toHaveProperty('0');
+    });
+
+    it('keeps one field per entry when it is within the limit, as before', () => {
+      logger.log('saved', [10, 20] as never);
+
+      expect(parsed()).toMatchObject({ message: 'saved', 0: 10, 1: 20 });
+      expect(parsed()).not.toHaveProperty('metadata');
+    });
+  });
+
   describe('an array subclass', () => {
     class Rows extends Array<unknown> {
       toJSON(): string[] {

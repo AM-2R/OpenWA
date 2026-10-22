@@ -130,6 +130,20 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line).toContain('"password":"[redacted]","visible":"v"');
   });
 
+  it('writes a record that is an array longer than the limit as one [Truncated] field', () => {
+    const line = write(new Array<number>(1_000_001).fill(0), 'x');
+
+    expect(line).toMatchObject({ metadata: '[Truncated]', msg: 'x' });
+    expect(line).not.toHaveProperty('0');
+  });
+
+  it('keeps one field per entry for a record that is an array within the limit, as before', () => {
+    const line = write([10, 20], 'x');
+
+    expect(line).toMatchObject({ 0: 10, 1: 20, msg: 'x' });
+    expect(line).not.toHaveProperty('metadata');
+  });
+
   it('writes an array subclass as the plain array it holds', () => {
     class Rows extends Array<unknown> {
       toJSON(): string[] {
