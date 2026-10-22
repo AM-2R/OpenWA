@@ -451,6 +451,10 @@ export class BaileysEvents {
       if (msg.userReceipt?.length) {
         this.handleMessageReceiptUpdate(msg.userReceipt.map(receipt => ({ key: msg.key, receipt })));
       }
+      // The same buffer merges a 1:1 delivery or read ack, or a rejection by the server, into the upsert as
+      // `status` and raises no messages.update. What a message carries before any ack (PENDING on an echo,
+      // SERVER_ACK on one the phone typed) maps to pending or sent and is not one.
+      const mergedAck = this.mergedAck(msg);
       // Baileys echoes every message this session sends through the API back through this same
       // path, tagged 'append', and sendContent() already emits onMessageCreate for those via
       // emitOwnSendEcho(). WhatsApp replays what the account typed on its phone while the gateway
@@ -473,6 +477,9 @@ export class BaileysEvents {
       // insert oracle both absorb; a loss is not recoverable, because Baileys acks the node before
       // it emits the upsert.
       if (msg.key.fromMe === true && this.host.consumeOwnSend(msg.key.id)) {
+        // The send returned about 100 ms ago (the buffer holds the upsert that long), so the message
+        // already has its row, or its entry in the projector.
+        if (mergedAck) this.handleMessagesUpdate([mergedAck]);
         this.host.logger.debug('Skipping the echo of a message this session sent', {
           msgId: msg.key.id ?? 'unknown',
           type: event.type,
@@ -520,6 +527,9 @@ export class BaileysEvents {
       // The room stays held until the processing settles too, and a message never emitted drops its turn.
       ticket?.holdUntil(processed);
       void processed.finally(() => ticket?.drop());
+      // A message the phone typed is created by that processing, and an ack that reached the projector
+      // first would find nothing to advance, so it waits until the message was handed on.
+      if (mergedAck) void processed.then(() => this.handleMessagesUpdate([mergedAck]));
       const id = msg.key.id;
       if (id) {
         // A repeat delivery can arrive while the first is still downloading and finish before it, so
@@ -540,6 +550,18 @@ export class BaileysEvents {
         });
       }
     }
+  }
+
+  /** The ack Baileys' event buffer merged into the upsert of a message the account sent, as an update. */
+  private mergedAck(msg: WAMessage): BaileysMessageUpdate | undefined {
+    if (msg.key.fromMe !== true) return undefined;
+    const status = mapBaileysStatus(msg.status);
+    // A delivery or read ack is a 1:1 event (groups and statuses report receipts instead); the server
+    // rejecting a message is reported for every kind of chat.
+    const reported =
+      status === 'failed' ||
+      ((status === 'delivered' || status === 'read') && chatKind(msg.key.remoteJid!) === 'individual');
+    return reported ? { key: msg.key, update: { status: msg.status } } : undefined;
   }
 
   /**

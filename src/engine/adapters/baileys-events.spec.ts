@@ -827,6 +827,135 @@ describe('BaileysEvents.handleMessagesUpsert receipts merged into the upsert', (
   });
 });
 
+// The same buffer merges a 1:1 delivery or read ack that lands within about 100 ms of a message's own upsert
+// into that upsert as `status`, and raises no messages.update for it, and so does a rejection by the server
+// (status ERROR). An echo carries PENDING and a message the phone typed carries SERVER_ACK before any ack.
+describe('BaileysEvents.handleMessagesUpsert acks merged into the upsert', () => {
+  const partner = '6281111111111@s.whatsapp.net';
+  const group = '120363000000000001@g.us';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await flush();
+  };
+  const upsert = (
+    status: number | null | undefined,
+    over: { fromMe?: boolean; remoteJid?: string } = {},
+  ): Parameters<BaileysEvents['handleMessagesUpsert']>[0] => ({
+    type: 'append',
+    messages: [
+      {
+        key: { id: 'OUT1', remoteJid: over.remoteJid ?? partner, fromMe: over.fromMe ?? true },
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'hi' },
+        ...(status === undefined ? {} : { status }),
+      },
+    ],
+  });
+
+  it.each([
+    [3, 'delivered'],
+    [4, 'read'],
+    [5, 'read'],
+    [0, 'failed'],
+  ])(
+    'reports status %i of the echo of a message this session sent as %s, and still skips the echo',
+    async (status, expected) => {
+      const onMessageAck = jest.fn();
+      const onMessageCreate = jest.fn();
+      const events = new BaileysEvents(
+        makeHost({
+          getOnMessageAck: () => onMessageAck,
+          getOnMessageCreate: () => onMessageCreate,
+          consumeOwnSend: id => id === 'OUT1',
+        }),
+      );
+
+      events.handleMessagesUpsert(upsert(status));
+      await settle();
+
+      expect(onMessageAck).toHaveBeenCalledTimes(1);
+      expect(onMessageAck).toHaveBeenCalledWith('OUT1', expected, partner);
+      expect(onMessageCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['PENDING, which every echo carries', upsert(1), true],
+    ['SERVER_ACK, which a message typed on the phone carries', upsert(2), false],
+    ['no status', upsert(undefined), true],
+    ['a null status', upsert(null), true],
+    ['a delivery status on a message the account did not send', upsert(3, { fromMe: false }), false],
+    ['a delivery status on a group message, which is reported as receipts', upsert(3, { remoteJid: group }), true],
+  ])('reports no ack for %s', async (_label, event, echo) => {
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageAck: () => onMessageAck, consumeOwnSend: () => echo }));
+
+    events.handleMessagesUpsert(event);
+    await settle();
+
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a group', group],
+    ['a status post', 'status@broadcast'],
+  ])('reports a rejection by the server merged into the echo of a message sent to %s', async (_label, remoteJid) => {
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageAck: () => onMessageAck, consumeOwnSend: () => true }));
+
+    events.handleMessagesUpsert(upsert(0, { remoteJid }));
+    await settle();
+
+    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'failed', remoteJid);
+  });
+
+  it('holds the ack of a message the phone sent while the gateway was down until that message was handed on', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const held = new Promise<undefined>(resolve => (release = () => resolve(undefined)));
+    const events = new BaileysEvents(
+      makeHost({
+        // The repeat-delivery check is the first thing processing waits for.
+        getStoredMessage: () => held as unknown as ReturnType<BaileysEventsHost['getStoredMessage']>,
+        getOnMessageCreate: () => () => {
+          order.push('created');
+        },
+        getOnMessageAck: () => (id, status) => {
+          order.push(`ack ${id} ${status}`);
+        },
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(3));
+    await settle();
+    expect(order).toEqual([]);
+
+    release();
+    await settle();
+
+    expect(order).toEqual(['created', 'ack OUT1 delivered']);
+  });
+
+  it('still reports the ack of a replayed message that is processed no further', async () => {
+    const onMessageAck = jest.fn();
+    const onMessageCreate = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getStoredMessage: () =>
+          ({ key: { id: 'OUT1' } }) as unknown as ReturnType<BaileysEventsHost['getStoredMessage']>,
+        getOnMessageAck: () => onMessageAck,
+        getOnMessageCreate: () => onMessageCreate,
+      }),
+    );
+
+    events.handleMessagesUpsert(upsert(4));
+    await settle();
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(onMessageAck).toHaveBeenCalledWith('OUT1', 'read', partner);
+  });
+});
+
 describe('BaileysEvents record of conflicting copies removed', () => {
   it('forgets the id removed longest ago once it holds its limit', async () => {
     const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
