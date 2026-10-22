@@ -1,3 +1,4 @@
+import { redactSecrets } from '../../common/services/logger.service';
 import { countMetaValues, metaText } from './sandbox-log-meta';
 
 describe('countMetaValues', () => {
@@ -198,5 +199,36 @@ describe('metaText', () => {
     expect(metaText({ a: shared, b: shared })).toBe('{"a":[1],"b":[1]}');
     expect(() => metaText({ self })).toThrow(TypeError);
     expect(() => metaText({ s: new Set([10n]) })).toThrow(TypeError);
+    expect(() => metaText({ boxed: Object(10n) as object })).toThrow(TypeError);
+  });
+
+  // What the relay measures is the text the logger writes for the same meta, form by form.
+  it.each([
+    ['an invalid Date', { d: new Date(Number.NaN), list: [new Date(Number.NaN)] }],
+    ['a valid Date', { d: new Date(0) }],
+    ['a boxed string, number and boolean', { s: new String('ab'), n: new Number(5), b: new Boolean(false) }],
+    ['an Error with own properties', { e: Object.assign(new Error('boom'), { token: 't', code: 7 }) }],
+    [
+      'a Map with a credential key',
+      {
+        m: new Map<unknown, unknown>([
+          ['password', 'p'],
+          [1, { apiKey: 'k' }],
+        ]),
+      },
+    ],
+    ['a Set holding a credential key', { s: new Set([1, { secret: 's' }]) }],
+    [
+      'a typed array, a Buffer and a DataView',
+      { u: new Uint8Array(3), b: Buffer.from('ab'), v: new DataView(new ArrayBuffer(4)) },
+    ],
+    [
+      'credential keys at every depth',
+      { token: 0, list: [{ password: 'p', ok: 1 }], nested: { a: { authorization: null } } },
+    ],
+    ['a RegExp and an ArrayBuffer', { r: /x/g, a: new ArrayBuffer(2) }],
+    ['a meta that is an array', [new Date(Number.NaN), new String('x'), { token: 1 }]],
+  ])('measures %s as the logger writes it', (_name, meta) => {
+    expect(metaText(meta)).toBe(JSON.stringify(redactSecrets(meta)));
   });
 });

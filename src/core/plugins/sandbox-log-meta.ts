@@ -1,4 +1,5 @@
 import { types } from 'node:util';
+import { isSecretName, REDACTED, writtenForm } from '../../common/services/logger.service';
 
 /**
  * Counts what JSON.stringify would write for a worker's log metadata, and stops once the count passes `limit`: one
@@ -12,9 +13,10 @@ import { types } from 'node:util';
  * written at every use of its object.
  *
  * The count can be higher than the length of the text. A property that JSON.stringify skips (undefined, a function,
- * a symbol) is counted as if it were written, and so is the value under a credential key of a Map. A metadata whose
- * count passes `limit` is replaced by the size marker whatever its text would measure; for data that is plain JSON
- * the count never exceeds the length of the text, so a count past `limit` means a longer text.
+ * a symbol) is counted as if it were written, and so is the value under a credential key, which is written as the
+ * marker. A metadata whose count passes `limit` is replaced by the size marker whatever its text would measure; for
+ * data that is plain JSON without a credential key the count never exceeds the length of the text, so a count past
+ * `limit` means a longer text.
  */
 export function countMetaValues(meta: unknown, limit: number): number {
   let count = 0;
@@ -74,23 +76,20 @@ export function countMetaValues(meta: unknown, limit: number): number {
 }
 
 /**
- * The JSON text of a worker's log metadata, with what JSON.stringify alone writes as {} written as the logger writes it:
- * an Error with its name, message and stack, a Map as the array of its [key, value] pairs and a Set as the array of its
- * values. Each is rendered once, so one that holds itself is a cycle JSON.stringify refuses like any other, and a BigInt
- * in one is refused as it is anywhere else in the metadata. Run only on a meta whose count fits the limit.
+ * The JSON text the logger writes for a worker's log metadata: every object in the form the logger's copy writes it
+ * (writtenForm), and the value of a credential key as the marker. Each object is rendered once, so one that holds
+ * itself is a cycle JSON.stringify refuses like any other, and a BigInt, boxed or not, is refused wherever it is: its
+ * text is never built on the host. Run only on a meta whose count fits the limit.
  */
 export function metaText(meta: unknown): string | undefined {
   const rendered = new Map<object, unknown>();
-  return JSON.stringify(meta, (_key, value: unknown) => {
-    if (typeof value !== 'object' || value === null) return value;
-    if (!types.isMap(value) && !types.isSet(value) && !types.isNativeError(value)) return value;
-    if (!rendered.has(value))
-      rendered.set(
-        value,
-        types.isNativeError(value)
-          ? { name: value.name, message: value.message, stack: value.stack, ...(value as object) }
-          : Array.from(value as Iterable<unknown>),
-      );
-    return rendered.get(value);
+  return JSON.stringify(meta, function (this: Record<string, unknown>, key: string, value: unknown): unknown {
+    // Read from the holder: JSON.stringify has already put what a Date's toJSON returns (null for an invalid one) in
+    // its place.
+    const raw: unknown = this[key];
+    if (!Array.isArray(this) && isSecretName(key)) return REDACTED;
+    if (typeof raw !== 'object' || raw === null) return value;
+    if (!rendered.has(raw)) rendered.set(raw, writtenForm(raw));
+    return rendered.get(raw);
   });
 }

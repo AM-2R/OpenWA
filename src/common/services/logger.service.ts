@@ -60,7 +60,9 @@ export interface RedactOptions {
   marker?: string;
 }
 
-const isSecretName = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
+/** Whether a key's name marks its value as a credential, and what is written in its place, unless told otherwise. */
+export const isSecretName = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
+export const REDACTED = '[REDACTED]';
 
 const TYPED_ARRAY_PROTOTYPE: object = Object.getPrototypeOf(Int8Array.prototype) as object;
 
@@ -104,6 +106,40 @@ function formOf(node: object): 'date' | 'map' | 'set' | 'boxed' | 'error' | unde
 }
 
 /**
+ * What one copy writes for an object before it copies its parts: a Date as its text, a boxed value as its value, a Map
+ * as the array of its [key, value] pairs (a credential key's value replaced), a Set as the array of its values, a
+ * typed array as its type and length and an Error as its name, message and stack before its own properties. Any other
+ * object is returned as it is, to be copied by its own properties. The sandbox log relay measures a plugin's meta
+ * through it, so the two write every form alike.
+ */
+export function writtenForm(node: object, form = formOf(node), isSecretKey = isSecretName, marker = REDACTED): unknown {
+  if (form === 'date') return dateText(node as Date);
+  if (form === 'boxed') return boxedValue(node);
+  if (form === 'map' || form === 'set') {
+    const items: unknown[] = [];
+    if (form === 'map')
+      Map.prototype.forEach.call(node, (item: unknown, key: unknown) =>
+        items.push([key, typeof key === 'string' && isSecretKey(key) ? marker : item]),
+      );
+    else Set.prototype.forEach.call(node, (item: unknown) => items.push(item));
+    return items;
+  }
+  // A typed array, a Buffer included, is written as its type and the elements it holds, never one entry per element.
+  // A DataView has no type of that kind and is copied as an object.
+  const type: unknown = ArrayBuffer.isView(node) ? Reflect.get(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag, node) : 0;
+  const props =
+    typeof type === 'string'
+      ? {
+          type: Object.getPrototypeOf(node) === Buffer.prototype ? 'Buffer' : type,
+          length: elementCount(node as ArrayBufferView),
+        }
+      : node;
+  if (form !== 'error') return props;
+  const error = node as Error;
+  return { name: error.name, message: error.message, stack: error.stack, ...props };
+}
+
+/**
  * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
  * whatever lies beyond the deep node, entry or character budget `[Truncated]`. A value whose data is not in its own
@@ -112,7 +148,7 @@ function formOf(node: object): 'date' | 'map' | 'set' | 'boxed' | 'error' | unde
  * array of its [key, value] pairs and a Set as the array of its values. Shared with the Baileys wire logger.
  */
 export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
-  const { isSecretKey = isSecretName, marker = '[REDACTED]' } = options;
+  const { isSecretKey = isSecretName, marker = REDACTED } = options;
   const budget = { nodes: REDACT_DEEP_NODES, entries: REDACT_MAX_ENTRIES, chars: REDACT_MAX_CHARS };
   const walk = (node: unknown, path: object[]): unknown => {
     // A function is not data: it is left out, as JSON.stringify leaves it out of an object and writes null in an array.
@@ -120,8 +156,8 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     if (typeof node === 'string') return (budget.chars -= node.length) < 0 ? '[Truncated]' : node;
     if (node === null || typeof node !== 'object') return node;
     const form = formOf(node);
-    if (form === 'date') return walk(dateText(node as Date), path);
-    if (form === 'boxed') return walk(boxedValue(node), path);
+    // A Date and a boxed value are written as a primitive, charged like one.
+    if (form === 'date' || form === 'boxed') return walk(writtenForm(node, form, isSecretKey, marker), path);
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;
     // A negative budget means something that did not fit was met: nothing else is copied or listed after it.
@@ -137,19 +173,12 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     };
     const left = Math.min(budget.entries, deep ? budget.nodes : Infinity);
     const room = Math.min(left, REDACT_MAX_ARRAY_LENGTH);
-    // A Map is copied as the array of its pairs, a credential key's value replaced, and a Set as the array of its
-    // values; its size is held against the room before any entry is read.
+    // A Map or a Set is copied as the array its form is; its size is held against the room before any entry is read.
     let list: unknown = node;
     const map = form === 'map';
     if (map || form === 'set') {
       if (Reflect.get(map ? Map.prototype : Set.prototype, 'size', node) > room) return '[Truncated]';
-      const items: unknown[] = [];
-      if (map)
-        Map.prototype.forEach.call(node, (item: unknown, key: unknown) =>
-          items.push([key, typeof key === 'string' && isSecretKey(key) ? marker : item]),
-        );
-      else Set.prototype.forEach.call(node, (item: unknown) => items.push(item));
-      list = items;
+      list = writtenForm(node, form, isSecretKey, marker);
     }
     if (Array.isArray(list)) {
       // Read once and taken as a count (whole, from zero), as map takes it: one number gates the copy and sizes it.
@@ -161,19 +190,7 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
       for (let index = 0; index < length; index++) if (index in list) plain[index] = copy(list[index]);
       return plain;
     }
-    // A typed array, a Buffer included, is written as its type and the elements it holds, never one entry per element.
-    // A DataView has no type of that kind and is copied as an object.
-    const type: unknown = ArrayBuffer.isView(node) ? Reflect.get(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag, node) : 0;
-    const props =
-      typeof type === 'string'
-        ? {
-            type: Object.getPrototypeOf(node) === Buffer.prototype ? 'Buffer' : type,
-            length: elementCount(node as ArrayBufferView),
-          }
-        : (node as Record<string, unknown>);
-    const error = node as Error;
-    const source =
-      form === 'error' ? { name: error.name, message: error.message, stack: error.stack, ...props } : props;
+    const source = writtenForm(node, form, isSecretKey, marker) as Record<string, unknown>;
     const keys = Object.keys(source);
     if (keys.length > left) {
       // Listed once, then charged: another reference to this object, or any other node, is refused without listing.

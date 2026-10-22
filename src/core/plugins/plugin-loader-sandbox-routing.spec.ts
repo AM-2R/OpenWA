@@ -948,7 +948,8 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     });
 
     // Few values, but a long text once written: numbers in a Map, or a BigInt in a Set, which JSON.stringify alone
-    // would write as {}.
+    // would write as {}. A worker's meta arrives in the host's realm; structuredClone here would make it in another,
+    // which the logger copies by its own properties.
     it('measures the text of a Map or a Set as the logger writes it', async () => {
       const loader = makeLoader();
       seed(loader, { builtIn: false, instance: null });
@@ -958,14 +959,37 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       const pairs = Array.from({ length: 2000 }, (_, key): [number, number] => [float * (key + 1), float]);
 
       const started = Date.now();
-      loader.capturedOnLog!('log', 'floats', structuredClone({ m: new Map(pairs) }));
-      loader.capturedOnLog!('log', 'bigints', structuredClone({ s: new Set([10n ** 100_000n, 10n ** 100_000n + 1n]) }));
+      loader.capturedOnLog!('log', 'floats', { m: new Map(pairs) });
+      loader.capturedOnLog!('log', 'bigints', { s: new Set([10n ** 100_000n, 10n ** 100_000n + 1n]) });
 
       expect(Date.now() - started).toBeLessThan(1000);
       const [floats, bigints] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
       expect(floats).toMatchObject({ metaTruncated: true });
       expect(floats.metaLength).toBeGreaterThan(8192);
       expect(bigints).toEqual({});
+    });
+
+    // Few values, but a longer text once written: an invalid Date is written as text where JSON.stringify writes null,
+    // and the value of a credential key as the marker however short it is. A typed array is written as its type and
+    // length, so one that fits the count is relayed.
+    it('measures an invalid Date, a credential value and a typed array as the logger writes them', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const invalid = new Date(Number.NaN);
+
+      loader.capturedOnLog!('log', 'dates', { d: Array.from({ length: 1600 }, () => new Date(Number.NaN)) });
+      loader.capturedOnLog!('log', 'shared', { d: Array.from({ length: 1600 }, () => invalid) });
+      loader.capturedOnLog!('log', 'tokens', { l: Array.from({ length: 600 }, () => ({ token: 0 })) });
+      loader.capturedOnLog!('log', 'bytes', { b: new Uint8Array(5000) });
+
+      const [dates, shared, tokens, bytes] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
+      for (const marked of [dates, shared, tokens]) {
+        expect(marked).toMatchObject({ metaTruncated: true });
+        expect(marked.metaLength).toBeGreaterThan(8192);
+      }
+      expect(JSON.stringify(redactSecrets(bytes))).toBe('{"b":{"type":"Uint8Array","length":5000}}');
     });
 
     // A boxed string is written as its text, so one that fits is relayed and written in that many characters. A worker's
