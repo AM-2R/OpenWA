@@ -86,7 +86,7 @@
 
 .dashboard .stat-watermark {
   position: absolute;
-  right: -10px;
+  inset-inline-end: -10px;
   bottom: -15px;
   width: 96px;
   height: 96px;
