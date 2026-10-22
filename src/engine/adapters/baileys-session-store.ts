@@ -214,7 +214,7 @@ export class BaileysSessionStore {
   /**
    * @param lidStore       optional persisted, cross-session lid->phone table that backs resolution beyond
    *                       this session's in-memory map (survives restarts, shared across sessions).
-   * @param sessionId      provenance recorded on rows this session writes to the persisted tables.
+   * @param sessionId      recorded on rows this session writes to the persisted tables (a lid row's owner).
    * @param chatStateStore optional persisted per-session mute/archive/pin, so those chat fields survive a
    *                       reconnect Baileys cannot resync (it only re-emits mutations newer than the
    *                       persisted app-state version, never an already-applied one).
