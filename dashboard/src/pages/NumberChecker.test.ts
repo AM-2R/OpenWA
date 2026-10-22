@@ -909,8 +909,13 @@ test('NumberChecker: a chosen session that leaves the ready list is replaced by 
 // The select is locked during a run, so what it shows has to stay the session the run uses, whatever the ready list does.
 test('NumberChecker: a locked select keeps naming the run session when the chosen session drops out and returns', async () => {
   const checked: string[] = [];
+  const pictures: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes('/profile-picture')) {
+      pictures.push(url);
+      return Promise.resolve(jsonResponse({ url: null }));
+    }
     if (url.includes('/contacts/check/')) {
       checked.push(url);
       return url.endsWith('/919999999999')
@@ -948,6 +953,9 @@ test('NumberChecker: a locked select keeps naming the run session when the chose
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
   await rtl.waitFor(() => assert.equal(checked.length, 2));
   assert.match(checked[1], /\/sessions\/sess-a\/contacts\/check\/919999999999/);
+  // The avatar request belongs to that lookup, so it goes to the same session.
+  await rtl.waitFor(() => assert.equal(pictures.length, 1));
+  assert.match(pictures[0], /\/sessions\/sess-a\/contacts\//);
 });
 
 test('NumberChecker: the session cannot be switched from the Single tab while a bulk run is going', async () => {
