@@ -515,7 +515,9 @@ Get active chats for a session, most-recent first (paginated).
 `archived`, `pinned` and `muted` are the read side of the `chats/archive`, `chats/pin` and
 `chats/mute` endpoints. `muted` is the verdict; `muteExpiration`, present only when `muted` is true,
 is the instant the mute ends in epoch milliseconds (`0` = indefinite), the same unit as
-`chats/mute`'s `muteUntil`, so a value read here can be written straight back.
+`chats/mute`'s `muteUntil`, so a value read here can be written straight back unless it is `0`. A `0`
+is a mute without an end (whatsapp-web.js reports one that way) and `chats/mute` refuses it: send a
+far-future `muteUntil`, up to `9007199254740991`, instead.
 
 Sorted by `timestamp` DESC (most recent first) then paginated. `timestamp` is an epoch number (seconds). `kind` is the user-facing chat discriminator — one of `individual|group|channel|status|broadcast|unknown`; `isGroup` is retained for back-compat (true only for `kind: "group"`).
 
