@@ -348,6 +348,8 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
               // Formatted from the id, not from `number`: a privacy id (@lid) has digits too, and they are no phone.
               const phone = formatPhoneForDisplay(p.id);
               const label = own ? t('chats.you') : p.name || phone || p.number;
+              // In a sentence (a button's label, the confirmation) a phone is isolated, as the typed number is.
+              const spoken = !own && !p.name && phone ? isolateNumber(phone) : label;
               return (
                 <li key={p.id}>
                   <ChatAvatar kind="individual" />
@@ -377,7 +379,7 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                           )
                         }
                         title={p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}
-                        aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${label}`}
+                        aria-label={`${p.isAdmin ? t('chats.group.removeAdmin') : t('chats.group.makeAdmin')}: ${spoken}`}
                       >
                         {p.isAdmin ? <ShieldOff size={16} /> : <ShieldCheck size={16} />}
                       </button>
@@ -386,13 +388,13 @@ function GroupInfoDialog({ session, group, onClose, onRenamed }: GroupInfoDialog
                         className="icon-btn small danger"
                         disabled={pending !== null}
                         onClick={() => {
-                          if (!window.confirm(t('chats.group.removeConfirm', { name: label }))) return;
+                          if (!window.confirm(t('chats.group.removeConfirm', { name: spoken }))) return;
                           void runMemberAction(p.id, () =>
                             sessionApi.removeGroupParticipants(session.id, group.id, [p.id]),
                           );
                         }}
                         title={t('chats.group.remove')}
-                        aria-label={`${t('chats.group.remove')}: ${label}`}
+                        aria-label={`${t('chats.group.remove')}: ${spoken}`}
                       >
                         {pending === p.id ? <Loader2 className="animate-spin" size={16} /> : <UserMinus size={16} />}
                       </button>

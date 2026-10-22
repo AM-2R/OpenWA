@@ -74,6 +74,8 @@ let groupDescription = 'old description';
 let bobIsAdmin = false;
 // When true, GROUP also lists a member WhatsApp knows by a privacy id only, which carries no phone number.
 let groupHasLidMember = false;
+// When true, the group's second member has no name, so the dialog names it by its phone.
+let bobUnnamed = false;
 // Whether the group's info is locked to admins, which decides what a member who is no admin may edit.
 let groupLocked = true;
 // When true, the session's own account is listed under an id with a device suffix.
@@ -209,7 +211,13 @@ function installFetchStub(): void {
               isAdmin: groupAdmin,
               isSuperAdmin: false,
             },
-            { id: '15550002222@c.us', number: '15550002222', name: 'Bob', isAdmin: bobIsAdmin, isSuperAdmin: false },
+            {
+              id: '15550002222@c.us',
+              number: '15550002222',
+              ...(bobUnnamed ? {} : { name: 'Bob' }),
+              isAdmin: bobIsAdmin,
+              isSuperAdmin: false,
+            },
             ...(groupHasLidMember
               ? [{ id: '262813461250071@lid', number: '262813461250071', isAdmin: false, isSuperAdmin: false }]
               : []),
@@ -392,6 +400,7 @@ afterEach(async () => {
   groupDescription = 'old description';
   bobIsAdmin = false;
   groupHasLidMember = false;
+  bobUnnamed = false;
   groupLocked = true;
   ownHasDeviceSuffix = false;
   refuseMember = false;
@@ -617,6 +626,41 @@ test('the number a check finds unregistered is named inside an isolate in the pa
   fireEvent.click(await screen.findByRole('button', { name: /^Start chat with/ }));
   const toast = await screen.findByText(/is not registered on WhatsApp/);
   assert.equal(toast.textContent?.includes(LTR_NUMBER), true, `the toast is not isolated: "${toast.textContent}"`);
+});
+
+// A member with no name is named by a phone, in the member's own button labels and in the remove confirmation.
+const LTR_BOB = `${String.fromCodePoint(0x2066)}+1 555 000 2222${String.fromCodePoint(0x2069)}`;
+
+test('an unnamed member is named inside an isolate in the group dialog button labels', async () => {
+  const { fireEvent, within } = rtl;
+  listGroup = true;
+  bobUnnamed = true;
+  renderPage();
+  const dialog = await openGroupInfo();
+  fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+  assert.ok(within(dialog).getByRole('button', { name: `Remove: ${LTR_BOB}` }), 'the remove label is not isolated');
+  assert.ok(within(dialog).getByRole('button', { name: `Make admin: ${LTR_BOB}` }), 'the admin label is not isolated');
+});
+
+test('the remove confirmation names an unnamed member inside an isolate', async () => {
+  const { fireEvent, within } = rtl;
+  listGroup = true;
+  bobUnnamed = true;
+  const confirm = window.confirm;
+  try {
+    renderPage();
+    const dialog = await openGroupInfo();
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Participants' }));
+    let asked = '';
+    window.confirm = message => {
+      asked = String(message);
+      return false;
+    };
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove: / }));
+    assert.equal(asked, `Remove ${LTR_BOB} from the group?`);
+  } finally {
+    window.confirm = confirm;
+  }
 });
 
 test('the number a check finds unregistered is named inside an isolate when adding to a group', async () => {
