@@ -218,6 +218,7 @@ describe('metaText', () => {
       },
     ],
     ['a Set holding a credential key', { s: new Set([1, { secret: 's' }]) }],
+    ['a Map with a boxed credential key', { m: new Map([[new String('token'), 'v']]) }],
     [
       'a typed array, a Buffer and a DataView',
       { u: new Uint8Array(3), b: Buffer.from('ab'), v: new DataView(new ArrayBuffer(4)) },

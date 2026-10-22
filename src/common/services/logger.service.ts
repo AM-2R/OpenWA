@@ -123,9 +123,11 @@ export function writtenForm(node: object, form = formOf(node), isSecretKey = isS
   if (form === 'map' || form === 'set') {
     const items: unknown[] = [];
     if (form === 'map')
-      Map.prototype.forEach.call(node, (item: unknown, key: unknown) =>
-        items.push([key, typeof key === 'string' && isSecretKey(key) ? marker : item]),
-      );
+      Map.prototype.forEach.call(node, (item: unknown, key: unknown) => {
+        // A boxed string key is written as its text, so it is tested as that text.
+        const name = typeof key === 'object' && key !== null && formOf(key) === 'boxed' ? boxedValue(key) : key;
+        items.push([key, typeof name === 'string' && isSecretKey(name) ? marker : item]);
+      });
     else Set.prototype.forEach.call(node, (item: unknown) => items.push(item));
     return items;
   }

@@ -1061,6 +1061,20 @@ describe('redactSecrets', () => {
       expect(JSON.stringify(redactSecrets(new Map<unknown, unknown>([[unprintable, 'v']])))).toBe('[[{"id":1},"v"]]');
     });
 
+    // A boxed string key is written as its text, so the value under one that names a credential is replaced too.
+    it('tests a boxed string key by its text, read through the built-in method', () => {
+      const forged = Object.assign(new String('id'), { valueOf: () => 'password', toString: () => 'password' });
+      const map = new Map<unknown, unknown>([
+        [new String('password'), 'value-boxed'],
+        [forged, 'kept'],
+        [new Proxy(new String('token'), {}), 'proxied'],
+      ]);
+
+      expect(JSON.stringify(redactSecrets(map))).toBe(
+        '[["password","[REDACTED]"],["id","kept"],[{"0":"t","1":"o","2":"k","3":"e","4":"n"},"proxied"]]',
+      );
+    });
+
     // A Proxy is copied by its own properties, whatever its traps answer; a value made from one of these prototypes
     // alone lacks the data the built-in methods read.
     it('copies a Proxy, or a value that only has one of these prototypes, by its own properties', () => {
