@@ -217,31 +217,38 @@ export class LoggerService implements NestLoggerService {
 
   // Messages and traces are `unknown` because this is also Nest's framework logger (main.ts), and Nest
   // passes the thrown Error itself as the message of an unhandled-exception line; writeLog normalizes.
-  log(message: unknown, context?: string | LogContext): void {
-    this.writeLog(LogLevel.INFO, message, context);
+  // `fields` are the caller's own, written beside metadata that came from elsewhere (a plugin's id beside its meta).
+  log(message: unknown, context?: string | LogContext, fields?: LogContext): void {
+    this.writeLog(LogLevel.INFO, message, context, undefined, fields);
   }
 
-  error(message: unknown, trace?: unknown, context?: string | LogContext): void {
-    this.writeLog(LogLevel.ERROR, message, context, trace);
+  error(message: unknown, trace?: unknown, context?: string | LogContext, fields?: LogContext): void {
+    this.writeLog(LogLevel.ERROR, message, context, trace, fields);
   }
 
   fatal(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.ERROR, message, context);
   }
 
-  warn(message: unknown, context?: string | LogContext): void {
-    this.writeLog(LogLevel.WARN, message, context);
+  warn(message: unknown, context?: string | LogContext, fields?: LogContext): void {
+    this.writeLog(LogLevel.WARN, message, context, undefined, fields);
   }
 
-  debug(message: unknown, context?: string | LogContext): void {
-    this.writeLog(LogLevel.DEBUG, message, context);
+  debug(message: unknown, context?: string | LogContext, fields?: LogContext): void {
+    this.writeLog(LogLevel.DEBUG, message, context, undefined, fields);
   }
 
   verbose(message: unknown, context?: string | LogContext): void {
     this.writeLog(LogLevel.VERBOSE, message, context);
   }
 
-  private writeLog(level: LogLevel, rawMessage: unknown, context?: string | LogContext, rawTrace?: unknown): void {
+  private writeLog(
+    level: LogLevel,
+    rawMessage: unknown,
+    context?: string | LogContext,
+    rawTrace?: unknown,
+    fields?: LogContext,
+  ): void {
     if (!this.shouldLog(level)) return;
 
     // The message and trace are whatever the caller (or Nest) handed over, so reading them is guarded like the metadata.
@@ -289,14 +296,20 @@ export class LoggerService implements NestLoggerService {
         ? this.formatPretty(level, logEntry)
         : JSON.stringify(logEntry);
     };
+    // The caller's own fields are copied apart, so they stay on the line when the metadata is cut or cannot be read. Nest
+    // appends its context name to the arguments of a Logger it made, which is not a record.
+    const own = typeof fields === 'object' && fields !== null;
+    let added: Record<string, unknown> = {};
     let output: string;
     try {
+      if (own) added = redactSecrets(fields) as Record<string, unknown>;
       const copy = typeof context === 'object' && context !== null ? redactSecrets(context) : {};
       // An array over the length limit comes back as the marker text: one field, not a record to spread.
-      output = render(typeof copy === 'string' ? { metadata: copy } : (copy as Record<string, unknown>));
+      const metadata = typeof copy === 'string' ? { metadata: copy } : (copy as Record<string, unknown>);
+      output = render(own ? { ...metadata, ...added } : metadata);
     } catch {
       // A getter or proxy trap in the caller's metadata threw. The line is still worth writing, without that metadata.
-      output = render({ metadata: '[Unreadable]' });
+      output = render({ metadata: '[Unreadable]', ...added });
     }
 
     switch (level) {

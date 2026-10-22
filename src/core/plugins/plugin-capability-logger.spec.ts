@@ -37,15 +37,25 @@ describe('the logger a plugin gets', () => {
     logger.error('upload failed');
     logger.error('upload failed', undefined, { sessionId: 's1' });
 
-    expect(host.error).toHaveBeenNthCalledWith(1, '[p1] upload failed', undefined, { pluginId: 'p1' });
-    expect(host.error).toHaveBeenNthCalledWith(2, '[p1] upload failed', undefined, { sessionId: 's1', pluginId: 'p1' });
+    expect(host.error).toHaveBeenNthCalledWith(1, '[p1] upload failed', undefined, {}, { pluginId: 'p1' });
+    expect(host.error).toHaveBeenNthCalledWith(
+      2,
+      '[p1] upload failed',
+      undefined,
+      { sessionId: 's1' },
+      { pluginId: 'p1' },
+    );
   });
 
   // The parameter is a record, but plugin code is not type checked: a string or an array given as the meta must not be
   // spread into one field per character or per index.
   describe('a meta that is not a record', () => {
-    // The meta a host logger call carried: the second argument, or the third of error().
-    const metaOf = (spy: jest.Mock, argument: 1 | 2): unknown => (spy.mock.calls as unknown[][])[0][argument];
+    // The fields a host logger call writes: the meta (the second argument, or the third of error()) and the host's own
+    // fields, which follow it.
+    const metaOf = (spy: jest.Mock, argument: 1 | 2): unknown => {
+      const [meta, own] = (spy.mock.calls as unknown[][])[0].slice(argument);
+      return { ...(meta as object), ...(own as object) };
+    };
     const asRecord = (meta: unknown): Record<string, unknown> => meta as Record<string, unknown>;
 
     it.each([
@@ -73,7 +83,7 @@ describe('the logger a plugin gets', () => {
 
       logger.warn('m', asRecord(meta));
 
-      expect(host.warn).toHaveBeenCalledWith('[p1] m', { pluginId: 'p1' });
+      expect(host.warn).toHaveBeenCalledWith('[p1] m', {}, { pluginId: 'p1' });
       expect(Object.keys(metaOf(host.warn, 1) as object)).toEqual(['pluginId']);
     });
 
@@ -108,7 +118,7 @@ describe('the logger a plugin gets', () => {
 
       logger.warn('m', asRecord(meta));
 
-      expect(host.warn).toHaveBeenCalledWith('[p1] m', { meta, pluginId: 'p1' });
+      expect(host.warn).toHaveBeenCalledWith('[p1] m', { meta }, { pluginId: 'p1' });
       expect(Object.keys(metaOf(host.warn, 1) as object)).toEqual(['meta', 'pluginId']);
     });
 
@@ -132,7 +142,75 @@ describe('the logger a plugin gets', () => {
 
       logger.warn('m', { sessionId: 's1', nested: { a: 1 } });
 
-      expect(host.warn).toHaveBeenCalledWith('[p1] m', { sessionId: 's1', nested: { a: 1 }, pluginId: 'p1' });
+      expect(host.warn).toHaveBeenCalledWith('[p1] m', { sessionId: 's1', nested: { a: 1 } }, { pluginId: 'p1' });
+    });
+  });
+
+  // The plugin id is the host's field, not part of the plugin's meta: a meta the logger cuts or cannot read keeps it.
+  describe('a meta the logger cannot write whole', () => {
+    const wide = (): object => {
+      const meta: Record<string, number> = {};
+      for (let key = 0; key <= 2_000_000; key++) meta[`k${key}`] = 1;
+      return meta;
+    };
+    const throwing = (): object => ({
+      a: {
+        get b(): never {
+          throw new Error('getter');
+        },
+      },
+    });
+
+    it.each([
+      ['a value below it throws when read', throwing, 'metadata', '[Unreadable]'],
+      ['it has more keys than one line may copy', wide, 'metadata', '[Truncated]'],
+      [
+        'a key name passes the characters one line may write',
+        () => ({ a: 'x'.repeat(2 ** 26 - 5), bbbbbbbbbb: 1 }),
+        'metadata',
+        '[Truncated]',
+      ],
+      [
+        'its strings take every character one line may write',
+        () => ({ big: 'x'.repeat(2 ** 26) }),
+        'big',
+        '[Truncated]',
+      ],
+    ])('keeps the plugin id when %s', (_name, make, field, marker) => {
+      LoggerService.setLogFormat(LogFormat.JSON);
+      const warn = jest.spyOn(console, 'warn').mockImplementation();
+      const error = jest.spyOn(console, 'error').mockImplementation();
+      try {
+        const { logger } = setup(createLogger('Plugins'));
+
+        logger.warn('failed', make() as Record<string, unknown>);
+        logger.error('failed', new Error('boom'), make() as Record<string, unknown>);
+
+        for (const spy of [warn, error]) {
+          const line = JSON.parse((spy.mock.calls as string[][])[0][0]) as Record<string, unknown>;
+          expect(line).toMatchObject({ message: '[p1] failed', [field]: marker, pluginId: 'p1' });
+        }
+        expect(JSON.parse((error.mock.calls as string[][])[0][0])).toMatchObject({ trace: 'boom' });
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+        LoggerService.setLogFormat(null);
+      }
+    });
+
+    it('writes the host plugin id where a pluginId of the meta stood, never the meta one', () => {
+      LoggerService.setLogFormat(LogFormat.JSON);
+      const warn = jest.spyOn(console, 'warn').mockImplementation();
+      try {
+        const { logger } = setup(createLogger('Plugins'));
+
+        logger.warn('m', { pluginId: 'other', a: 1 });
+
+        expect((warn.mock.calls as string[][])[0][0]).toContain('"message":"[p1] m","pluginId":"p1","a":1}');
+      } finally {
+        warn.mockRestore();
+        LoggerService.setLogFormat(null);
+      }
     });
   });
 

@@ -235,19 +235,22 @@ export class PluginCapabilityContext {
     };
   }
 
+  // The plugin id is the host's field, passed apart from the plugin's meta so that a meta the logger cuts keeps it.
   private buildPluginLogger(plugin: PluginInstance): PluginLogger {
     return {
       log: (message, meta) =>
-        this.logger.log(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
+        this.logger.log(`[${plugin.manifest.id}] ${message}`, metaFields(meta), { pluginId: plugin.manifest.id }),
       debug: (message, meta) =>
-        this.logger.debug(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
+        this.logger.debug(`[${plugin.manifest.id}] ${message}`, metaFields(meta), { pluginId: plugin.manifest.id }),
       warn: (message, meta) =>
-        this.logger.warn(`[${plugin.manifest.id}] ${message}`, { ...metaFields(meta), pluginId: plugin.manifest.id }),
+        this.logger.warn(`[${plugin.manifest.id}] ${message}`, metaFields(meta), { pluginId: plugin.manifest.id }),
       error: (message, error, meta) =>
-        this.logger.error(`[${plugin.manifest.id}] ${message}`, error === undefined ? undefined : errorText(error), {
-          ...metaFields(meta),
-          pluginId: plugin.manifest.id,
-        }),
+        this.logger.error(
+          `[${plugin.manifest.id}] ${message}`,
+          error === undefined ? undefined : errorText(error),
+          metaFields(meta),
+          { pluginId: plugin.manifest.id },
+        ),
     };
   }
 

@@ -676,6 +676,13 @@ describe('LoggerService', () => {
       expect(output.context).toBe('TestContext');
       expect(output.sessionId).toBe('s1');
     });
+
+    it("writes the caller's own fields after the metadata, redacted and below the structural fields", () => {
+      logger.log('m', { a: 1, pluginId: 'meta' }, { pluginId: 'own', token: 't', level: 'error' });
+
+      expect(getRawOutput(consoleSpy)).toContain('"message":"m","a":1,"pluginId":"own","token":"[REDACTED]"}');
+      expect(getLogOutput(consoleSpy).level).toBe('info');
+    });
   });
 
   describe('warn', () => {
@@ -870,6 +877,17 @@ describe('LoggerService', () => {
 
       new Logger('X').log('m');
       expect(getLogOutput(consoleSpy).context).toBe('X');
+    });
+
+    // Nest appends the context name of its Logger after the arguments it was given.
+    it('writes no field for the context name Nest appends after the metadata', () => {
+      const errorSpy = jest.spyOn(console, 'error');
+
+      new Logger('X').log('m', { a: 1 });
+      new Logger('X').error('m', 'stack', { a: 1 });
+
+      expect(Object.keys(getLogOutput(consoleSpy))).toEqual(['timestamp', 'level', 'context', 'message', 'a']);
+      expect(Object.keys(getLogOutput(errorSpy))).toEqual(['timestamp', 'level', 'context', 'message', 'a', 'trace']);
     });
   });
 

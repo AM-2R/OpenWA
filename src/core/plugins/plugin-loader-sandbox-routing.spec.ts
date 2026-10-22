@@ -669,7 +669,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
     expect(() => loader.capturedOnLog!('info' as PluginLogLevel, 'hello')).not.toThrow();
-    expect(logSpy).toHaveBeenCalledWith('[p1] hello', { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenCalledWith('[p1] hello', {}, { pluginId: 'p1' });
   });
 
   it('truncates an oversized worker log line before relaying it', async () => {
@@ -708,7 +708,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
 
       loader.capturedOnLog!('log', message as unknown as string);
 
-      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', { pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', {}, { pluginId: 'p1' });
     });
 
     it('is relayed at once when it is an array whose levels share the same child', async () => {
@@ -721,7 +721,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', sharedArray(7) as unknown as string);
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', { pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] [non-string log message]', {}, { pluginId: 'p1' });
     });
   });
 
@@ -734,8 +734,8 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('log', 'big', { data: 'x'.repeat(20000) });
     loader.capturedOnLog!('log', 'small', { n: 1 });
 
-    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', { metaTruncated: true, pluginId: 'p1' });
-    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1, pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', { metaTruncated: true }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1 }, { pluginId: 'p1' });
   });
 
   it('relays a worker log meta that is a string or an array as one field', async () => {
@@ -754,12 +754,12 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('log', 'boxed', structuredClone(new String('ab')) as unknown as Record<string, unknown>);
     loader.capturedOnLog!('log', 'record', structuredClone({ id: 1 }));
 
-    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] string', { meta: 'abc', pluginId: 'p1' });
-    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] array', { meta: [1, 2], pluginId: 'p1' });
-    expect(logSpy).toHaveBeenNthCalledWith(3, '[p1] bytes', { meta: new Uint8Array([1, 2]), pluginId: 'p1' });
-    expect(Object.keys(logSpy.mock.calls[3][1] as object)).toEqual(['meta', 'pluginId']);
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] string', { meta: 'abc' }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] array', { meta: [1, 2] }, { pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(3, '[p1] bytes', { meta: new Uint8Array([1, 2]) }, { pluginId: 'p1' });
+    expect(Object.keys(logSpy.mock.calls[3][1] as object)).toEqual(['meta']);
     expect(String((logSpy.mock.calls[3][1] as { meta: unknown }).meta)).toBe('ab');
-    expect(logSpy).toHaveBeenNthCalledWith(5, '[p1] record', { id: 1, pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(5, '[p1] record', { id: 1 }, { pluginId: 'p1' });
   });
 
   it('keeps the error text of a worker error log whose meta is oversized or not serializable', async () => {
@@ -776,16 +776,18 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('error', 'long', { error: 'e'.repeat(10000) });
     loader.capturedOnLog!('error', 'nullmeta', null as unknown as Record<string, unknown>);
 
-    expect(errorSpy).toHaveBeenNthCalledWith(1, '[p1] big', undefined, {
-      error: 'boom',
-      metaTruncated: true,
-      pluginId: 'p1',
-    });
-    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', undefined, { error: 'boom', pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      1,
+      '[p1] big',
+      undefined,
+      { error: 'boom', metaTruncated: true },
+      { pluginId: 'p1' },
+    );
+    expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', undefined, { error: 'boom' }, { pluginId: 'p1' });
     const longMeta = errorSpy.mock.calls[2][2] as { error: string; metaTruncated: boolean };
     expect(longMeta.metaTruncated).toBe(true);
     expect(longMeta.error).toBe(`${'e'.repeat(8192)}…[truncated]`);
-    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', undefined, { pluginId: 'p1' });
+    expect(errorSpy).toHaveBeenNthCalledWith(4, '[p1] nullmeta', undefined, {}, { pluginId: 'p1' });
   });
 
   // postMessage keeps shared references shared, so a meta that is small to hold writes out, at every use, as JSON
@@ -810,7 +812,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'fan-out', fanOut(8));
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] fan-out', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] fan-out', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('keeps the error text of a worker error log', async () => {
@@ -825,11 +827,12 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('error', 'fan-out', { error: 'boom', fan: fanOut(8) });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(errorSpy).toHaveBeenCalledWith('[p1] fan-out', undefined, {
-        error: 'boom',
-        metaTruncated: true,
-        pluginId: 'p1',
-      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[p1] fan-out',
+        undefined,
+        { error: 'boom', metaTruncated: true },
+        { pluginId: 'p1' },
+      );
     });
 
     it('still reports the exact length of a meta that has no more values than the size limit', async () => {
@@ -843,12 +846,13 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'walked', ones(8191) as unknown as Record<string, unknown>);
       loader.capturedOnLog!('log', 'stopped', ones(8192) as unknown as Record<string, unknown>);
 
-      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] walked', {
-        metaTruncated: true,
-        metaLength: 8191 + 8190 + 2,
-        pluginId: 'p1',
-      });
-      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] stopped', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenNthCalledWith(
+        1,
+        '[p1] walked',
+        { metaTruncated: true, metaLength: 8191 + 8190 + 2 },
+        { pluginId: 'p1' },
+      );
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] stopped', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('replaces a typed array of 20 million elements by the size marker at once', async () => {
@@ -861,7 +865,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'buffer', { b: new Uint8Array(20_000_000) });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('replaces a String wrapper of 10 million characters by the size marker at once', async () => {
@@ -875,7 +879,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'boxed', boxed as unknown as Record<string, unknown>);
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('replaces one long string shared by 2000 entries by the size marker at once', async () => {
@@ -889,7 +893,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'shared-string', { list: Array.from({ length: 2000 }, () => holder) });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] shared-string', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] shared-string', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('replaces one object with a long property name shared by 4000 entries by the size marker at once', async () => {
@@ -903,7 +907,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'shared-name', { list: Array.from({ length: 4000 }, () => holder) });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(logSpy).toHaveBeenCalledWith('[p1] shared-name', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] shared-name', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('counts a Map or a Set by its size', async () => {
@@ -915,8 +919,8 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       loader.capturedOnLog!('log', 'map', { m: new Map(ones(9000).map((one, key) => [key, one])) });
       loader.capturedOnLog!('log', 'set', { s: new Set(ones(9000).map((_, key) => key)) });
 
-      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] map', { metaTruncated: true, pluginId: 'p1' });
-      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] set', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] map', { metaTruncated: true }, { pluginId: 'p1' });
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] set', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
     it('still drops a circular meta without a marker, as it cannot be written as JSON', async () => {
@@ -929,7 +933,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
 
       loader.capturedOnLog!('log', 'circular', circular);
 
-      expect(logSpy).toHaveBeenCalledWith('[p1] circular', { pluginId: 'p1' });
+      expect(logSpy).toHaveBeenCalledWith('[p1] circular', {}, { pluginId: 'p1' });
     });
   });
 });
