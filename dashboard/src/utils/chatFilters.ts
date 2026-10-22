@@ -8,11 +8,18 @@
  */
 import { normalizePhoneText } from './phone.ts';
 
+// The last query as matches() reads it. Every filter calls matches() once per row on every render of the Chats page,
+// and folding a native digit walks back to its script's zero, so the fold is made once per query, not once per row.
+let lastQuery = { query: '', needle: '', folded: '' };
+
 /** Case-insensitive "does any of these fields contain the query". Absent fields never match. */
 export const matches = (query: string, ...fields: (string | undefined)[]): boolean => {
-  const needle = query.toLowerCase();
-  // A number typed in the digits of another script matches the ASCII digits of an id.
-  const folded = normalizePhoneText(needle);
+  if (query !== lastQuery.query) {
+    const needle = query.toLowerCase();
+    // A number typed in the digits of another script matches the ASCII digits of an id.
+    lastQuery = { query, needle, folded: normalizePhoneText(needle) };
+  }
+  const { needle, folded } = lastQuery;
   return fields.some(f => {
     const field = (f ?? '').toLowerCase();
     return field.includes(needle) || (folded !== needle && field.includes(folded));
