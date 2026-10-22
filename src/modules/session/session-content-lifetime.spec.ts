@@ -18,8 +18,9 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
 import {
+  SESSION_DELETE_BATCH_MIN_SQLITE,
   SESSION_DELETE_BATCH_SIZE_POSTGRES,
-  SESSION_DELETE_BATCH_SIZE_SQLITE,
+  SESSION_DELETE_BATCH_TARGET_MS_SQLITE,
   SessionEngineControls,
   StopMarks,
 } from './session-engine-controls';
@@ -130,6 +131,15 @@ describe('Session content lifetime', () => {
 
   async function createSession() {
     return db.getRepository(Session).save({ name: 'test-session', config: {} });
+  }
+
+  // A SQLite batch is sized by how long the last one took, which a real database makes unrepeatable. A clock that
+  // reads the target later on every call makes each batch look on target, so every batch has the size of the first
+  // (PostgreSQL batches are a fixed size and ignore the clock).
+  function holdBatchSize(): number {
+    let now = 0;
+    jest.spyOn(performance, 'now').mockImplementation(() => (now += SESSION_DELETE_BATCH_TARGET_MS_SQLITE));
+    return db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_MIN_SQLITE;
   }
 
   function sender(engine: object, sessionId: string) {
@@ -359,8 +369,7 @@ describe('Session content lifetime', () => {
     const messages = db.getRepository(Message);
     const outbox = db.getRepository(WebhookOutboxEvent);
     const failures = db.getRepository(WebhookDeliveryFailure);
-    const batch =
-      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const batch = holdBatchSize();
     const count = batch * 2 + 50;
     const seed = async (sessionId: string, rows: number): Promise<void> => {
       for (let from = 0; from < rows; from += 200) {
@@ -432,9 +441,11 @@ describe('Session content lifetime', () => {
     const doomed = await createSession();
     const kept = await db.getRepository(Session).save({ name: 'kept-session', config: {} });
     const messages = db.getRepository(Message);
-    const batch =
-      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
-    const stamped = batch * 2 + 50;
+    // Fast batches: a SQLite delete doubles from the floor until it reaches the ceiling.
+    let now = 0;
+    jest.spyOn(performance, 'now').mockImplementation(() => (now += 1));
+    const ramp = db.options.type === 'postgres' ? [500, 500, 500] : [SESSION_DELETE_BATCH_MIN_SQLITE, 500, 1000];
+    const stamped = ramp.reduce((sum, size) => sum + size, 0) + 50;
     const unstamped = 30;
     const seed = async (sessionId: string, from: number, rows: number, timestamp: (i: number) => number | null) => {
       for (let done = 0; done < rows; done += 200) {
@@ -474,8 +485,8 @@ describe('Session content lifetime', () => {
     const walked = pages.flat();
     expect(new Set(walked).size).toBe(walked.length);
     expect([...walked].sort()).toEqual([...stored.keys()].sort());
-    // Two full pages and a short one of stamped rows, then the short page of rows without a timestamp.
-    expect(pages.map(page => page.length)).toEqual([batch, batch, 50, unstamped]);
+    // The full pages of stamped rows and a short one, then the short page of rows without a timestamp.
+    expect(pages.map(page => page.length)).toEqual([...ramp, 50, unstamped]);
     const stamps = walked.map(id => stored.get(id));
     const firstUnstamped = stamps.indexOf(null);
     expect(firstUnstamped).toBe(stamped);
@@ -491,8 +502,7 @@ describe('Session content lifetime', () => {
   it('lets the event loop run between the batch statements of a delete', async () => {
     const doomed = await createSession();
     const messages = db.getRepository(Message);
-    const batch =
-      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const batch = holdBatchSize();
     const total = batch * 2 + 50;
     for (let from = 0; from < total; from += 200) {
       const size = Math.min(200, total - from);

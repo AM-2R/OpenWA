@@ -45,14 +45,34 @@ import {
 
 /**
  * Rows of the tables that grow with traffic (messages, webhook outbox events, webhook delivery failures)
- * removed per statement when a session is deleted. On SQLite: far below the bind-parameter limit and short
- * enough (one writer, and each message row also fires the full-text index trigger) that other sessions are not
- * stalled behind a batch. A larger batch costs a little less per row but stalls longer: a 300k-message session
- * deletes 1.2 to 1.7 times faster at 2000 rows than at 500 (it depends on the load of the host), with a longer
- * worst statement. Most of the gain over the first batched delete comes from leaving the session out of the
- * delete's condition, see deleteTrafficRowsInBatches.
+ * removed per statement when a session is deleted. On SQLite this is the most a batch may take: far below the
+ * bind-parameter limit, and the loop sizes each batch to the time the last one took (see
+ * SESSION_DELETE_BATCH_TARGET_MS_SQLITE), because one writer serves every session and each message row also
+ * fires the full-text index trigger. A larger batch costs a little less per row but stalls longer: a
+ * 300k-message session deletes 1.2 to 1.7 times faster at 2000 rows than at 500 (it depends on the load of the
+ * host), with a longer worst statement. Most of the gain over the first batched delete comes from leaving the
+ * session out of the delete's condition, see deleteTrafficRowsInBatches.
  */
 export const SESSION_DELETE_BATCH_SIZE_SQLITE = 2000;
+
+/**
+ * How long a SQLite batch should take. The driver runs a statement on the event loop, so this is the longest
+ * the process is held for one batch. The cost per row rises with the size of the database (about 75 microseconds
+ * per row at 300k messages, 170 at 1.2M), which a fixed row count turned into a stall that grew with the history.
+ * A batch costs less per row the larger it is, so a shorter target bounds the stall more tightly and lengthens
+ * the whole delete: at 150 ms it takes about 1.4 times as long as at 2000 rows a batch, at 250 ms 1.0 to 1.2 times.
+ */
+export const SESSION_DELETE_BATCH_TARGET_MS_SQLITE = 150;
+
+/** The first SQLite batch and the least one may shrink to, so a slow database is never started on a large batch. */
+export const SESSION_DELETE_BATCH_MIN_SQLITE = 250;
+
+/**
+ * The pause after a SQLite batch. Yielding for one turn of the event loop lets a request take one step, but a
+ * request takes several turns and each was followed by the next batch, so it waited out several batches. A
+ * short pause lets it finish before the next one starts.
+ */
+export const SESSION_DELETE_PAUSE_MS_SQLITE = 5;
 
 /**
  * The same on PostgreSQL, where a statement does not hold the process and a larger batch buys little (a million
@@ -61,6 +81,15 @@ export const SESSION_DELETE_BATCH_SIZE_SQLITE = 2000;
  * message that keeps its media inline stores megabytes per row. So it keeps the smaller batch and its headroom.
  */
 export const SESSION_DELETE_BATCH_SIZE_POSTGRES = 500;
+
+/**
+ * The size of the next SQLite batch: the last one scaled to the target time, growing by at most a factor of two
+ * so a fast first batch cannot overshoot into a slow one, and kept between the floor and the ceiling.
+ */
+export function nextSqliteDeleteBatchSize(rows: number, tookMs: number): number {
+  const scaled = Math.round((rows * SESSION_DELETE_BATCH_TARGET_MS_SQLITE) / Math.max(tookMs, 1));
+  return Math.max(SESSION_DELETE_BATCH_MIN_SQLITE, Math.min(SESSION_DELETE_BATCH_SIZE_SQLITE, rows * 2, scaled));
+}
 
 /** One table's pass of the batched delete: the repository to delete from and the reader of the next page of ids. */
 type TrafficPass = { rows: Repository<{ id: string }>; next: (take: number) => Promise<string[]> };
@@ -943,7 +972,7 @@ export class SessionEngineControls {
    * The batches are not one atomic unit: a failure part-way leaves the session with fewer rows, and
    * repeating the delete finishes the job. Nothing new can land meanwhile, because the engine is gone and
    * the closing write scope refuses outbound writes. SQLite resolves each statement within the same tick, so
-   * the loop yields to the event loop between batches.
+   * the loop pauses between batches to let the event loop run, and sizes each batch to the time the last one took.
    *
    * A batch is removed by primary key alone. Its ids were read for this session a statement earlier, so a
    * sessionId condition beside the id list adds no safety, and it costs: SQLite plans the delete as a walk
@@ -952,8 +981,8 @@ export class SessionEngineControls {
    */
   private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
     const dataSource = this.host.dataSource();
-    const size =
-      dataSource.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const postgres = dataSource.options.type === 'postgres';
+    let size = postgres ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_MIN_SQLITE;
     const head = (entity: EntityTarget<{ id: string; sessionId: string }>): TrafficPass => ({
       rows: dataSource.getRepository(entity),
       next: async take =>
@@ -970,11 +999,15 @@ export class SessionEngineControls {
     ];
     for (const { rows, next } of passes) {
       for (;;) {
+        const started = performance.now();
         const ids = await next(size);
         if (ids.length === 0) break;
         await rows.delete({ id: In(ids) });
         if (ids.length < size) break;
-        await new Promise<void>(resolve => setImmediate(resolve));
+        if (!postgres) size = nextSqliteDeleteBatchSize(ids.length, performance.now() - started);
+        await new Promise<void>(resolve =>
+          postgres ? setImmediate(resolve) : setTimeout(resolve, SESSION_DELETE_PAUSE_MS_SQLITE),
+        );
       }
     }
   }

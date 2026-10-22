@@ -20,8 +20,12 @@ import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } fro
 import { SessionOwnershipService } from './session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import {
+  SESSION_DELETE_BATCH_MIN_SQLITE,
   SESSION_DELETE_BATCH_SIZE_POSTGRES,
   SESSION_DELETE_BATCH_SIZE_SQLITE,
+  SESSION_DELETE_BATCH_TARGET_MS_SQLITE,
+  SESSION_DELETE_PAUSE_MS_SQLITE,
+  nextSqliteDeleteBatchSize,
   ServerShuttingDownException,
   SessionStoppedException,
 } from './session-engine-controls';
@@ -1412,7 +1416,20 @@ describe('SessionService', () => {
     });
 
     describe('messages', () => {
-      const BATCH = SESSION_DELETE_BATCH_SIZE_SQLITE;
+      // A SQLite batch is sized by the clock: the first has the floor's size, and the next scales by how long the
+      // last one took. This clock reads the target later on every call, so each batch looks exactly on target and
+      // the size holds at the floor; the sizing tests below set the step themselves.
+      const BATCH = SESSION_DELETE_BATCH_MIN_SQLITE;
+      let clockStep = SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+      let clock: jest.SpyInstance;
+      beforeEach(() => {
+        let now = 0;
+        clockStep = SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+        clock = jest.spyOn(performance, 'now').mockImplementation(() => (now += clockStep));
+      });
+      afterEach(() => {
+        clock.mockRestore();
+      });
       const ids = (from: number, count: number): Array<{ id: string }> =>
         Array.from({ length: count }, (_, i) => ({ id: `m${from + i}` }));
       // The messages are read through the query builder: first the pages of rows that have a timestamp, in
@@ -1492,30 +1509,97 @@ describe('SessionService', () => {
         expect(query.andWhere).toHaveBeenCalledWith('message.id > :lastId', { lastId: `m${100 + BATCH - 1}` });
       });
 
-      // PostgreSQL's statement time follows the bytes of the rows (inline media payloads), so it keeps the smaller
-      // batch; SQLite pays per batch and keeps the larger one. Both values are pinned here on purpose.
-      it.each([
-        ['better-sqlite3', 2000],
-        ['postgres', 500],
-      ])('takes %s batches of %i rows', async (type: string, size: number) => {
-        (dataSource as { options: unknown }).options = { type };
+      // PostgreSQL's statement time follows the bytes of the rows (inline media payloads), so it keeps a fixed
+      // smaller batch whatever the clock says; SQLite starts at the floor and scales to the target. The values are
+      // pinned here on purpose.
+      it('keeps PostgreSQL batches at a fixed size however long a batch takes', async () => {
+        (dataSource as { options: unknown }).options = { type: 'postgres' };
+        clockStep = 10 * SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        const query = messageQuery(stamped(0, size), stamped(size, 3));
+        const size = SESSION_DELETE_BATCH_SIZE_POSTGRES;
+        const query = messageQuery(stamped(0, size), stamped(size, size), stamped(2 * size, 3));
+        outboxRepository.find.mockResolvedValueOnce(ids(0, size)).mockResolvedValueOnce(ids(size, 3));
 
         await service.delete('sess-uuid-1');
 
-        expect(SESSION_DELETE_BATCH_SIZE_SQLITE).toBe(2000);
         expect(SESSION_DELETE_BATCH_SIZE_POSTGRES).toBe(500);
-        expect(query.limit).toHaveBeenCalledWith(size);
-        expect(query.getRawMany).toHaveBeenCalledTimes(3);
-        expect(messageRepository.delete).toHaveBeenCalledTimes(2);
-        for (const repo of [outboxRepository, failureRepository]) {
-          expect(repo.find).toHaveBeenCalledWith({
-            select: { id: true },
-            where: { sessionId: 'sess-uuid-1' },
-            take: size,
-          });
+        expect(takes(query)).toEqual([size, size, size, size]);
+        expect(outboxRepository.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([
+          size,
+          size,
+        ]);
+        expect(failureRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: size,
+        });
+      });
+
+      it.each([
+        ['scales to the target time', 1000, 300, 500],
+        ['grows by at most a factor of two', 300, 20, 600],
+        ['never passes the ceiling', 1500, 20, 2000],
+        ['never drops below the floor', 300, 5000, 250],
+        ['reads a zero duration as one millisecond', 250, 0, 500],
+      ])('sizes the next SQLite batch: %s', (_name: string, rows: number, tookMs: number, expected: number) => {
+        expect(nextSqliteDeleteBatchSize(rows, tookMs)).toBe(expected);
+      });
+
+      // SQLite runs a batch on the event loop, so between batches it pauses long enough for a request that needs
+      // several turns to finish; PostgreSQL's driver gives the loop its turns and only yields.
+      it.each([
+        ['better-sqlite3', SESSION_DELETE_BATCH_MIN_SQLITE, 2],
+        ['postgres', SESSION_DELETE_BATCH_SIZE_POSTGRES, 0],
+      ])('pauses between the batches on %s', async (type: string, size: number, pauses: number) => {
+        (dataSource as { options: unknown }).options = { type };
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        messageQuery(stamped(0, size), stamped(size, size), stamped(2 * size, 3));
+        const timers = jest.spyOn(global, 'setTimeout');
+
+        try {
+          await service.delete('sess-uuid-1');
+
+          expect(SESSION_DELETE_PAUSE_MS_SQLITE).toBe(5);
+          expect(timers.mock.calls.filter(([, ms]) => ms === SESSION_DELETE_PAUSE_MS_SQLITE)).toHaveLength(pauses);
+        } finally {
+          timers.mockRestore();
         }
+      });
+
+      it('starts a SQLite delete at the floor and grows to the ceiling while batches are fast', async () => {
+        clockStep = 1;
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const query = messageQuery(
+          stamped(0, 250),
+          stamped(250, 500),
+          stamped(750, 1000),
+          stamped(1750, 2000),
+          stamped(3750, 2000),
+          stamped(5750, 10),
+        );
+
+        await service.delete('sess-uuid-1');
+
+        expect(SESSION_DELETE_BATCH_MIN_SQLITE).toBe(250);
+        expect(SESSION_DELETE_BATCH_SIZE_SQLITE).toBe(2000);
+        // Six pages with a timestamp, then the read for the rows without one, which keep the size the loop reached.
+        expect(takes(query)).toEqual([250, 500, 1000, 2000, 2000, 2000, 2000]);
+        expect(outboxRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: 2000,
+        });
+      });
+
+      it('shrinks a SQLite batch when the last one ran long, down to the floor', async () => {
+        clockStep = 4 * SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const query = messageQuery(stamped(0, 250), stamped(250, 250), stamped(500, 250), stamped(750, 9));
+
+        await service.delete('sess-uuid-1');
+
+        // 250 rows in four times the target would be 62 rows: held at the floor.
+        expect(takes(query)).toEqual([250, 250, 250, 250, 250]);
       });
 
       it.each([
