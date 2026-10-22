@@ -1,7 +1,10 @@
+import { types } from 'node:util';
+
 /**
  * Counts what JSON.stringify would write for a worker's log metadata, and stops once the count passes `limit`: one
  * for every value, one per character of a string, a String wrapper or a typed array element, and one per character
- * of a property name.
+ * of a property name. What the logger writes where JSON.stringify would write {} is counted too: the name, message and
+ * stack of an Error, and one per entry of a Map or a Set plus the entries themselves, as the arrays it writes for them.
  *
  * JSON.stringify cannot be stopped part way: it lists every key of an object or typed array before it calls a
  * replacer for the first one, and it writes a shared reference out again at every use. So the size of the text has
@@ -9,26 +12,33 @@
  * written at every use of its object.
  *
  * The count can be higher than the length of the text. A property that JSON.stringify skips (undefined, a function,
- * a symbol) and the entries of a Map or Set (written as {}) are counted as if they were written. A metadata whose
+ * a symbol) is counted as if it were written, and so is the value under a credential key of a Map. A metadata whose
  * count passes `limit` is replaced by the size marker whatever its text would measure; for data that is plain JSON
  * the count never exceeds the length of the text, so a count past `limit` means a longer text.
  */
 export function countMetaValues(meta: unknown, limit: number): number {
   let count = 0;
   const open = new Set<object>();
-  // An object is walked by its own enumerable keys, an array by its elements.
-  const frames: Array<{ node: object; keys: string[] | null; length: number; next: number }> = [];
+  // An object is walked by its own enumerable keys, an array by its elements, a Map or a Set by the list of its entries.
+  const frames: Array<{ node: object; keys: string[] | null; list: unknown[] | null; length: number; next: number }> =
+    [];
   const visit = (value: unknown): void => {
     count++;
     if (typeof value === 'string') count += value.length;
     if (typeof value !== 'object' || value === null) return;
+    // A cycle: JSON.stringify refuses it, so there is nothing more to count.
+    if (open.has(value)) return;
     if (ArrayBuffer.isView(value)) {
       count += (value as { length?: number }).length ?? 0;
       return;
     }
-    if (value instanceof Map || value instanceof Set) {
+    let list = Array.isArray(value) ? (value as unknown[]) : null;
+    // Brand checks, like the String wrapper's below, so a value made in another realm counts too.
+    if (types.isMap(value) || types.isSet(value)) {
       count += value.size;
-      return;
+      // Listed only once the number of its entries fits.
+      if (count > limit) return;
+      list = Array.from(value as Iterable<unknown>);
     }
     // A String wrapper is written as its text, and its own properties are its characters, one per index. Its brand
     // is checked rather than instanceof, so a wrapper made in another realm counts too.
@@ -36,11 +46,13 @@ export function countMetaValues(meta: unknown, limit: number): number {
       count += (value as { length: number }).length;
       return;
     }
-    // A cycle: JSON.stringify refuses it, so there is nothing more to count.
-    if (open.has(value)) return;
     open.add(value);
-    const keys = Array.isArray(value) ? null : Object.keys(value);
-    frames.push({ node: value, keys, length: keys ? keys.length : (value as unknown[]).length, next: 0 });
+    const keys = list
+      ? null
+      : types.isNativeError(value)
+        ? [...new Set(['name', 'message', 'stack', ...Object.keys(value)])]
+        : Object.keys(value);
+    frames.push({ node: value, keys, list, length: (keys ?? list ?? []).length, next: 0 });
   };
   visit(meta);
   while (frames.length > 0 && count <= limit) {
@@ -51,7 +63,7 @@ export function countMetaValues(meta: unknown, limit: number): number {
         count += frame.keys[index].length;
         visit((frame.node as Record<string, unknown>)[frame.keys[index]]);
       } else {
-        visit((frame.node as unknown[])[index]);
+        visit((frame.list as unknown[])[index]);
       }
     } else {
       open.delete(frame.node);
@@ -59,4 +71,26 @@ export function countMetaValues(meta: unknown, limit: number): number {
     }
   }
   return count;
+}
+
+/**
+ * The JSON text of a worker's log metadata, with what JSON.stringify alone writes as {} written as the logger writes it:
+ * an Error with its name, message and stack, a Map as the array of its [key, value] pairs and a Set as the array of its
+ * values. Each is rendered once, so one that holds itself is a cycle JSON.stringify refuses like any other, and a BigInt
+ * in one is refused as it is anywhere else in the metadata. Run only on a meta whose count fits the limit.
+ */
+export function metaText(meta: unknown): string | undefined {
+  const rendered = new Map<object, unknown>();
+  return JSON.stringify(meta, (_key, value: unknown) => {
+    if (typeof value !== 'object' || value === null) return value;
+    if (!types.isMap(value) && !types.isSet(value) && !types.isNativeError(value)) return value;
+    if (!rendered.has(value))
+      rendered.set(
+        value,
+        types.isNativeError(value)
+          ? { name: value.name, message: value.message, stack: value.stack, ...(value as object) }
+          : Array.from(value as Iterable<unknown>),
+      );
+    return rendered.get(value);
+  });
 }

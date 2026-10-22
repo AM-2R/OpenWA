@@ -923,6 +923,50 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] set', { metaTruncated: true }, { pluginId: 'p1' });
     });
 
+    // JSON.stringify writes an Error, a Map and a Set as {}, but the logger writes what they hold.
+    it('counts the message and stack of an Error and the entries of a Map or a Set that the logger writes', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const text = 'x'.repeat(9000);
+
+      loader.capturedOnLog!('log', 'error', structuredClone({ e: new Error(text) }));
+      loader.capturedOnLog!('log', 'map', structuredClone({ m: new Map([[1, text]]) }));
+      loader.capturedOnLog!('log', 'set', structuredClone({ s: new Set([text]) }));
+      loader.capturedOnLog!('log', 'small', structuredClone({ e: new Error('boom'), m: new Map([[1, 2]]) }));
+
+      for (const [call, name] of [
+        [1, 'error'],
+        [2, 'map'],
+        [3, 'set'],
+      ] as const) {
+        expect(logSpy).toHaveBeenNthCalledWith(call, `[p1] ${name}`, { metaTruncated: true }, { pluginId: 'p1' });
+      }
+      expect((logSpy.mock.calls[3][1] as { e: Error }).e.message).toBe('boom');
+    });
+
+    // Few values, but a long text once written: numbers in a Map, or a BigInt in a Set, which JSON.stringify alone
+    // would write as {}.
+    it('measures the text of a Map or a Set as the logger writes it', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const float = -Math.PI * 1e-300;
+      const pairs = Array.from({ length: 2000 }, (_, key): [number, number] => [float * (key + 1), float]);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'floats', structuredClone({ m: new Map(pairs) }));
+      loader.capturedOnLog!('log', 'bigints', structuredClone({ s: new Set([10n ** 100_000n, 10n ** 100_000n + 1n]) }));
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      const [floats, bigints] = logSpy.mock.calls.map(call => call[1] as Record<string, unknown>);
+      expect(floats).toMatchObject({ metaTruncated: true });
+      expect(floats.metaLength).toBeGreaterThan(8192);
+      expect(bigints).toEqual({});
+    });
+
     it('still drops a circular meta without a marker, as it cannot be written as JSON', async () => {
       const loader = makeLoader();
       seed(loader, { builtIn: false, instance: null });

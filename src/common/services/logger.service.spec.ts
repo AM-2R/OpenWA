@@ -416,28 +416,29 @@ describe('LoggerService', () => {
     });
   });
 
-  // Object.entries lists one entry per byte of a Buffer, so a few megabytes cost seconds and hundreds of megabytes.
+  // Object.entries lists one entry per byte of a Buffer, so copying one that way costs seconds per few megabytes.
   describe('a Buffer of 5 million bytes', () => {
     const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+    const written = { type: 'Buffer', length: 5_000_000 };
 
-    it('is written as [Truncated] at once in the first levels, with the rest of the line kept', () => {
+    it('is written as its type and length at once in the first levels, with the rest of the line kept', () => {
       const file = Buffer.alloc(5_000_000);
 
       const started = Date.now();
       logger.log('saved', { sessionId: 's1', file });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', file: '[Truncated]' });
+      expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', file: written });
     });
 
-    it('is written as [Truncated] at once below the fifth level, with the rest of the line kept', () => {
+    it('is written as its type and length at once below the fifth level, with the rest of the line kept', () => {
       const file = Buffer.alloc(5_000_000);
 
       const started = Date.now();
       logger.log('saved', { sessionId: 's1', a: { b: { c: { d: { e: { file } } } } } });
 
       expect(Date.now() - started).toBeLessThan(1000);
-      expect(parsed()).toMatchObject({ sessionId: 's1', a: { b: { c: { d: { e: { file: '[Truncated]' } } } } } });
+      expect(parsed()).toMatchObject({ sessionId: 's1', a: { b: { c: { d: { e: { file: written } } } } } });
     });
   });
 
@@ -923,13 +924,183 @@ describe('redactSecrets', () => {
     });
   });
 
-  it('copies an Error with its name, message and stack, and its own props through the same checks, when asked to', () => {
-    const error = Object.assign(new Error('boom'), { token: 't', attempts: 5n });
+  // What these values hold is not in their own enumerable properties, so a copy of those alone would write {} or one
+  // entry per byte. Each is written in a readable form instead, at every depth.
+  describe('a value that keeps its data outside its own properties', () => {
+    const deep = (value: unknown): unknown => ({ a: { b: { c: { d: { e: { f: { value } } } } } } });
+    const deepValue = (copy: unknown): unknown =>
+      (copy as { a: { b: { c: { d: { e: { f: { value: unknown } } } } } } }).a.b.c.d.e.f.value;
+    const shallowAndDeep = (value: unknown): unknown[] => [
+      (redactSecrets({ value }) as { value: unknown }).value,
+      deepValue(redactSecrets(deep(value))),
+    ];
 
-    const copy = redactSecrets({ error }, { errors: true }) as { error: Record<string, unknown> };
+    it('copies an Error with its name, message and stack before its own props, which go through the same checks', () => {
+      const error = Object.assign(new Error('boom'), { token: 't', attempts: 5n });
 
-    expect(copy.error).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
-    expect(copy.error.stack).toContain('Error: boom');
+      for (const copy of shallowAndDeep(error) as Record<string, unknown>[]) {
+        expect(Object.keys(copy)).toEqual(['name', 'message', 'stack', 'token', 'attempts']);
+        expect(copy).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
+        expect(copy.stack).toContain('Error: boom');
+      }
+    });
+
+    it('charges the message and stack of an Error to the characters one copy may write', () => {
+      const error = new Error('x'.repeat(2 ** 26));
+
+      expect(redactSecrets({ error, after: 'kept?' })).toEqual({
+        error: { name: 'Error', message: '[Truncated]', stack: '[Truncated]' },
+        after: '[Truncated]',
+      });
+    });
+
+    it('writes a Date as its ISO text through the built-in method, and an invalid one as Invalid Date', () => {
+      const forged = Object.assign(new Date(0), { toISOString: () => 'forged' });
+
+      expect(shallowAndDeep(new Date(0))).toEqual(['1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z']);
+      expect(shallowAndDeep(new Date(Number.NaN))).toEqual(['Invalid Date', 'Invalid Date']);
+      expect(shallowAndDeep(forged)).toEqual(['1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z']);
+    });
+
+    it('writes a Buffer or a typed array as its type and the elements it has, never its bytes', () => {
+      const claiming = Object.defineProperty(new Uint8Array(5_000_001), 'length', { value: 0 });
+
+      expect(shallowAndDeep(Buffer.from('ab'))).toEqual([
+        { type: 'Buffer', length: 2 },
+        { type: 'Buffer', length: 2 },
+      ]);
+      expect(shallowAndDeep(new Float64Array(3))[1]).toEqual({ type: 'Float64Array', length: 3 });
+      expect(shallowAndDeep(claiming)).toEqual([
+        { type: 'Uint8Array', length: 5_000_001 },
+        { type: 'Uint8Array', length: 5_000_001 },
+      ]);
+      expect(shallowAndDeep(new DataView(new ArrayBuffer(8)))).toEqual([{}, {}]);
+    });
+
+    it('writes a Map as the array of its pairs, the value of a credential key replaced, and a Set as its values', () => {
+      const map = new Map<unknown, unknown>([
+        ['password', 'value-map'],
+        [1, { token: 't', id: 1 }],
+        [{ id: 2 }, 'v'],
+      ]);
+
+      for (const copy of shallowAndDeep(map)) {
+        expect(copy).toEqual([
+          ['password', '[REDACTED]'],
+          [1, { token: '[REDACTED]', id: 1 }],
+          [{ id: 2 }, 'v'],
+        ]);
+      }
+      expect(shallowAndDeep(new Set([1, 'a', { password: 'p' }]))[1]).toEqual([1, 'a', { password: '[REDACTED]' }]);
+      expect(redactSecrets(map, { isSecretKey: key => key === 'id', marker: 'M' })).toEqual([
+        ['password', 'value-map'],
+        [1, { token: 't', id: 'M' }],
+        [{ id: 'M' }, 'v'],
+      ]);
+    });
+
+    it('writes a Map or a Set that holds itself with [Circular], and one held twice in full each time', () => {
+      const map = new Map<string, unknown>();
+      map.set('self', map);
+      const set = new Set([1]);
+
+      expect(redactSecrets({ map, twice: [set, set] })).toEqual({ map: [['self', '[Circular]']], twice: [[1], [1]] });
+    });
+
+    it('reads a Map through the built-in size and entries, not what a subclass defines', () => {
+      class Lying<K, V> extends Map<K, V> {
+        override get size(): number {
+          return 0;
+        }
+        override forEach(): void {}
+      }
+      const many = new Lying(Array.from({ length: 1_000_001 }, (_, key) => [key, 1]));
+
+      expect(redactSecrets(new Lying([[1, 2]]))).toEqual([[1, 2]]);
+      const read = jest.spyOn(Map.prototype, 'forEach');
+      try {
+        expect(redactSecrets({ many })).toEqual({ many: '[Truncated]' });
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        read.mockRestore();
+      }
+    });
+
+    it('tests only a key that is a string against the credential names, and copies any other key', () => {
+      const unprintable = {
+        toString(): never {
+          throw new Error('toString');
+        },
+        id: 1,
+      };
+
+      expect(JSON.stringify(redactSecrets(new Map<unknown, unknown>([[unprintable, 'v']])))).toBe('[[{"id":1},"v"]]');
+    });
+
+    // A Proxy is copied by its own properties, whatever its traps answer; a value made from one of these prototypes
+    // alone lacks the data the built-in methods read.
+    it('copies a Proxy, or a value that only has one of these prototypes, by its own properties', () => {
+      const prototypeTrap = new Proxy(
+        { a: 1 },
+        {
+          getPrototypeOf: (): never => {
+            throw new Error('getPrototypeOf');
+          },
+        },
+      );
+      const fakes = [Map, Set, Date].map(Kind => Object.assign(Object.create(Kind.prototype) as object, { id: 1 }));
+
+      expect(
+        redactSecrets({ prototypeTrap, map: new Proxy(new Map([[1, 2]]), {}), error: new Proxy(new Error('x'), {}) }),
+      ).toEqual({ prototypeTrap: { a: 1 }, map: {}, error: {} });
+      expect(redactSecrets(fakes)).toEqual([{ id: 1 }, { id: 1 }, { id: 1 }]);
+    });
+
+    it('writes a Map or a Set with more entries than are left as [Truncated] before reading one', () => {
+      const entries = (size: number): Map<number, number> =>
+        new Map(Array.from({ length: size }, (_, key) => [key, 1]));
+      const fourth = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });
+      const big = entries(1_000_001);
+      const read = jest.spyOn(Map.prototype, 'forEach');
+      try {
+        expect(redactSecrets({ big })).toEqual({ big: '[Truncated]' });
+        expect(redactSecrets(fourth(entries(1000)))).toEqual(fourth('[Truncated]'));
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        read.mockRestore();
+      }
+      expect(
+        (redactSecrets(fourth(entries(999))) as { a: { b: { c: { d: { list: unknown[] } } } } }).a.b.c.d.list,
+      ).toHaveLength(999);
+      expect(redactSecrets(fourth(new Set(Array.from({ length: 1000 }, (_, key) => key))))).toEqual(
+        fourth('[Truncated]'),
+      );
+    });
+
+    it.each([LogFormat.JSON, LogFormat.PRETTY])('is written readably in %s output', format => {
+      const log = jest.spyOn(console, 'log').mockImplementation();
+      LoggerService.setLogFormat(format);
+      try {
+        createLogger('Test').log('m', {
+          at: new Date(0),
+          bytes: Buffer.from('ab'),
+          map: new Map([[1, 2]]),
+          set: new Set([1]),
+          error: new Error('boom'),
+        });
+
+        const line = (log.mock.calls as string[][])[0][0];
+        const fields =
+          format === LogFormat.JSON
+            ? ['"at":"1970-01-01T00:00:00.000Z"', '"bytes":{"type":"Buffer","length":2}', '"map":[[1,2]]', '"set":[1]']
+            : ['at=1970-01-01T00:00:00.000Z', 'bytes={"type":"Buffer","length":2}', 'map=[[1,2]]', 'set=[1]'];
+        for (const field of fields) expect(line).toContain(field);
+        expect(line).toContain('"name":"Error","message":"boom","stack":"Error: boom');
+      } finally {
+        log.mockRestore();
+        LoggerService.setLogFormat(null);
+      }
+    });
   });
 
   // JSON.parse makes a property named __proto__ an ordinary own property; the copy must define it as one too.
@@ -1086,15 +1257,15 @@ describe('redactSecrets', () => {
       it.each([
         ['an own length property', redefined],
         ['a length getter', (): Uint8Array => new Claiming(1_000_001)],
-      ])('is written as [Truncated] by the elements it has, with %s', (_name, make) => {
-        expect(redactSecrets({ file: make() })).toEqual({ file: '[Truncated]' });
-        expect(redactSecrets(make())).toBe('[Truncated]');
+      ])('is written with the elements it has, with %s', (_name, make) => {
+        expect(redactSecrets({ file: make() })).toEqual({ file: { type: 'Uint8Array', length: 1_000_001 } });
+        expect(redactSecrets(make())).toEqual({ type: 'Uint8Array', length: 1_000_001 });
       });
 
       it('counts the elements of a typed array, not its bytes', () => {
-        const copy = redactSecrets({ list: new Float64Array(150_000) }) as { list: object };
-
-        expect(Object.keys(copy.list)).toHaveLength(150_000);
+        expect(redactSecrets({ list: new Float64Array(150_000) })).toEqual({
+          list: { type: 'Float64Array', length: 150_000 },
+        });
       });
 
       it('copies a DataView, which has no elements, as an empty object', () => {
@@ -1102,7 +1273,7 @@ describe('redactSecrets', () => {
       });
     });
 
-    // A typed array lists one entry per element, as an array does, and an object one per key.
+    // An object lists one entry per key; a typed array is written as its type and length, whatever its length.
     describe('a typed array or a wide object', () => {
       const deep = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });
       const keysOf = (copy: unknown): number =>
@@ -1110,10 +1281,10 @@ describe('redactSecrets', () => {
       const wide = (keys: number): Record<string, number> =>
         Object.fromEntries(Array.from({ length: keys }, (_, key) => [`k${key}`, key]));
 
-      it('copies a deep typed array that fits in what is left of the node budget and writes a longer one as [Truncated]', () => {
-        expect(keysOf(redactSecrets(deep(new Uint8Array(999))))).toBe(999);
-        expect(redactSecrets(deep(new Uint8Array(1000)))).toEqual(deep('[Truncated]'));
-        expect(redactSecrets(deep(Buffer.alloc(1000)))).toEqual(deep('[Truncated]'));
+      it('writes a deep typed array as its type and length, also one longer than what is left of the node budget', () => {
+        expect(redactSecrets(deep(new Uint8Array(999)))).toEqual(deep({ type: 'Uint8Array', length: 999 }));
+        expect(redactSecrets(deep(new Uint8Array(1000)))).toEqual(deep({ type: 'Uint8Array', length: 1000 }));
+        expect(redactSecrets(deep(Buffer.alloc(1000)))).toEqual(deep({ type: 'Buffer', length: 1000 }));
       });
 
       it('copies a deep object whose keys fit in what is left of the node budget and writes a wider one as [Truncated]', () => {
@@ -1165,8 +1336,8 @@ describe('redactSecrets', () => {
         expect(Object.keys(copy.list)).toHaveLength(5000);
       });
 
-      it('writes a small typed array in the first levels as one entry per element, as before', () => {
-        expect(redactSecrets({ list: Buffer.from([1, 2, 3]) })).toEqual({ list: { 0: 1, 1: 2, 2: 3 } });
+      it('writes a small typed array in the first levels as its type and length', () => {
+        expect(redactSecrets({ list: Buffer.from([1, 2, 3]) })).toEqual({ list: { type: 'Buffer', length: 3 } });
       });
     });
   });
@@ -1246,7 +1417,7 @@ describe('redactSecrets', () => {
       expect(shown(list[3])).toBe('[Truncated]');
     });
 
-    it('charges the elements of a typed array for each view of one buffer, and does not list one that does not fit', () => {
+    it('writes every view of one buffer as its type and length, without listing its elements', () => {
       const buffer = new ArrayBuffer(600_000);
       const keys = jest.spyOn(Object, 'keys');
       try {
@@ -1255,9 +1426,8 @@ describe('redactSecrets', () => {
           views: [new Uint8Array(buffer), new Uint8Array(buffer), new Uint8Array(buffer)],
         }) as { views: unknown[] };
 
-        expect(Object.keys(views[0] as object)).toHaveLength(600_000);
-        expect(views.slice(1).map(shown)).toEqual(['[Truncated]', '[Truncated]']);
-        expect(keys.mock.calls.filter(([node]) => node instanceof Uint8Array)).toHaveLength(1);
+        expect(views).toEqual(Array.from({ length: 3 }, () => ({ type: 'Uint8Array', length: 600_000 })));
+        expect(keys.mock.calls.filter(([node]) => node instanceof Uint8Array)).toHaveLength(0);
       } finally {
         keys.mockRestore();
       }

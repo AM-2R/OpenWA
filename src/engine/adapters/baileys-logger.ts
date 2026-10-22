@@ -33,7 +33,6 @@ const SECRET_KEYS: ReadonlySet<string> = new Set(['password', 'secret', 'token',
 const REDACTION: RedactOptions = {
   isSecretKey: key => SECRET_KEYS.has(key.toLowerCase()),
   marker: '[redacted]',
-  errors: true,
 };
 
 const BAILEYS_LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error'];

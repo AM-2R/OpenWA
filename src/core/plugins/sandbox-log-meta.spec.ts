@@ -1,4 +1,4 @@
-import { countMetaValues } from './sandbox-log-meta';
+import { countMetaValues, metaText } from './sandbox-log-meta';
 
 describe('countMetaValues', () => {
   const NO_LIMIT = Number.MAX_SAFE_INTEGER;
@@ -42,11 +42,41 @@ describe('countMetaValues', () => {
     expect(countMetaValues({ a: shared, b: shared }, NO_LIMIT)).toBe(1 + 2 * (1 + 1 + 1 + 1));
   });
 
-  it('counts a typed array by its length, and a Map or a Set by its size', () => {
+  it('counts a typed array by its length', () => {
     expect(countMetaValues(new Uint8Array(100), NO_LIMIT)).toBe(1 + 100);
     expect(countMetaValues(Buffer.alloc(7), NO_LIMIT)).toBe(1 + 7);
-    expect(countMetaValues(new Map([[1, 2]]), NO_LIMIT)).toBe(1 + 1);
-    expect(countMetaValues(new Set([1, 2, 3]), NO_LIMIT)).toBe(1 + 3);
+  });
+
+  // The logger writes a Map as the array of its [key, value] pairs, a Set as the array of its values and an Error with
+  // its name, message and stack, so what those hold is counted as well.
+  it('counts a Map or a Set by its size and its entries, one held twice at each use and one that holds itself once', () => {
+    expect(countMetaValues(new Map([[1, 'ab']]), NO_LIMIT)).toBe(1 + 1 + (1 + 1 + (1 + 2)));
+    expect(countMetaValues(new Set([1, 'ab']), NO_LIMIT)).toBe(1 + 2 + 1 + (1 + 2));
+    const shared = new Set(['abc']);
+    expect(countMetaValues([shared, shared], NO_LIMIT)).toBe(1 + 2 * (1 + 1 + (1 + 3)));
+    const self = new Map<string, unknown>();
+    self.set('s', self);
+    expect(countMetaValues(self, NO_LIMIT)).toBe(1 + 1 + (1 + (1 + 1) + 1));
+  });
+
+  it('counts the entries of a Map or a Set only once their number fits', () => {
+    const big = new Set(Array.from({ length: 9000 }, (_, key) => key));
+    const from = jest.spyOn(Array, 'from');
+    try {
+      expect(countMetaValues({ big }, 8192)).toBe(1 + 3 + 1 + 9000);
+      expect(from).not.toHaveBeenCalled();
+    } finally {
+      from.mockRestore();
+    }
+    expect(countMetaValues(new Map([[1, 'x'.repeat(9000)]]), 8192)).toBeGreaterThan(8192);
+  });
+
+  it('counts the name, message and stack of an Error before its own properties', () => {
+    const error = Object.assign(new Error('boom'), { code: 'E1' });
+    const stack = error.stack ?? '';
+
+    expect(countMetaValues(error, NO_LIMIT)).toBe(1 + (4 + 1 + 5) + (7 + 1 + 4) + (5 + 1 + stack.length) + (4 + 1 + 2));
+    expect(countMetaValues({ e: new Error('x'.repeat(9000)) }, 8192)).toBeGreaterThan(8192);
   });
 
   // JSON.stringify writes a boxed primitive as the primitive it holds; its own properties are the characters of a
@@ -129,5 +159,44 @@ describe('countMetaValues', () => {
 
     expect(countMetaValues(deep, 8192)).toBeGreaterThan(8192);
     expect(countMetaValues({ a: { b: { c: 1 } } }, 8192)).toBe(1 + 2 + 2 + 2);
+  });
+});
+
+// What the logger writes for an Error, a Map and a Set is invisible to JSON.stringify ({}), so the text of a meta is
+// measured with them rendered as the logger renders them.
+describe('metaText', () => {
+  it('is the JSON text of a meta that holds none of them', () => {
+    for (const meta of [{ a: 1, b: [1, 'two', { c: null }] }, [1, 2], 'text', 42, null, { at: new Date(0) }]) {
+      expect(metaText(meta)).toBe(JSON.stringify(meta));
+    }
+  });
+
+  it('writes a Map as its pairs, a Set as its values and an Error with its name, message and stack', () => {
+    const error = new Error('boom');
+
+    expect(
+      metaText({
+        m: new Map<unknown, unknown>([
+          [1, 2.5],
+          ['k', 'v'],
+        ]),
+        s: new Set([1, 'a']),
+      }),
+    ).toBe('{"m":[[1,2.5],["k","v"]],"s":[1,"a"]}');
+    expect(metaText({ e: error })).toBe(JSON.stringify({ e: { name: 'Error', message: 'boom', stack: error.stack } }));
+    const float = -Math.PI * 1e-300;
+    expect(metaText({ list: new Set([float, float / 2, float / 3]) })).toBe(
+      `{"list":[${[float, float / 2, float / 3].join(',')}]}`,
+    );
+  });
+
+  it('writes a Map or a Set held twice at each use, and refuses one that holds itself or a BigInt', () => {
+    const shared = new Set([1]);
+    const self = new Map<string, unknown>();
+    self.set('self', self);
+
+    expect(metaText({ a: shared, b: shared })).toBe('{"a":[1],"b":[1]}');
+    expect(() => metaText({ self })).toThrow(TypeError);
+    expect(() => metaText({ s: new Set([10n]) })).toThrow(TypeError);
   });
 });

@@ -183,7 +183,7 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line).toContain('"password":"[redacted]","visible":"v"');
   });
 
-  it('writes a Buffer of 5 million bytes as [Truncated] at once, in the first levels and below the fifth', () => {
+  it('writes a Buffer of 5 million bytes as its type and length at once, in the first levels and below the fifth', () => {
     const file = Buffer.alloc(5_000_000);
 
     const started = Date.now();
@@ -191,8 +191,8 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     const deep = write({ a: { b: { c: { d: { e: { file } } } } } }, 'x');
 
     expect(Date.now() - started).toBeLessThan(1000);
-    expect(shallow).toMatchObject({ file: '[Truncated]', jid: 'j', msg: 'x' });
-    expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: '[Truncated]' } } } } }, msg: 'x' });
+    expect(shallow).toMatchObject({ file: { type: 'Buffer', length: 5_000_000 }, jid: 'j', msg: 'x' });
+    expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: { type: 'Buffer', length: 5_000_000 } } } } } } });
   });
 
   it('writes a property named __proto__ as a field, with the credentials under it redacted', () => {
@@ -206,7 +206,23 @@ describe('createBaileysLogger writes any record the library hands it', () => {
   it('counts a typed array by the elements it has, not by the length it claims', () => {
     const file = Object.defineProperty(new Uint8Array(1_000_001), 'length', { value: 0 });
 
-    expect(write({ file, jid: 'j' }, 'x')).toMatchObject({ file: '[Truncated]', jid: 'j', msg: 'x' });
+    expect(write({ file, jid: 'j' }, 'x')).toMatchObject({ file: { type: 'Uint8Array', length: 1_000_001 }, jid: 'j' });
+  });
+
+  it('writes a Map as its pairs with the value of a credential key redacted, and a Date as its ISO text', () => {
+    const line = JSON.stringify(
+      write({
+        keys: new Map([
+          ['Password', 'value-map'],
+          ['jid', 'j'],
+        ]),
+        at: new Date(0),
+      }),
+    );
+
+    expect(line).toContain('"keys":[["Password","[redacted]"],["jid","j"]]');
+    expect(line).toContain('"at":"1970-01-01T00:00:00.000Z"');
+    expect(line).not.toContain('value-map');
   });
 
   it('copies an array that reports a length that is not a count as empty, and keeps the rest of the record', () => {

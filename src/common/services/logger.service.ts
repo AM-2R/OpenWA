@@ -1,3 +1,4 @@
+import { types } from 'node:util';
 import { Injectable, LoggerService as NestLoggerService, Scope } from '@nestjs/common';
 import { getRequestId } from './request-context';
 
@@ -35,9 +36,9 @@ const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
 // The copy of an array tests every index for a hole, so a sparse array costs its length however little it holds
 // (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is left of
-// the node budget, is written as [Truncated] before any index is visited. The same goes for a typed array (a
-// Buffer included), which lists one entry per element. Below the whole levels an object is listed, then truncated if
-// its keys do not fit in what is left of the budget, which they are then charged to.
+// the node budget, is written as [Truncated] before any index is visited. The same goes for a Map or a Set, by its
+// size. Below the whole levels an object is listed, then truncated if its keys do not fit in what is left of the
+// budget, which they are then charged to.
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 // One copy takes at most this many entries at every level: the keys of the objects and the length of the arrays it
 // copies, a shared one charged again at every use, because every use is copied and written out again. It is twice the
@@ -57,8 +58,6 @@ export interface RedactOptions {
   isSecretKey?: (key: string) => boolean;
   /** Written in place of a credential's value. */
   marker?: string;
-  /** Copy an Error with its name, message and stack too, which a copy of its own properties alone would lose. */
-  errors?: boolean;
 }
 
 const isSecretName = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
@@ -74,19 +73,45 @@ function elementCount(view: ArrayBufferView): number {
   }
 }
 
+/** The moment a Date holds, read through the built-in methods rather than any the value defines itself. */
+function dateText(date: Date): string {
+  return Number.isNaN(Date.prototype.getTime.call(date)) ? 'Invalid Date' : Date.prototype.toISOString.call(date);
+}
+
+/**
+ * The readable form a value takes, if any. It is told apart by its prototype, which costs little, and a Date, Map or Set
+ * then by its brand, which a value made from that prototype alone lacks. A Proxy is copied by its own properties, also
+ * when its getPrototypeOf trap throws, and so is a value made in another realm.
+ */
+function formOf(node: object): 'date' | 'map' | 'set' | 'error' | undefined {
+  try {
+    if (node instanceof Date) return types.isDate(node) ? 'date' : undefined;
+    if (node instanceof Map) return types.isMap(node) ? 'map' : undefined;
+    if (node instanceof Set) return types.isSet(node) ? 'set' : undefined;
+    return node instanceof Error && !types.isProxy(node) ? 'error' : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
- * whatever lies beyond the deep node, entry or character budget `[Truncated]`. Shared with the Baileys wire logger.
+ * whatever lies beyond the deep node, entry or character budget `[Truncated]`. A value whose data is not in its own
+ * properties is written readably: an Error as its name, message and stack before its own properties, a Date as its ISO
+ * text, a Buffer or typed array as its type and length, a Map as the array of its [key, value] pairs and a Set as the
+ * array of its values. Shared with the Baileys wire logger.
  */
 export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
-  const { isSecretKey = isSecretName, marker = '[REDACTED]', errors = false } = options;
+  const { isSecretKey = isSecretName, marker = '[REDACTED]' } = options;
   const budget = { nodes: REDACT_DEEP_NODES, entries: REDACT_MAX_ENTRIES, chars: REDACT_MAX_CHARS };
   const walk = (node: unknown, path: object[]): unknown => {
     // A function is not data: it is left out, as JSON.stringify leaves it out of an object and writes null in an array.
     if (typeof node === 'function') return undefined;
     if (typeof node === 'string') return (budget.chars -= node.length) < 0 ? '[Truncated]' : node;
     if (node === null || typeof node !== 'object') return node;
+    const form = formOf(node);
+    if (form === 'date') return walk(dateText(node as Date), path);
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;
     // A negative budget means something that did not fit was met: nothing else is copied or listed after it.
@@ -102,20 +127,43 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     };
     const left = Math.min(budget.entries, deep ? budget.nodes : Infinity);
     const room = Math.min(left, REDACT_MAX_ARRAY_LENGTH);
-    if (Array.isArray(node)) {
+    // A Map is copied as the array of its pairs, a credential key's value replaced, and a Set as the array of its
+    // values; its size is held against the room before any entry is read.
+    let list: unknown = node;
+    const map = form === 'map';
+    if (map || form === 'set') {
+      if (Reflect.get(map ? Map.prototype : Set.prototype, 'size', node) > room) return '[Truncated]';
+      const items: unknown[] = [];
+      if (map)
+        Map.prototype.forEach.call(node, (item: unknown, key: unknown) =>
+          items.push([key, typeof key === 'string' && isSecretKey(key) ? marker : item]),
+        );
+      else Set.prototype.forEach.call(node, (item: unknown) => items.push(item));
+      list = items;
+    }
+    if (Array.isArray(list)) {
       // Read once and taken as a count (whole, from zero), as map takes it: one number gates the copy and sizes it.
-      const length = Math.max(0, Math.trunc(node.length) || 0);
+      const length = Math.max(0, Math.trunc(list.length) || 0);
       if (length > room) return '[Truncated]';
       budget.entries -= length;
       // A plain Array filled by index, holes skipped: map would build it through the constructor of an Array subclass.
       const plain = new Array<unknown>(length);
-      for (let index = 0; index < length; index++) if (index in node) plain[index] = copy(node[index]);
+      for (let index = 0; index < length; index++) if (index in list) plain[index] = copy(list[index]);
       return plain;
     }
-    if (ArrayBuffer.isView(node) && elementCount(node) > room) return '[Truncated]';
-    const props = node as Record<string, unknown>;
+    // A typed array, a Buffer included, is written as its type and the elements it holds, never one entry per element.
+    // A DataView has no type of that kind and is copied as an object.
+    const type: unknown = ArrayBuffer.isView(node) ? Reflect.get(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag, node) : 0;
+    const props =
+      typeof type === 'string'
+        ? {
+            type: Object.getPrototypeOf(node) === Buffer.prototype ? 'Buffer' : type,
+            length: elementCount(node as ArrayBufferView),
+          }
+        : (node as Record<string, unknown>);
+    const error = node as Error;
     const source =
-      errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
+      form === 'error' ? { name: error.name, message: error.message, stack: error.stack, ...props } : props;
     const keys = Object.keys(source);
     if (keys.length > left) {
       // Listed once, then charged: another reference to this object, or any other node, is refused without listing.

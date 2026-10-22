@@ -11,7 +11,7 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
-import { countMetaValues } from './sandbox-log-meta';
+import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
@@ -598,7 +598,7 @@ export class PluginSandboxBridge {
           boundedMeta = { ...reason, metaTruncated: true };
         } else {
           try {
-            const metaLength = JSON.stringify(meta).length;
+            const metaLength = (metaText(meta) ?? '').length;
             if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH)
               boundedMeta = { ...reason, metaTruncated: true, metaLength };
           } catch {
