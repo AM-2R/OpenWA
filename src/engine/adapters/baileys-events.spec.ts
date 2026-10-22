@@ -725,6 +725,8 @@ describe('BaileysEvents.handleMessageReceiptUpdate', () => {
     ['a 1:1 chat in the lid dialect', '55555@lid'],
     ['a broadcast list', '1700000000@broadcast'],
     ['a channel', '120363000000000002@newsletter'],
+    ['a jid in a domain no kind is known for', '120363000000000003@bot'],
+    ['another unrecognised domain', '12345@interop'],
   ])('does not report a receipt for %s', (_kind, remoteJid) => {
     const { events, onMessageReceipt } = setup();
     events.handleMessageReceiptUpdate([
