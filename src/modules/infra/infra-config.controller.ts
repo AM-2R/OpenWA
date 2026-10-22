@@ -439,7 +439,17 @@ export class InfraConfigController {
     orchestration?: object;
     removal?: object;
   }> {
-    const profiles = body?.profiles || [];
+    // Never start a bundled service whose host the environment pins elsewhere: the pin outranks the saved file, so
+    // the next boot dials the pinned host and the container would run with nothing using it.
+    const requestedStart = body?.profiles || [];
+    const pinnedElsewhere = requestedStart.filter(p => {
+      const [key, value] = BUNDLED_SERVICE_ENV[p] ?? [];
+      return key !== undefined && isEnvPinned(key) && process.env[key] !== value;
+    });
+    const profiles = requestedStart.filter(p => !pinnedElsewhere.includes(p));
+    if (pinnedElsewhere.length > 0) {
+      this.logger.warn('Not starting profiles whose host the environment pins elsewhere', { pinnedElsewhere });
+    }
     // Never stop a bundled service the NEXT boot still dials, whatever the page asked for: the restarted
     // app would point at a stopped container and fail to boot, with the dashboard that could undo it. The
     // host it dials is the one the environment pins (e.g. the documented manual built-in Postgres with

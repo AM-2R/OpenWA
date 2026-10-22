@@ -287,6 +287,17 @@ describe('InfraStatusController.getStatus envPinned', () => {
     ]);
   });
 
+  // A pinned host decides the Use Built-in mode of its service whatever the page saves.
+  it('reports the three datastore hosts when a shadowing layer supplies them', async () => {
+    recordPinnedEnvKeys({
+      DATABASE_HOST: 'db.example',
+      REDIS_HOST: 'cache.example',
+      S3_ENDPOINT: 'https://s3.example',
+    });
+
+    expect((await buildController().getStatus()).envPinned).toEqual(['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT']);
+  });
+
   it('reports an empty list when nothing above data/.env.generated supplies a selection key', async () => {
     recordPinnedEnvKeys({});
 

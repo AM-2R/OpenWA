@@ -191,7 +191,8 @@ export function Infrastructure() {
   // as an environment pin even on a stock stack with no variable set anywhere (#1082).
   // Pin-only: PUPPETEER_ARGS cannot go through settingNote, because the running list is re-tokenized and
   // gains the pinned `--lang` flag, so it never string-compares equal to the saved value. The headless
-  // flag and the two paths do have a running and a saved value, but show only a reported pin as well.
+  // flag and the two paths do have a running and a saved value, but show only a reported pin as well, and so
+  // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides.
   const pinNote = (envKey: string) =>
     infraStatus?.envPinned?.includes(envKey) ? (
       <p className="env-pin-note">
@@ -299,6 +300,7 @@ export function Infrastructure() {
                 infraStatus.database.builtIn,
                 savedBuiltIn(savedConfig.database, infraStatus.database.builtIn),
               )}
+              {pinNote('DATABASE_HOST')}
 
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
@@ -602,6 +604,7 @@ export function Infrastructure() {
                 infraStatus.redis.builtIn,
                 savedBuiltIn(savedConfig.redis, infraStatus.redis.builtIn),
               )}
+              {pinNote('REDIS_HOST')}
 
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
@@ -801,6 +804,7 @@ export function Infrastructure() {
                   infraStatus.storage.builtIn,
                   savedBuiltIn(savedConfig.storage, infraStatus.storage.builtIn),
                 )}
+                {pinNote('S3_ENDPOINT')}
 
                 {!configForm.storageConfig.builtIn && (
                   <>

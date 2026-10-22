@@ -1075,9 +1075,30 @@ type Combo = (typeof COMBOS)[number];
 const comboLabel = (c: Combo) => `${c.file}/${c.pin}/${c.running ? 'bundled' : 'external'}`;
 const shownMode = (c: Combo) => (c.mode.builtInSet ? c.mode.builtIn : c.running);
 
+/** The notes rendered right under a toggle row, in order. */
+function notesUnderToggle(container: HTMLElement, labelText: string): string[] {
+  const notes: string[] = [];
+  let next = toggleInput(container, labelText).closest('.toggle-row')?.nextElementSibling;
+  while (next?.classList.contains('env-pin-note')) {
+    notes.push(next.textContent?.trim() ?? '');
+    next = next.nextElementSibling;
+  }
+  return notes;
+}
+
+const ENV_PIN_NOTE = /^Pinned by the environment variable (\S+)/;
+
 function builtInNoteOf(container: HTMLElement, labelText: string): string | null {
-  const next = toggleInput(container, labelText).closest('.toggle-row')?.nextElementSibling;
-  return next?.classList.contains('env-pin-note') ? (next.textContent?.trim() ?? null) : null;
+  return notesUnderToggle(container, labelText).find(note => !ENV_PIN_NOTE.test(note)) ?? null;
+}
+
+/** The variable the pin note under a toggle names, or null when there is none. */
+function hostPinNoteOf(container: HTMLElement, labelText: string): string | null {
+  for (const note of notesUnderToggle(container, labelText)) {
+    const name = ENV_PIN_NOTE.exec(note)?.[1];
+    if (name) return name;
+  }
+  return null;
 }
 
 COMBOS.forEach((_, i) => {
@@ -1093,6 +1114,12 @@ COMBOS.forEach((_, i) => {
         database: { connected: true, type: 'postgres', host: 'shared-db-host', builtIn: database.running },
         redis: { enabled: true, connected: true, host: 'redis.internal', port: 6379, builtIn: redis.running },
         storage: { type: 's3', bucket: 'media', builtIn: storage.running, s3Available: true },
+        // A pinned host is reported, so the page can say why its toggle cannot take effect.
+        envPinned: [
+          database.pin !== 'none' && 'DATABASE_HOST',
+          redis.pin !== 'none' && 'REDIS_HOST',
+          storage.pin !== 'none' && 'S3_ENDPOINT',
+        ].filter((key): key is string => typeof key === 'string'),
       },
       saved: {
         ...SAVED_CONFIG,
@@ -1107,12 +1134,13 @@ COMBOS.forEach((_, i) => {
     await awaitSeeded(container);
 
     const rows = [
-      { combo: database, label: 'Use Built-in PostgreSQL Container' },
-      { combo: redis, label: 'Use Built-in Redis Container' },
-      { combo: storage, label: 'Use Built-in MinIO Container' },
+      { combo: database, label: 'Use Built-in PostgreSQL Container', hostKey: 'DATABASE_HOST' },
+      { combo: redis, label: 'Use Built-in Redis Container', hostKey: 'REDIS_HOST' },
+      { combo: storage, label: 'Use Built-in MinIO Container', hostKey: 'S3_ENDPOINT' },
     ];
-    for (const { combo, label } of rows) {
+    for (const { combo, label, hostKey } of rows) {
       assert.equal(toggleInput(container, label).checked, shownMode(combo), `${label} toggle`);
+      assert.equal(hostPinNoteOf(container, label), combo.pin === 'none' ? null : hostKey, `${label} pin note`);
       const note =
         !combo.mode.builtInSet || combo.mode.builtIn === combo.running
           ? null
@@ -1251,6 +1279,43 @@ test('without a reported pin those fields show no note, even when running and sa
     !headlessRow?.nextElementSibling?.classList.contains('env-pin-note'),
     'unexpected note under Headless Mode',
   );
+});
+
+// The documented .env route to external services: the hosts are pinned, so the Use Built-in toggle cannot take
+// effect, and the note under it says which variable decides instead of the toggle reading OFF again after a reload.
+test('a host the environment pins is named under its Use Built-in toggle', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      database: { connected: true, type: 'postgres', host: 'db.external.example', builtIn: false },
+      redis: { enabled: true, connected: true, host: 'cache.external.example', port: 6379, builtIn: false },
+      storage: { type: 's3', bucket: 'media', builtIn: false, s3Available: true },
+      envPinned: ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT'],
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, host: 'db.external.example', builtIn: false, builtInSet: false },
+      redis: {
+        enabled: true,
+        builtIn: false,
+        builtInSet: false,
+        host: 'cache.external.example',
+        port: '6379',
+        passwordSet: false,
+      },
+      storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: false, builtInSet: false },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(hostPinNoteOf(container, 'Use Built-in PostgreSQL Container'), 'DATABASE_HOST');
+  assert.equal(hostPinNoteOf(container, 'Use Built-in Redis Container'), 'REDIS_HOST');
+  assert.equal(hostPinNoteOf(container, 'Use Built-in MinIO Container'), 'S3_ENDPOINT');
 });
 
 test('the engine radio seeds from the effective engine when ENGINE_TYPE is pinned', async () => {

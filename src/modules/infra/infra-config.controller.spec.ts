@@ -1784,6 +1784,58 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     });
   });
 
+  // The start side of the same rule: the host the environment pins outranks the saved file, so a bundled container
+  // started for a host pinned elsewhere would run with nothing dialling it.
+  describe('a bundled service whose host the environment pins elsewhere is never started', () => {
+    const PROFILE_OF: Record<ServiceName, string> = { database: 'postgres', redis: 'redis', storage: 'minio' };
+    let pinnedKeys: string[] = [];
+
+    afterEach(() => {
+      for (const key of pinnedKeys) delete process.env[key];
+      pinnedKeys = [];
+      recordPinnedEnvKeys({});
+    });
+
+    describe.each(SERVICE_NAMES)('%s', service => {
+      it.each(PIN_STATES)('host pinned %s', async pin => {
+        const host = pinnedHost(service, pin);
+        const key = SERVICES[service].host;
+        if (host !== undefined) {
+          process.env[key] = host;
+          pinnedKeys.push(key);
+        }
+        recordPinnedEnvKeys(host === undefined ? {} : { [key]: host });
+        const orchestrateProfiles = jest.fn().mockResolvedValue({});
+        const controller = buildController({
+          isDockerAvailable: () => true,
+          stopManagedService: jest.fn().mockResolvedValue(true),
+          orchestrateProfiles,
+        });
+
+        const result = await controller.requestRestart({ profiles: [PROFILE_OF[service]] });
+
+        const starts = pin !== 'external';
+        expect(orchestrateProfiles).toHaveBeenCalledTimes(starts ? 1 : 0);
+        expect(result.profiles).toEqual(starts ? [PROFILE_OF[service]] : []);
+      });
+    });
+
+    it('leaves it out of the no-Docker signal file too', async () => {
+      process.env.DATABASE_HOST = 'db.external.example';
+      pinnedKeys.push('DATABASE_HOST');
+      recordPinnedEnvKeys({ DATABASE_HOST: 'db.external.example' });
+      const writeFileSync = fs.writeFileSync as jest.Mock;
+      writeFileSync.mockClear();
+
+      await buildController({ isDockerAvailable: () => false }).requestRestart({ profiles: ['postgres', 'redis'] });
+
+      const written = (writeFileSync.mock.calls as Array<[unknown, unknown]>).find(call =>
+        String(call[0]).endsWith('.orchestration-request.json'),
+      );
+      expect((JSON.parse(String(written![1])) as { profiles: string[] }).profiles).toEqual(['redis']);
+    });
+  });
+
   it('starts only allowlisted profiles, never an unknown entry (symmetry with teardown)', async () => {
     const orchestrateProfiles = jest.fn().mockResolvedValue({});
     const controller = buildController({

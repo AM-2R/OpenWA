@@ -60,12 +60,16 @@ interface InfraStatus {
  * The keys behind the Infrastructure page's editable controls that a shipped compose file or an
  * operator variable is known to pin. docker-compose.dev.yml pins the local storage path and the three
  * whatsapp-web.js launch options with non-empty defaults. Only page controls are reported: naming
- * variables the page cannot edit would be noise.
+ * variables the page cannot edit would be noise. A pinned host decides the Use Built-in mode of its
+ * service, so the three host keys are reported too.
  */
 const DASHBOARD_PINNABLE_ENV_KEYS = [
   'DATABASE_TYPE',
+  'DATABASE_HOST',
   'REDIS_ENABLED',
+  'REDIS_HOST',
   'STORAGE_TYPE',
+  'S3_ENDPOINT',
   'STORAGE_LOCAL_PATH',
   'ENGINE_TYPE',
   'PUPPETEER_HEADLESS',
