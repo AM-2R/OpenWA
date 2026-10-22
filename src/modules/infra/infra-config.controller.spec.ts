@@ -967,6 +967,37 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       expect(env).not.toMatch(/^DATABASE_HOST=/m);
     });
 
+    // The page also leaves the flag out of an untouched Redis or storage card beside a host pinned elsewhere, and sends
+    // the host fields seeded with the pinned value. A stored built-in mode keeps its bundled host then, as the database
+    // does: the pinned host beside a stored flag of true would start the container and switch back once it is lifted.
+    it('keeps a stored built-in Redis and MinIO when the flag is left out beside hosts pinned elsewhere', () => {
+      pin({
+        REDIS_HOST: 'cache.ext.example',
+        S3_ENDPOINT: 'https://s3.ext.example',
+        S3_ACCESS_KEY_ID: 'ak-strong',
+        S3_SECRET_ACCESS_KEY: 'sk-strong',
+      });
+
+      const env = written(
+        {
+          redis: { enabled: true, host: 'cache.ext.example', port: '6379' },
+          queue: { enabled: false },
+          storage: { type: 's3', s3Bucket: 'openwa', s3Endpoint: 'https://s3.ext.example' },
+        },
+        'REDIS_ENABLED=true\nREDIS_BUILTIN=true\nREDIS_HOST=redis\nREDIS_PORT=6379\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=true\n' +
+          'S3_ENDPOINT=http://minio:9000\nS3_BUCKET=openwa\nS3_ACCESS_KEY_ID=minioadmin\nS3_SECRET_ACCESS_KEY=minioadmin\n',
+      );
+
+      for (const line of [
+        'REDIS_BUILTIN=true',
+        'REDIS_HOST=redis',
+        'MINIO_BUILTIN=true',
+        'S3_ENDPOINT=http://minio:9000',
+      ]) {
+        expect(env).toContain(line);
+      }
+    });
+
     // The page leaves out an untouched flag beside a pinned host. The stored external flag is inherited then, so the
     // credentials the pinned host may need stay as stored, where a flag of true would write the bundled ones.
     it('keeps stored external credentials when the flag is left out beside a pinned bundled host', () => {

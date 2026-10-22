@@ -173,7 +173,10 @@ export function applyRedisSection(
   const { updates, staleKeys, profiles } = ctx;
   if (redis.enabled !== undefined) updates.REDIS_ENABLED = redis.enabled ? 'true' : 'false';
   if (redis.builtIn !== undefined) updates.REDIS_BUILTIN = redis.builtIn ? 'true' : 'false';
-  if (redis.builtIn === true) {
+  // An absent builtIn keeps the stored mode, as for the database: a stored built-in Redis keeps its bundled host
+  // rather than taking the fields sent (the page leaves the flag out beside a pinned host, and sends that host).
+  const redisBuiltIn = redis.builtIn ?? existing.REDIS_BUILTIN === 'true';
+  if (redisBuiltIn) {
     // Built-in Redis - use container name as host. The bundled container runs without
     // auth, so a password saved by an earlier external setup is stale: leaving it
     // would make the client AUTH against a passwordless server on the next boot.
@@ -188,7 +191,6 @@ export function applyRedisSection(
     }
   }
   setSecret(updates, 'REDIS_PASSWORD', redis.password);
-  const redisBuiltIn = redis.builtIn ?? existing.REDIS_BUILTIN === 'true';
   // What the next boot reads: a value the environment pins, else this save's, else the stored one. The queue
   // section is applied first, so its switch is in `updates` already.
   const saved = (key: string): string | undefined => updates[key] ?? existing[key];
@@ -231,7 +233,8 @@ export function applyStorageSection(
     }
   } else {
     staleKeys.add('STORAGE_LOCAL_PATH');
-    if (storage.builtIn === true) {
+    // An absent builtIn keeps the stored mode, as for the database and Redis.
+    if (storage.builtIn ?? existing.MINIO_BUILTIN === 'true') {
       // Built-in MinIO - use container name as endpoint. The bundled keys are only the DEFAULT, as for the database
       // password: keys the next boot already dials the bundled endpoint with (the flag already set, or the bundled
       // endpoint pinned or stored, in any spelling) are the ones that container was created with, and are kept.
