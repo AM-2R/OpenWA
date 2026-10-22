@@ -787,22 +787,62 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       });
     });
 
-    it('still reports the exact length of a meta that is large but finite, up to 100000 values', async () => {
+    it('still reports the exact length of a meta that has no more values than the size limit', async () => {
       const loader = makeLoader();
       seed(loader, { builtIn: false, instance: null });
       await loader.enablePlugin('p1');
       const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
 
-      // The array is one value and each entry another: 99999 entries make 100000 values, the most that is walked.
-      loader.capturedOnLog!('log', 'walked', ones(99_999) as unknown as Record<string, unknown>);
-      loader.capturedOnLog!('log', 'stopped', ones(100_000) as unknown as Record<string, unknown>);
+      // The array is one value and each entry another, and the limit is 8192 values: a text of more values than
+      // that is longer than the size limit, so the walk stops there and no length is known.
+      loader.capturedOnLog!('log', 'walked', ones(8191) as unknown as Record<string, unknown>);
+      loader.capturedOnLog!('log', 'stopped', ones(8192) as unknown as Record<string, unknown>);
 
       expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] walked', {
         metaTruncated: true,
-        metaLength: 99_999 + 99_998 + 2,
+        metaLength: 8191 + 8190 + 2,
         pluginId: 'p1',
       });
       expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] stopped', { metaTruncated: true, pluginId: 'p1' });
+    });
+
+    it('replaces a typed array of 20 million elements by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'buffer', { b: new Uint8Array(20_000_000) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true, pluginId: 'p1' });
+    });
+
+    it('counts a Map or a Set by its size', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      loader.capturedOnLog!('log', 'map', { m: new Map(ones(9000).map((one, key) => [key, one])) });
+      loader.capturedOnLog!('log', 'set', { s: new Set(ones(9000).map((_, key) => key)) });
+
+      expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] map', { metaTruncated: true, pluginId: 'p1' });
+      expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] set', { metaTruncated: true, pluginId: 'p1' });
+    });
+
+    it('still drops a circular meta without a marker, as it cannot be written as JSON', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const circular: Record<string, unknown> = { id: 1 };
+      circular.self = circular;
+
+      loader.capturedOnLog!('log', 'circular', circular);
+
+      expect(logSpy).toHaveBeenCalledWith('[p1] circular', { pluginId: 'p1' });
     });
   });
 });
