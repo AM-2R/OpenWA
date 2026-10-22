@@ -247,12 +247,13 @@ export class InfraConfigController {
     }
 
     // Redis and queue are independent sections: a payload carrying only one of them must
-    // not rewrite (or disable) the other's saved keys.
-    if (config.redis) {
-      applyRedisSection(config.redis, existing, ctx);
-    }
+    // not rewrite (or disable) the other's saved keys. The queue goes first because it reaches Redis
+    // too, and the Redis section reads its new switch.
     if (config.queue) {
       if (config.queue.enabled !== undefined) updates.QUEUE_ENABLED = config.queue.enabled ? 'true' : 'false';
+    }
+    if (config.redis) {
+      applyRedisSection(config.redis, existing, ctx);
     }
 
     if (config.storage) {

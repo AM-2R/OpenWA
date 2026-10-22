@@ -1005,6 +1005,72 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
     expect(env).not.toContain('REDIS_PASSWORD=');
   });
 
+  // The page sends the flag it shows, so switching Redis off still carries builtIn true. Nothing the next boot runs
+  // dials a Redis that is off, so no bundled container may be started or kept for it.
+  describe('a Redis nothing uses keeps no bundled container', () => {
+    const BUILTIN_REDIS_ENV =
+      'REDIS_ENABLED=true\nREDIS_BUILTIN=true\nREDIS_HOST=redis\nREDIS_PORT=6379\nQUEUE_ENABLED=true\n';
+    const switchedOff = {
+      redis: { enabled: false, builtIn: true, host: 'redis', port: '6379' },
+      queue: { enabled: false },
+    };
+
+    afterEach(() => {
+      delete process.env.REDIS_ENABLED;
+      recordPinnedEnvKeys({});
+    });
+
+    it('switching Redis off clears the built-in flag and the bundled host', () => {
+      const env = written(switchedOff, BUILTIN_REDIS_ENV);
+
+      expect(env).toContain('REDIS_ENABLED=false');
+      expect(env).toContain('REDIS_BUILTIN=false');
+      expect(env).not.toMatch(/^REDIS_HOST=/m);
+    });
+
+    it('keeps an external host when Redis is switched off', () => {
+      const env = written(
+        { redis: { enabled: false, builtIn: false, host: 'cache.example.com' }, queue: { enabled: false } },
+        'REDIS_ENABLED=true\nREDIS_BUILTIN=false\nREDIS_HOST=cache.example.com\n',
+      );
+
+      expect(env).toContain('REDIS_BUILTIN=false');
+      expect(env).toContain('REDIS_HOST=cache.example.com');
+    });
+
+    it('keeps the bundled Redis while the queue still uses it', () => {
+      const env = written({ redis: { enabled: false, builtIn: true }, queue: { enabled: true } }, BUILTIN_REDIS_ENV);
+
+      expect(env).toContain('REDIS_BUILTIN=true');
+      expect(env).toContain('REDIS_HOST=redis');
+    });
+
+    it('keeps the bundled Redis while the environment pins REDIS_ENABLED on', () => {
+      process.env.REDIS_ENABLED = 'true';
+      recordPinnedEnvKeys({ REDIS_ENABLED: 'true' });
+
+      const env = written(switchedOff, BUILTIN_REDIS_ENV);
+
+      expect(env).toContain('REDIS_BUILTIN=true');
+      expect(env).toContain('REDIS_HOST=redis');
+    });
+
+    it('asks for the redis profile only while something uses Redis', () => {
+      const profilesOf = (config: unknown) => {
+        (fs.existsSync as jest.Mock).mockReturnValue(true);
+        (fs.readFileSync as jest.Mock).mockReturnValue(BUILTIN_REDIS_ENV);
+        const { profiles } = newController().saveConfig(config as never);
+        (fs.existsSync as jest.Mock).mockReturnValue(false);
+        (fs.readFileSync as jest.Mock).mockReturnValue('');
+        return profiles;
+      };
+
+      expect(profilesOf(switchedOff)).toEqual([]);
+      expect(profilesOf({ redis: { enabled: false, builtIn: true }, queue: { enabled: true } })).toEqual(['redis']);
+      expect(profilesOf({ redis: { enabled: true, builtIn: true } })).toEqual(['redis']);
+    });
+  });
+
   it('rejects a placeholder Redis password at save time', () => {
     expectRejected(
       { redis: { enabled: true, builtIn: false, host: 'redis.example.com', password: 'password' } },
@@ -1680,6 +1746,41 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
       const { stopped } = await stoppedFor('redis', 'redis', undefined);
 
       expect(stopped).toBe(false);
+    });
+
+    // The page's own save for switching a bundled service off, then Restart Now with the container it runs: the
+    // file the save wrote is what the restart reads, and nothing in it may keep the container for a service that is
+    // no longer in use.
+    describe.each([
+      ['database', { database: { type: 'sqlite', builtIn: true, host: 'postgres' } }],
+      ['redis', { redis: { enabled: false, builtIn: true, host: 'redis', port: '6379' }, queue: { enabled: false } }],
+      ['storage', { storage: { type: 'local', builtIn: true, s3Endpoint: 'http://minio:9000' } }],
+    ] as const)('%s switched off from the page', (service, payload) => {
+      it('is stopped by the restart that follows the save', async () => {
+        const saved = [
+          'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=openwa',
+          'REDIS_ENABLED=true\nREDIS_BUILTIN=true\nREDIS_HOST=redis\nREDIS_PORT=6379\nQUEUE_ENABLED=true',
+          'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=http://minio:9000\nS3_ACCESS_KEY_ID=minioadmin',
+          'S3_SECRET_ACCESS_KEY=minioadmin\n',
+        ].join('\n');
+        (fs.existsSync as jest.Mock).mockReturnValue(true);
+        (fs.readFileSync as jest.Mock).mockReturnValue(saved);
+        (fs.writeFileSync as jest.Mock).mockClear();
+        recordPinnedEnvKeys({});
+        const stopManagedService = jest.fn().mockResolvedValue(true);
+        const controller = buildController({
+          isDockerAvailable: () => true,
+          stopManagedService,
+          orchestrateProfiles: jest.fn().mockResolvedValue({}),
+        });
+
+        const { profiles } = controller.saveConfig(payload);
+        const written = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
+        (fs.readFileSync as jest.Mock).mockReturnValue(written);
+        await controller.requestRestart({ profiles, profilesToRemove: [PROFILE_OF[service]] });
+
+        expect(stopManagedService).toHaveBeenCalledWith(PROFILE_OF[service]);
+      });
     });
   });
 

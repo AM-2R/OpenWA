@@ -185,7 +185,17 @@ describe('DockerService.onModuleInit', () => {
   // The probe runs against whatever buildDockerOptions() points at, but the dockerode
   // constructor is the auto-mock — the "daemon" is whatever the test's fake says it is,
   // so no real socket is ever touched.
-  const ENV_KEYS = ['DOCKER_HOST', 'REDIS_BUILTIN', 'POSTGRES_BUILTIN', 'MINIO_BUILTIN'];
+  const ENV_KEYS = [
+    'DOCKER_HOST',
+    'REDIS_BUILTIN',
+    'POSTGRES_BUILTIN',
+    'MINIO_BUILTIN',
+    'DATABASE_TYPE',
+    'STORAGE_TYPE',
+    'REDIS_ENABLED',
+    'QUEUE_ENABLED',
+    'CACHE_ENABLED',
+  ];
   let savedEnv: Record<string, string | undefined> = {};
 
   const happyDocker = () => ({
@@ -226,6 +236,7 @@ describe('DockerService.onModuleInit', () => {
 
   it('bootstraps the env-configured built-in profiles when the daemon is reachable', async () => {
     process.env.REDIS_BUILTIN = 'true';
+    process.env.REDIS_ENABLED = 'true';
     const docker = happyDocker();
     DockerMock.mockImplementation(() => docker);
     const service = new DockerService();
@@ -238,6 +249,7 @@ describe('DockerService.onModuleInit', () => {
 
   it('logs a warning but still resolves when bootstrap orchestration fails', async () => {
     process.env.REDIS_BUILTIN = 'true';
+    process.env.REDIS_ENABLED = 'true';
     const docker = {
       ...happyDocker(),
       pull: (_image: string, cb: (err: Error | null, stream: null) => void) => cb(new Error('pull denied'), null),
@@ -252,6 +264,36 @@ describe('DockerService.onModuleInit', () => {
     expect(service.isDockerAvailable()).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('[Bootstrap Orchestration] Issues'));
     expect(docker.createContainer).not.toHaveBeenCalled();
+  });
+
+  // A built-in flag starts its container only for a datastore this boot uses: a flag left beside a SQLite database,
+  // local storage or a Redis nothing reaches would otherwise run a container on every boot that nothing dials.
+  // Redis is reached by the queue and the cache as well as by REDIS_ENABLED.
+  describe.each([
+    ['openwa-postgres', 'POSTGRES_BUILTIN', [{ DATABASE_TYPE: 'postgres' }], [{}, { DATABASE_TYPE: 'sqlite' }]],
+    [
+      'openwa-redis',
+      'REDIS_BUILTIN',
+      [{ REDIS_ENABLED: 'true' }, { QUEUE_ENABLED: 'true' }, { CACHE_ENABLED: 'true' }],
+      [{}, { REDIS_ENABLED: 'false', QUEUE_ENABLED: 'false', CACHE_ENABLED: 'false' }],
+    ],
+    ['openwa-minio', 'MINIO_BUILTIN', [{ STORAGE_TYPE: 's3' }], [{}, { STORAGE_TYPE: 'local' }]],
+  ] as const)('%s', (container, flag, used, unused) => {
+    const started = async (env: Record<string, string>): Promise<boolean> => {
+      Object.assign(process.env, { [flag]: 'true' }, env);
+      const docker = happyDocker();
+      DockerMock.mockImplementation(() => docker);
+      await new DockerService().onModuleInit();
+      return docker.createContainer.mock.calls.some(([spec]) => (spec as { name: string }).name === container);
+    };
+
+    it.each(used.map(env => [JSON.stringify(env), env]))('is started when %s', async (_label, env) => {
+      expect(await started(env)).toBe(true);
+    });
+
+    it.each(unused.map(env => [JSON.stringify(env), env]))('is not started when %s', async (_label, env) => {
+      expect(await started(env)).toBe(false);
+    });
   });
 });
 

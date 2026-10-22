@@ -10,6 +10,16 @@ import { readGeneratedEnv } from '../infra/generated-env';
  */
 export const MANAGED_DOCKER_PROFILES: readonly string[] = ['postgres', 'redis', 'minio'];
 
+/**
+ * Whether the configuration `read` describes uses the datastore a managed profile runs. Redis is reached by the
+ * queue and the cache as well as by REDIS_ENABLED, each of which connects on its own.
+ */
+export function datastoreInUse(profile: string, read: (key: string) => string | undefined): boolean {
+  if (profile === 'postgres') return read('DATABASE_TYPE') === 'postgres';
+  if (profile === 'minio') return read('STORAGE_TYPE') === 's3';
+  return ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'].some(key => read(key) === 'true');
+}
+
 interface ContainerInfo {
   id: string;
   name: string;
@@ -84,8 +94,8 @@ export class DockerService implements OnModuleInit {
    * Bootstrap orchestration: start built-in containers based on saved config.
    * Runs from onModuleInit, which Nest calls only after the data connection is up. When that
    * connection is the built-in database (DATABASE_TYPE=postgres), the postgres profile is a no-op
-   * here: a stopped container was already started by prestartBuiltinDatabase in main.ts. With
-   * POSTGRES_BUILTIN=true on any other DATABASE_TYPE, this is what starts or creates it.
+   * here: a stopped container was already started by prestartBuiltinDatabase in main.ts. A flag set
+   * for a datastore this boot does not use (see datastoreInUse) starts nothing.
    */
   private async bootstrapOrchestration(): Promise<void> {
     if (!this.isAvailable) {
@@ -94,15 +104,16 @@ export class DockerService implements OnModuleInit {
     }
 
     const profiles: string[] = [];
+    const env = (key: string): string | undefined => process.env[key];
 
     // Check for built-in services from environment variables
-    if (process.env.REDIS_BUILTIN === 'true') {
+    if (process.env.REDIS_BUILTIN === 'true' && datastoreInUse('redis', env)) {
       profiles.push('redis');
     }
-    if (process.env.POSTGRES_BUILTIN === 'true') {
+    if (process.env.POSTGRES_BUILTIN === 'true' && datastoreInUse('postgres', env)) {
       profiles.push('postgres');
     }
-    if (process.env.MINIO_BUILTIN === 'true') {
+    if (process.env.MINIO_BUILTIN === 'true' && datastoreInUse('minio', env)) {
       profiles.push('minio');
     }
 

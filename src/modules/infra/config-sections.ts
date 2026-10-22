@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
+import { isEnvPinned } from '../../config/env-precedence';
 import { postgresSchemaError } from '../../config/env.validation';
 import type { EngineFactory } from '../../engine/engine.factory';
+import { datastoreInUse } from '../docker';
 import { DatabaseConfigDto, EngineConfigDto, RedisConfigDto, StorageConfigDto } from './dto/save-config.dto';
 
 // Mutable accumulator threaded through the pipeline stages and per-section appliers extracted
@@ -149,10 +151,16 @@ export function applyRedisSection(
     }
   }
   setSecret(updates, 'REDIS_PASSWORD', redis.password);
-  const redisEnabled = redis.enabled ?? existing.REDIS_ENABLED === 'true';
   const redisBuiltIn = redis.builtIn ?? existing.REDIS_BUILTIN === 'true';
-  if (redisEnabled && redisBuiltIn) {
-    profiles.push('redis');
+  // What the next boot reads: a value the environment pins, else this save's, else the stored one. The queue
+  // section is applied first, so its switch is in `updates` already.
+  if (datastoreInUse('redis', key => (isEnvPinned(key) ? process.env[key] : (updates[key] ?? existing[key])))) {
+    if (redisBuiltIn) profiles.push('redis');
+  } else {
+    // Nothing the next boot runs reaches Redis, so no bundled container may be started for it at boot or kept by
+    // the restart, which keeps a container while the saved host still names it.
+    updates.REDIS_BUILTIN = 'false';
+    if ((updates.REDIS_HOST ?? existing.REDIS_HOST) === 'redis') staleKeys.add('REDIS_HOST');
   }
 }
 
