@@ -190,7 +190,10 @@ test('a wildcard in a directory name is reported instead of guessed', () => {
 test('only the context files a COPY or ADD reads are build inputs', () => {
   const keptPaths = run => {
     assert.equal(run.status, 0, run.out);
-    return Number(/(\d+) kept paths asserted/.exec(run.out)?.[1]);
+    // A reworded line would give NaN twice, and assert.equal passes two NaN.
+    const count = Number(/(\d+) kept paths asserted/.exec(run.out)?.[1]);
+    assert.ok(Number.isInteger(count), `no kept-paths count in: ${run.out}`);
+    return count;
   };
   const gate = dockerfile => runGate({ Dockerfile: dockerfile, '.dockerignore': REAL_DOCKERIGNORE });
   const plain = keptPaths(gate('COPY src-a.txt dest-1\nCOPY src-b.txt dest-2\n'));
