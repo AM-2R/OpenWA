@@ -28,8 +28,8 @@ export interface LogContext {
 // (case-insensitive), never the value's content, to avoid false positives on innocuous fields.
 const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key/i;
 
-// Metadata is copied whole down to this depth, however wide or dense, which is where it normally lives; that part is
-// not bounded. Below it one log call copies at most REDACT_DEEP_NODES more objects and arrays and writes the rest as
+// Metadata is copied whole down to this depth, however wide, which is where it normally lives; only REDACT_MAX_ENTRIES
+// bounds that part. Below it one copy takes at most REDACT_DEEP_NODES more objects and arrays and writes the rest as
 // [Truncated], never raw, so a densely linked object graph cannot make it walk that part for long.
 const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
@@ -39,6 +39,11 @@ const REDACT_DEEP_NODES = 1000;
 // Buffer included), which lists one entry per element. Below the whole levels an object is listed, then truncated if
 // its keys do not fit in what is left of the budget, which they are then charged to.
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
+// One copy takes at most this many entries at every level: the keys of the objects and the length of the arrays it
+// copies, a shared one charged again at every use, because every use is copied and written out again. It is twice the
+// array limit, so a structure of that size is written whole; an object or array that does not fit in what is left of
+// it is written as [Truncated], which is what keeps a few shared references from expanding into an unbounded copy.
+const REDACT_MAX_ENTRIES = 2_000_000;
 
 export interface RedactOptions {
   /** Whether the value under this key is a credential. Defaults to the secret-name pattern above. */
@@ -65,25 +70,28 @@ function elementCount(view: ArrayBufferView): number {
 /**
  * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
- * whatever lies beyond the deep node budget `[Truncated]`. Shared with the Baileys wire logger.
+ * whatever lies beyond the deep node budget or the entry budget `[Truncated]`. Shared with the Baileys wire logger.
  */
 export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
   const { isSecretKey = isSecretName, marker = '[REDACTED]', errors = false } = options;
-  const budget = { nodes: REDACT_DEEP_NODES };
+  const budget = { nodes: REDACT_DEEP_NODES, entries: REDACT_MAX_ENTRIES };
   const walk = (node: unknown, path: object[]): unknown => {
     // A function is not data: it is left out, as JSON.stringify leaves it out of an object and writes null in an array.
     if (typeof node === 'function') return undefined;
     if (node === null || typeof node !== 'object') return node;
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;
-    if (deep && --budget.nodes < 0) return '[Truncated]';
+    // A negative entry budget means an object that did not fit was listed: nothing else is copied or listed after it.
+    if ((deep && --budget.nodes < 0) || budget.entries < 0) return '[Truncated]';
     const parents = [...path, node];
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
-    const room = deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH;
+    const left = Math.min(budget.entries, deep ? budget.nodes : Infinity);
+    const room = Math.min(left, REDACT_MAX_ARRAY_LENGTH);
     if (Array.isArray(node)) {
       // Read once and taken as a count (whole, from zero), as map takes it: one number gates the copy and sizes it.
       const length = Math.max(0, Math.trunc(node.length) || 0);
       if (length > room) return '[Truncated]';
+      budget.entries -= length;
       // A plain Array filled by index, holes skipped: map would build it through the constructor of an Array subclass.
       const plain = new Array<unknown>(length);
       for (let index = 0; index < length; index++) if (index in node) plain[index] = copy(node[index]);
@@ -94,11 +102,13 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
     const keys = Object.keys(source);
-    if (deep && keys.length > budget.nodes) {
+    if (keys.length > left) {
       // Listed once, then charged: another reference to this object, or any other node, is refused without listing.
       budget.nodes -= keys.length;
+      budget.entries -= keys.length;
       return '[Truncated]';
     }
+    budget.entries -= keys.length;
     const out: Record<string, unknown> = {};
     for (const key of keys) {
       const val = source[key];

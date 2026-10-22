@@ -141,7 +141,7 @@ describe('LoggerService', () => {
       expect(output.sessionId).toBe('s1');
     });
 
-    // The first five levels were always copied whole, however wide, and still are.
+    // The first five levels were always copied whole, however wide, and still are, up to what one copy may take.
     it('writes a wide structure in full at the levels metadata normally has', () => {
       logger.log('cfg', { items: Array.from({ length: 1500 }, (_, id) => ({ id, tags: [id] })) });
 
@@ -149,6 +149,16 @@ describe('LoggerService', () => {
       expect(items).toHaveLength(1500);
       expect(items[0]).toEqual({ id: 0, tags: [0] });
       expect(items[1499]).toEqual({ id: 1499, tags: [1499] });
+    });
+
+    it('writes the second of two arrays of a million entries as [Truncated] and keeps the rest of the line', () => {
+      const zeros = (): number[] => new Array<number>(1_000_000).fill(0);
+      logger.log('cfg', { sessionId: 's1', first: zeros(), second: zeros(), after: { id: 1 }, last: 'l' });
+
+      const output = getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+      expect(output.first).toHaveLength(1_000_000);
+      expect(String(output.second).slice(0, 11)).toBe('[Truncated]');
+      expect({ ...output, first: 0 }).toMatchObject({ message: 'cfg', sessionId: 's1', after: { id: 1 }, last: 'l' });
     });
 
     it('truncates the rows of a wide array below the last whole level once the budget is spent', () => {
@@ -1140,6 +1150,136 @@ describe('redactSecrets', () => {
       it('writes a small typed array in the first levels as one entry per element, as before', () => {
         expect(redactSecrets({ list: Buffer.from([1, 2, 3]) })).toEqual({ list: { 0: 1, 1: 2, 2: 3 } });
       });
+    });
+  });
+
+  // One copy takes at most 2,000,000 entries: the keys of the objects and the length of the arrays it copies, a shared
+  // one charged again at every use. What a caller built is written as it is; a graph that expands past that is cut.
+  describe('the entries one copy may take', () => {
+    const zeros = (length: number): number[] => new Array<number>(length).fill(0);
+    const sparse = (length: number): unknown[] => {
+      const list: unknown[] = [];
+      list.length = length;
+      return list;
+    };
+    const wide = (keys: number): Record<string, number> =>
+      Object.fromEntries(Array.from({ length: keys }, (_, key) => [`k${key}`, key]));
+    // What a failing comparison prints for a copy of a million entries.
+    const shown = (value: unknown): unknown =>
+      value !== null && typeof value === 'object'
+        ? `${Array.isArray(value) ? 'list' : 'object'} of ${Object.keys(value).length}`
+        : value;
+    // The values the copy holds as they are written: a shared object counts at every use.
+    const leaves = (node: unknown): number =>
+      node !== null && typeof node === 'object'
+        ? Object.values(node).reduce<number>((sum, child) => sum + leaves(child), 0)
+        : 1;
+
+    it('copies exactly 2,000,000 entries and writes the array that would take one more as [Truncated]', () => {
+      // The top object has 2 keys, which come first.
+      const whole = redactSecrets({ a: zeros(1_000_000), b: zeros(999_998) }) as { b: unknown[] };
+      const over = redactSecrets({ a: zeros(1_000_000), b: zeros(999_999) }) as { a: unknown[]; b: unknown };
+
+      expect(whole.b).toHaveLength(999_998);
+      expect(over.a).toHaveLength(1_000_000);
+      expect(shown(over.b)).toBe('[Truncated]');
+    });
+
+    it('still copies an empty object and an empty array once the entries are spent, and not an object with a key', () => {
+      const spent = redactSecrets({ a: zeros(1_000_000), b: zeros(999_995), c: {}, d: [], e: { id: 1 } }) as Record<
+        string,
+        unknown
+      >;
+
+      expect(spent.b).toHaveLength(999_995);
+      expect([spent.c, spent.d, spent.e]).toEqual([{}, [], '[Truncated]']);
+    });
+
+    it('redacts a secret-named key beside what is cut, and never writes what is cut', () => {
+      const copy = redactSecrets({
+        a: zeros(1_000_000),
+        b: zeros(999_990),
+        token: 'value-token',
+        c: { password: 'value-password' },
+        d: { ...wide(20), password: 'value-far' },
+      });
+
+      expect(JSON.stringify({ ...(copy as object), a: 0, b: 0 })).toBe(
+        '{"a":0,"b":0,"token":"[REDACTED]","c":{"password":"[REDACTED]"},"d":"[Truncated]"}',
+      );
+    });
+
+    it('charges every use of a shared array', () => {
+      const shared = zeros(600_000);
+      const { list } = redactSecrets({ list: [shared, shared, shared, shared] }) as { list: unknown[] };
+
+      expect(list.slice(0, 3).map(copy => (copy as unknown[]).length)).toEqual([600_000, 600_000, 600_000]);
+      expect(shown(list[3])).toBe('[Truncated]');
+    });
+
+    it('charges the length of a sparse array, holes included, for each one', () => {
+      const { list } = redactSecrets({
+        list: [sparse(600_000), sparse(600_000), sparse(600_000), sparse(600_000)],
+      }) as {
+        list: unknown[];
+      };
+
+      expect(list.slice(0, 3).map(copy => (copy as unknown[]).length)).toEqual([600_000, 600_000, 600_000]);
+      expect(shown(list[3])).toBe('[Truncated]');
+    });
+
+    it('charges the elements of a typed array for each view of one buffer, and does not list one that does not fit', () => {
+      const buffer = new ArrayBuffer(600_000);
+      const keys = jest.spyOn(Object, 'keys');
+      try {
+        const { views } = redactSecrets({
+          list: zeros(1_000_000),
+          views: [new Uint8Array(buffer), new Uint8Array(buffer), new Uint8Array(buffer)],
+        }) as { views: unknown[] };
+
+        expect(Object.keys(views[0] as object)).toHaveLength(600_000);
+        expect(views.slice(1).map(shown)).toEqual(['[Truncated]', '[Truncated]']);
+        expect(keys.mock.calls.filter(([node]) => node instanceof Uint8Array)).toHaveLength(1);
+      } finally {
+        keys.mockRestore();
+      }
+    });
+
+    // An object is listed (Object.keys) before its key count can be compared with what is left, so one that does not
+    // fit is charged once it is listed: the next reference to it, or any other object, is refused without listing it.
+    it('lists a wide object only until it no longer fits, however many references to it follow', () => {
+      const shared = wide(60_000);
+      const keys = jest.spyOn(Object, 'keys');
+      try {
+        // The two arrays leave 99,997 entries, and the list takes 6 of them: one reference fits, the second does not.
+        const { list } = redactSecrets({
+          first: zeros(1_000_000),
+          second: zeros(900_000),
+          list: Array.from({ length: 6 }, () => shared),
+        }) as { list: unknown[] };
+
+        expect(keys.mock.calls.filter(([node]) => node === shared)).toHaveLength(2);
+        expect(list.map(copy => (typeof copy === 'string' ? copy : Object.keys(copy as object).length))).toEqual([
+          60_000,
+          ...new Array<string>(5).fill('[Truncated]'),
+        ]);
+      } finally {
+        keys.mockRestore();
+      }
+    });
+
+    // Every level is within the first five, so the 1000 nodes of the deeper levels are not what stops it.
+    it('cuts a graph of shared levels that expands past it, and keeps the part it copied', () => {
+      let level: Record<string, unknown> = wide(40);
+      for (let i = 1; i < 4; i++)
+        level = Object.fromEntries(Array.from({ length: 40 }, (_, key) => [`k${key}`, level]));
+
+      const copy = redactSecrets({ id: 'graph', graph: level }) as { id: string; graph: Record<string, unknown> };
+
+      expect(copy.id).toBe('graph');
+      expect(leaves(copy)).toBeGreaterThan(1_000_000);
+      expect(leaves(copy)).toBeLessThanOrEqual(2_000_000);
+      expect(JSON.stringify(copy.graph).includes('[Truncated]')).toBe(true);
     });
   });
 

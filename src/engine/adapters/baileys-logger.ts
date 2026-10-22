@@ -26,8 +26,8 @@ const SECRET_KEYS: ReadonlySet<string> = new Set(['password', 'secret', 'token',
  * the whole proxy config, password included, as its only enumerable property. At debug level that
  * went to stdout verbatim, which on a shipped deployment means the proxy password in the container
  * log. An Error's message and stack are not enumerable, so they are copied explicitly: they are what
- * an operator raised the log level to see. Below the fifth level the copy is bounded (see
- * redactSecrets), because a logger must not walk an arbitrary graph on the wire path.
+ * an operator raised the log level to see. The copy is bounded in the entries it takes, and below the fifth
+ * level in the objects too (see redactSecrets), because a logger must not walk an arbitrary graph on the wire path.
  */
 const REDACTION: RedactOptions = {
   isSecretKey: key => SECRET_KEYS.has(key.toLowerCase()),
