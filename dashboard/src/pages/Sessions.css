@@ -642,8 +642,8 @@
   }
 }
 
-/* Status Pill for Card Headers. The detail modal's .status-badge takes the same tint for each status below
-   (disconnected keeps its own grey above). */
+/* Status Pill for Card Headers. The detail modal's .status-badge takes the same tint for each status below,
+   except disconnected (its own grey above) and action_required (a lighter tint of its own). */
 .sessions-page .status-pill {
   display: inline-flex;
   padding: 0.25rem 0.75rem;
@@ -684,7 +684,8 @@
 }
 
 /* The detail badge spells the status out beside its own label, so it takes the 10 percent tint of the other
-   badges: --warning-text is 4.76:1 on it, 4.34:1 on the pill's 22 percent. */
+   badges: --warning-text is 4.76:1 on it, 4.34:1 on the pill's 22 percent. In the dialog it then differs from
+   the in-progress amber badges by hue only. */
 .sessions-page .status-badge.action_required {
   background: rgba(245, 158, 11, 0.1);
   color: var(--warning-text);
