@@ -82,9 +82,12 @@ RESOLVED_CWD="$(pwd -P)"
 # Resolve a path the way the kernel does: left to right, following every symlink and applying each '..' to
 # the physical directory reached so far. Folding '..' lexically first would read <link to />/.. as the link's
 # parent directory when the kernel resolves it to /, and a guard on that value would pass what it must refuse.
-# The part past the first component that does not exist cannot hold a link, so '..' there is plain text. This
-# matters for destructive targets such as /mount-link/sessions: path.resolve alone would not reveal that
-# mount-link points at the workspace, home directory, or another broad protected target.
+# Each step is the kernel's own realpath (fs.realpathSync.native). The JavaScript one folds a '..' inside a
+# link's target lexically, so a link to <link to />/.. would read as the directory holding it, and it keeps
+# the case and Unicode form as typed on a filesystem that ignores both. The part past the first component
+# that does not exist cannot hold a link, so '..' there is plain text. This matters for destructive targets
+# such as /mount-link/sessions: path.resolve alone would not reveal that mount-link points at the
+# workspace, home directory, or another broad protected target.
 resolve_path() {
   node -e '
     const fs = require("fs");
@@ -102,7 +105,7 @@ resolve_path() {
         physical = path.dirname(physical);
       } else {
         const next = path.join(physical, segment);
-        if (fs.existsSync(next)) physical = fs.realpathSync(next);
+        if (fs.existsSync(next)) physical = fs.realpathSync.native(next);
         else missing.push(segment);
       }
     }
