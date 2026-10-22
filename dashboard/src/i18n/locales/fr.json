@@ -1100,6 +1100,7 @@
       "start": "Démarrer la vérification par lot",
       "stop": "Arrêter la vérification",
       "export": "Exporter les résultats (CSV)",
+      "exportHint": "Le fichier contient tous les chiffres. Un tableur peut afficher les longs numéros sous la forme 9.19612E+11 ou supprimer un zéro initial ; importez le fichier et réglez la colonne Phone Number sur Texte pour les conserver tels quels.",
       "stoppedTitle": "Lot arrêté",
       "checked": "Vérifiés",
       "remaining": "Restants",

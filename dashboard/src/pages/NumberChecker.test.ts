@@ -653,8 +653,8 @@ test('NumberChecker: the CSV carries each check as an ISO instant while the tabl
   assert.equal(shown, new Date(checkedAt).toLocaleTimeString());
 });
 
-// Opened in a spreadsheet, a bare 919612345678 becomes a number: 9.19612E+11 in a narrow column, and a leading
-// zero is lost. A leading apostrophe makes the cell text, the same prefix that neutralizes a formula.
+// The Phone Number column carries the digits as the gateway answered them: an apostrophe in front would be read
+// literally by Excel and by any program that imports the file.
 async function exportedFirstCells(numbers: string, answer: (number: string) => Response, t: TestContext) {
   const downloads: Blob[] = [];
   t.mock.method(URL, 'createObjectURL', (blob: Blob) => {
@@ -673,22 +673,46 @@ async function exportedFirstCells(numbers: string, answer: (number: string) => R
   return rows.map(row => row.split(',')[0]);
 }
 
-test('NumberChecker: the CSV marks each phone number as text, so a spreadsheet keeps its digits', async t => {
+test('NumberChecker: the CSV writes each phone number as bare digits, with no apostrophe', async t => {
   const cells = await exportedFirstCells(
     '919612345678\n08123456789',
     number => jsonResponse({ number, exists: false, whatsappId: null }),
     t,
   );
-  assert.deepEqual(cells, ["'919612345678", "'08123456789"]);
+  assert.deepEqual(cells, ['919612345678', '08123456789']);
 });
 
-test('NumberChecker: a number the gateway echoes as a formula is still neutralized once, not twice', async t => {
+test('NumberChecker: a number typed with a plus is checked and exported as bare digits', async t => {
+  const cells = await exportedFirstCells(
+    '+628123456789',
+    number => jsonResponse({ number, exists: false, whatsappId: null }),
+    t,
+  );
+  assert.deepEqual(cells, ['628123456789']);
+});
+
+test('NumberChecker: a number the gateway echoes as a formula is still neutralized once', async t => {
   const cells = await exportedFirstCells(
     '919612345678',
     () => jsonResponse({ number: '=1+1', exists: false, whatsappId: null }),
     t,
   );
   assert.deepEqual(cells, ["'=1+1"]);
+});
+
+test('NumberChecker: the export button is described by a note on how a spreadsheet shows long numbers', async t => {
+  t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
+  stubLookups(registered);
+  renderComponent();
+  assert.equal(rtl.screen.queryByText(/The file holds every digit/), null);
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: '919612345678' } });
+  startBatch();
+  const button = await rtl.waitFor(() => rtl.screen.getByRole('button', { name: /Export Results/i }), {
+    timeout: 5000,
+  });
+  const note = rtl.screen.getByText(/The file holds every digit.*9\.19612E\+11/);
+  assert.equal(button.getAttribute('aria-describedby'), note.id);
+  assert.notEqual(note.id, '');
 });
 
 test('NumberChecker: a rejected lookup is recorded as failed with error status, not as unregistered', async t => {

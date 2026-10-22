@@ -1093,6 +1093,7 @@
       "start": "開始批量檢查",
       "stop": "停止檢查",
       "export": "匯出結果（CSV）",
+      "exportHint": "檔案包含每一位數字。試算表可能把長號碼顯示為 9.19612E+11，或去掉開頭的 0；請匯入該檔案，並將 Phone Number 欄設為文字，以保持原樣。",
       "stoppedTitle": "批量檢查已停止",
       "checked": "已檢查",
       "remaining": "剩餘",

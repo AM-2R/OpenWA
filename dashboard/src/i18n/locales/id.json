@@ -1093,6 +1093,7 @@
       "start": "Mulai Pemeriksaan Batch",
       "stop": "Hentikan Pemeriksaan",
       "export": "Ekspor Hasil (CSV)",
+      "exportHint": "File ini memuat semua digit. Aplikasi spreadsheet bisa menampilkan nomor panjang sebagai 9.19612E+11 atau menghapus nol di depan; impor file dan atur kolom Phone Number ke Teks agar nomor tetap utuh.",
       "stoppedTitle": "Batch dihentikan",
       "checked": "Diperiksa",
       "remaining": "Tersisa",

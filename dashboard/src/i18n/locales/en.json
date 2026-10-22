@@ -1093,6 +1093,7 @@
       "start": "Start Batch Check",
       "stop": "Stop Checking",
       "export": "Export Results (CSV)",
+      "exportHint": "The file holds every digit. A spreadsheet may show long numbers as 9.19612E+11 or drop a leading zero; import the file and set the Phone Number column to Text to keep them as typed.",
       "stoppedTitle": "Batch stopped",
       "checked": "Checked",
       "remaining": "Remaining",

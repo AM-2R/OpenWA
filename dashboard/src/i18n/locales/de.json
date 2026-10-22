@@ -1093,6 +1093,7 @@
       "start": "Batch-Prüfung starten",
       "stop": "Prüfung stoppen",
       "export": "Ergebnisse exportieren (CSV)",
+      "exportHint": "Die Datei enthält jede Ziffer. Eine Tabellenkalkulation zeigt lange Nummern eventuell als 9.19612E+11 an oder entfernt eine führende Null; importieren Sie die Datei und stellen Sie die Spalte Phone Number auf Text, damit die Nummern unverändert bleiben.",
       "stoppedTitle": "Batch gestoppt",
       "checked": "Geprüft",
       "remaining": "Verbleibend",

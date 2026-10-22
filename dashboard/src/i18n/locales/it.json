@@ -1100,6 +1100,7 @@
       "start": "Avvia verifica in blocco",
       "stop": "Interrompi verifica",
       "export": "Esporta risultati (CSV)",
+      "exportHint": "Il file contiene tutte le cifre. Un foglio di calcolo può mostrare i numeri lunghi come 9.19612E+11 o eliminare uno zero iniziale; importa il file e imposta la colonna Phone Number su Testo per mantenerli così come sono.",
       "stoppedTitle": "Verifica in blocco interrotta",
       "checked": "Verificati",
       "remaining": "Rimanenti",

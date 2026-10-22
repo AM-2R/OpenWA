@@ -1093,6 +1093,7 @@
       "start": "Toplu Kontrolü Başlat",
       "stop": "Kontrolü Durdur",
       "export": "Sonuçları Dışa Aktar (CSV)",
+      "exportHint": "Dosya her rakamı içerir. Bir hesap tablosu uzun numaraları 9.19612E+11 olarak gösterebilir veya baştaki sıfırı silebilir; numaraları olduğu gibi korumak için dosyayı içe aktarın ve Phone Number sütununu Metin olarak ayarlayın.",
       "stoppedTitle": "Toplu Kontrol Durduruldu",
       "checked": "Kontrol Edilen",
       "remaining": "Kalan",

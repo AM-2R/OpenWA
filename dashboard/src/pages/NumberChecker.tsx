@@ -248,10 +248,7 @@ export function NumberChecker() {
     const rows = batchResults
       .map(r => {
         const hasWa = r.status === 'failed' ? 'Error' : r.exists ? 'Yes' : 'No';
-        // A leading apostrophe keeps a spreadsheet from turning the digits into a number (9.19612E+11, lost
-        // leading zero). It is the prefix escapeCsvCell adds to neutralize a formula, so a number that is not
-        // digits comes out with the one apostrophe, not two.
-        return [`'${r.number}`, hasWa, r.whatsappId, r.error, r.timestamp].map(escapeCsvCell).join(',');
+        return [r.number, hasWa, r.whatsappId, r.error, r.timestamp].map(escapeCsvCell).join(',');
       })
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
@@ -728,9 +725,14 @@ export function NumberChecker() {
             )}
 
             {batchResults.length > 0 && !isCheckingBatch && (
-              <button className="nc-btn nc-btn-secondary" onClick={handleExportCSV}>
-                <Download size={18} /> {t('numberChecker.bulk.export')}
-              </button>
+              <>
+                <button className="nc-btn nc-btn-secondary" onClick={handleExportCSV} aria-describedby="nc-export-hint">
+                  <Download size={18} /> {t('numberChecker.bulk.export')}
+                </button>
+                <span id="nc-export-hint" className="nc-hint" style={{ flexBasis: '100%', margin: 0 }}>
+                  {t('numberChecker.bulk.exportHint')}
+                </span>
+              </>
             )}
           </div>
 

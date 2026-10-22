@@ -1100,6 +1100,7 @@
       "start": "Iniciar verificación por lotes",
       "stop": "Detener verificación",
       "export": "Exportar resultados (CSV)",
+      "exportHint": "El archivo contiene todos los dígitos. Una hoja de cálculo puede mostrar los números largos como 9.19612E+11 o quitar un cero inicial; importe el archivo y defina la columna Phone Number como Texto para conservarlos tal como están.",
       "stoppedTitle": "Lote detenido",
       "checked": "Verificados",
       "remaining": "Restantes",

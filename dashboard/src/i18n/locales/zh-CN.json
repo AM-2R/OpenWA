@@ -1093,6 +1093,7 @@
       "start": "开始批量检查",
       "stop": "停止检查",
       "export": "导出结果（CSV）",
+      "exportHint": "文件包含每一位数字。电子表格可能把长号码显示为 9.19612E+11，或去掉开头的 0；请导入该文件，并将 Phone Number 列设为文本，以保持原样。",
       "stoppedTitle": "批量检查已停止",
       "checked": "已检查",
       "remaining": "剩余",
