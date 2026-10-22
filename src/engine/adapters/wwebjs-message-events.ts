@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { type Client, type Message, MessageTypes } from 'whatsapp-web.js';
 import {
   type InboundTicket,
@@ -152,19 +153,21 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
 
   // A message WhatsApp Web could not decrypt on arrival ("Waiting for this message") is decrypted in place later, and
   // whatsapp-web.js delivers it from the update that fills in its text, which raises message_edit as well: no edit.
-  // Kept by id until that change is seen: unset until the message is delivered, then the text it was delivered with.
+  // Kept by id until that change is seen: unset until the message is delivered, then a fingerprint of the text it was
+  // delivered with, so the entries kept hold no message text whatever its length.
   const decryptedLater = new Map<string, string | undefined>();
+  const fingerprint = (text: string): string => createHash('sha256').update(text).digest('base64');
 
   /** Whether a message_edit is the decryption of its message (see decryptedLater). Asked once per message. */
   const isDecryption = (edit: EditedMessage): boolean => {
     if (!decryptedLater.has(edit.messageId)) return false;
     const delivered = decryptedLater.get(edit.messageId);
     decryptedLater.delete(edit.messageId);
-    return delivered === undefined || delivered === edit.body;
+    return delivered === undefined || delivered === fingerprint(edit.body);
   };
 
   const deliveredDecrypted = (message: IncomingMessage): void => {
-    if (decryptedLater.has(message.id)) decryptedLater.set(message.id, message.body);
+    if (decryptedLater.has(message.id)) decryptedLater.set(message.id, fingerprint(message.body));
   };
 
   client.on('message_ciphertext', msg => {

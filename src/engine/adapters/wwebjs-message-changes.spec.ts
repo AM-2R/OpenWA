@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import { setFlagsFromString } from 'v8';
+import { runInNewContext } from 'vm';
 import { WAState, type Client } from 'whatsapp-web.js';
 import type { Repository } from 'typeorm';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
@@ -1240,5 +1242,27 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     editEvent(client, `c${TRACKED}`, 'decrypted');
 
     expect(order).toEqual(['edit c0 forgotten']);
+  });
+
+  it('keeps no text of the messages it remembers as decrypted in place', async () => {
+    // Process-wide: later suites in this jest worker also see a global gc in new vm contexts.
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const { client } = wire({ onMessage: () => undefined });
+    const MESSAGES = 256;
+    const LONGEST_TEXT = 65_536;
+    gc();
+    const before = process.memoryUsage().heapUsed;
+    for (let i = 0; i < MESSAGES; i++) {
+      ciphertextEvent(client, `c${i}`);
+      client.emit('message', {
+        ...incoming(`c${i}`, Buffer.alloc(LONGEST_TEXT, 97 + (i % 26)).toString('latin1')),
+        getContact: () => Promise.resolve(null),
+      });
+    }
+    await flush();
+    gc();
+
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan((MESSAGES * LONGEST_TEXT) / 4);
   });
 });
