@@ -305,9 +305,13 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
    * not moved past it. Twin rows rank by it and a tie goes to the phone row, so a write of a twin made in
    * the same millisecond as one of the phone row would rank older however late it came. A burst of
    * writes runs it ahead of the clock by its writes beyond one per millisecond, until the clock catches up.
+   * A lead of more than a minute is no burst (5000 writes at once lead by about 4 s) but the clock set
+   * back, and the stamp follows the clock again: kept, it would date every later write up to that far
+   * ahead, past a twin row a restarted process or another node writes in the meantime.
    */
   private stamp(): Date {
-    this.lastStamp = Math.max(Date.now(), this.lastStamp + 1);
+    const now = Date.now();
+    this.lastStamp = this.lastStamp - now > 60_000 ? now : Math.max(now, this.lastStamp + 1);
     return new Date(this.lastStamp);
   }
 
