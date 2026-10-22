@@ -262,6 +262,61 @@ describe('ChatStateStoreService loads that overlap a write, a forget or an unlin
     expect(t.rows.get(KEY('s', 'c'))).toMatchObject({ pinned: false, muteEndTime: null });
   });
 
+  it('does not mark a session complete when a reload set aside the row of a write that changed nothing', async () => {
+    const t = scriptedRepo([pinned()]);
+    const svc = storeOf(t);
+    const first = svc.reload();
+    await t.run('find');
+    await first; // the session is complete and holds the row
+    expect(svc.get('s', 'c')?.pinned).toBe(true);
+    const second = svc.reload();
+    const answer = await t.start('find'); // its read is out
+    await svc.remember('s', 'c', { pinned: true }); // restates the state: settles, writes nothing
+    await settle();
+    await answer(); // the reload sets the row of c aside as older than that change
+    await second;
+    expect(t.waiting).toHaveLength(0);
+    svc.get('s', 'c'); // a miss on a session not marked complete reads through
+    await t.drain();
+    expect(svc.get('s', 'c')?.pinned).toBe(true);
+  });
+
+  it('does not bring an unlinked account chat back from a reload begun while the unlink was deleting', async () => {
+    const t = scriptedRepo([pinned('a')]);
+    const svc = storeOf(t);
+    const unlink = svc.clearSession('s');
+    await settle(); // the delete is submitted
+    const reload = svc.reload(); // begins after the unlink did
+    const answer = await t.start('find'); // reads the row: the delete has not run yet
+    await t.run('delete'); // the unlink deletes, drops the cache and notes the unlink
+    await unlink;
+    await answer();
+    await reload;
+    expect(t.rows.size).toBe(0);
+    expect(svc.chatIds('s')).toEqual([]);
+  });
+
+  it('distrusts a chat whose change was dropped from a record of changes that was full', async () => {
+    process.env[ENV] = '2';
+    const t = scriptedRepo([pinned('A')]);
+    const svc = storeOf(t);
+    const writeX = svc.remember('s', 'X', { pinned: true });
+    await t.drain();
+    await writeX; // one chat is on record before the load
+    const reload = svc.reload();
+    const answer = await t.start('find'); // the load reads A pinned
+    const writeA = svc.remember('s', 'A', { pinned: false });
+    await t.drain();
+    await writeA; // A changed after the load began: on record, which is now full
+    const writeB = svc.remember('s', 'B', { pinned: true });
+    await t.drain();
+    await writeB; // the full record is dropped, A with it
+    await answer();
+    await reload;
+    expect(t.rows.get(KEY('s', 'A'))?.pinned).toBe(false);
+    expect(svc.get('s', 'A')?.pinned).not.toBe(true);
+  });
+
   it('stays correct when more chats change during a load than the store keeps a record of', async () => {
     process.env[ENV] = '2';
     const t = scriptedRepo([pinned('a')]);
