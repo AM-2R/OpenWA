@@ -1211,7 +1211,7 @@
       "successTitle": "✅ 伺服器就緒",
       "errorTitle": "❌ 重新啟動失敗",
       "idleDesc": "設定已儲存到 <code>.env.generated</code>。<br/>需要重新啟動伺服器才能套用變更。",
-      "stopsContainers": "重新啟動亦會停止以下內置容器：{{names}}。它們會連同數據一併保留，不會被刪除。",
+      "stopsContainers": "重新啟動亦會停止以下內置容器，它們會連同數據一併保留，不會被刪除：",
       "later": "稍後重新啟動",
       "now": "立即重新啟動",
       "restartingMsg": "伺服器正在重新啟動... {{count}} 秒",

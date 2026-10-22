@@ -1233,7 +1233,7 @@
       "successTitle": "Server siap",
       "errorTitle": "Restart gagal",
       "idleDesc": "Konfigurasi telah disimpan ke <code>.env.generated</code>.<br/>Restart server diperlukan untuk menerapkan perubahan.",
-      "stopsContainers": "Restart juga akan menghentikan container bawaan berikut: {{names}}. Container tetap disimpan beserta datanya, tidak dihapus.",
+      "stopsContainers": "Restart juga akan menghentikan container bawaan berikut, yang tetap menyimpan datanya dan tidak dihapus:",
       "later": "Restart Nanti",
       "now": "Restart Sekarang",
       "restartingMsg": "Me-restart server... {{count}}d",

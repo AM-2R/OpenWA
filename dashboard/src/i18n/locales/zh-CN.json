@@ -1211,7 +1211,7 @@
       "successTitle": "✅ 服务器就绪",
       "errorTitle": "❌ 重启失败",
       "idleDesc": "配置已保存到 <code>.env.generated</code>。<br/>需要重启服务器才能应用更改。",
-      "stopsContainers": "重启还会停止以下内置容器：{{names}}。它们会连同数据一起保留，不会被删除。",
+      "stopsContainers": "重启还会停止以下内置容器，它们会连同数据一起保留，不会被删除：",
       "later": "稍后重启",
       "now": "立即重启",
       "restartingMsg": "服务器正在重启... {{count}} 秒",

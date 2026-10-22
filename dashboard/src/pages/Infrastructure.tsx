@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -962,9 +962,16 @@ export function Infrastructure() {
               {/* Without `running` Docker did not answer the status, and the server stops nothing then. */}
               {infraStatus.database.running !== undefined && restartFlow.profilesToRemove.length > 0 && (
                 <p className="restart-idle-desc">
-                  {t('infrastructure.restart.stopsContainers', {
-                    names: restartFlow.profilesToRemove.map(p => CONTAINER_OF[p] ?? p).join(', '),
-                  })}
+                  {t('infrastructure.restart.stopsContainers')}
+                  {/* One left-to-right chip per container, kept whole: a name is what the operator types into docker. */}
+                  {restartFlow.profilesToRemove.map(p => (
+                    <Fragment key={p}>
+                      {' '}
+                      <code dir="ltr" className="restart-stop-name">
+                        {CONTAINER_OF[p] ?? p}
+                      </code>
+                    </Fragment>
+                  ))}
                 </p>
               )}
               {(restartFlow.dbSwitch || restartFlow.storageSwitch) && (

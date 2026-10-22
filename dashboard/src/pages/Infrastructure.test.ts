@@ -822,7 +822,8 @@ test('a switch from bundled to external services is warned of and stops the bund
   };
   assert.deepEqual([body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn], [false, false, false]);
 
-  within(dialog).getByText(STOPS_ALL_THREE);
+  within(dialog).getByText(STOPS_SENTENCE, { exact: false });
+  assert.deepEqual(stopNames(dialog), ALL_THREE);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
   assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, {
@@ -831,8 +832,13 @@ test('a switch from bundled to external services is warned of and stops the bund
   });
 });
 
-const STOPS_ALL_THREE =
-  'The restart also stops these built-in containers: openwa-postgres, openwa-redis, openwa-minio. They are kept with their data, not deleted.';
+const STOPS_SENTENCE = 'The restart also stops these built-in containers, which keep their data and are not deleted:';
+const ALL_THREE = ['openwa-postgres', 'openwa-redis', 'openwa-minio'];
+
+// The containers the restart dialog names, one chip each.
+function stopNames(dialog: HTMLElement): string[] {
+  return Array.from(dialog.querySelectorAll('.restart-stop-name')).map(chip => chip.textContent ?? '');
+}
 
 const PENDING_BUILT_IN_NOTE =
   'Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.';
@@ -1893,7 +1899,7 @@ test('turning a running built-in Redis off asks the restart to stop its containe
   fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
 
   const dialog = await screen.findByRole('dialog');
-  within(dialog).getByText(/stops these built-in containers: openwa-redis\./);
+  assert.deepEqual(stopNames(dialog), ['openwa-redis']);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
 
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
@@ -2034,7 +2040,7 @@ const PINNED_AWAY_SAVED: SavedConfig = {
   },
 };
 
-async function saveAndRestart(): Promise<{ dialogText: string; body: unknown }> {
+async function saveAndRestart(): Promise<{ dialogText: string; names: string[]; body: unknown }> {
   const { screen, waitFor, fireEvent, within } = rtl;
   const { container } = renderInfrastructure();
   await screen.findByText('Database Configuration');
@@ -2043,18 +2049,20 @@ async function saveAndRestart(): Promise<{ dialogText: string; body: unknown }> 
   fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
   const dialog = await screen.findByRole('dialog');
   const dialogText = dialog.textContent ?? '';
+  const names = stopNames(dialog);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
-  return { dialogText, body: findFetchCall('POST', '/api/infra/restart')!.body };
+  return { dialogText, names, body: findFetchCall('POST', '/api/infra/restart')!.body };
 }
 
 test('a bundled container OpenWA created whose host the environment pins elsewhere is stopped and named', async () => {
   resetFetchCalls();
   overrides = { status: PINNED_AWAY, saved: PINNED_AWAY_SAVED, saveProfiles: ['postgres', 'redis', 'minio'] };
 
-  const { dialogText, body } = await saveAndRestart();
+  const { dialogText, names, body } = await saveAndRestart();
 
-  assert.ok(dialogText.includes(STOPS_ALL_THREE), dialogText);
+  assert.ok(dialogText.includes(STOPS_SENTENCE), dialogText);
+  assert.deepEqual(names, ALL_THREE);
   assert.deepEqual(body, { profiles: [], profilesToRemove: ['postgres', 'redis', 'minio'] });
 });
 
@@ -2068,9 +2076,10 @@ test('a configuration that cannot be read back after the save still opens the re
     savedAfterSaveFails: true,
   };
 
-  const { dialogText, body } = await saveAndRestart();
+  const { dialogText, names, body } = await saveAndRestart();
 
-  assert.ok(dialogText.includes(STOPS_ALL_THREE), dialogText);
+  assert.ok(dialogText.includes(STOPS_SENTENCE), dialogText);
+  assert.deepEqual(names, ALL_THREE);
   assert.deepEqual(body, { profiles: [], profilesToRemove: ['postgres', 'redis', 'minio'] });
 });
 
@@ -2084,8 +2093,9 @@ test('a bundled container Docker Compose created is left alone under a host pinn
   };
   overrides = { status: compose, saved: PINNED_AWAY_SAVED, saveProfiles: ['postgres', 'redis', 'minio'] };
 
-  const { dialogText, body } = await saveAndRestart();
+  const { dialogText, names, body } = await saveAndRestart();
 
+  assert.deepEqual(names, []);
   assert.doesNotMatch(dialogText, /openwa-/);
   assert.deepEqual(body, { profiles: ['postgres', 'redis', 'minio'], profilesToRemove: [] });
 });
@@ -2096,9 +2106,9 @@ test('a host pinned to the container name still reaches the container, which is 
   const saved = { ...PINNED_AWAY_SAVED, database: { ...PINNED_AWAY_SAVED.database, host: 'OpenWA-Postgres' } };
   overrides = { status, saved, saveProfiles: ['postgres', 'redis', 'minio'] };
 
-  const { dialogText, body } = await saveAndRestart();
+  const { names, body } = await saveAndRestart();
 
-  assert.ok(dialogText.includes('stops these built-in containers: openwa-redis, openwa-minio.'), dialogText);
+  assert.deepEqual(names, ['openwa-redis', 'openwa-minio']);
   assert.deepEqual(body, { profiles: ['postgres'], profilesToRemove: ['redis', 'minio'] });
 });
 

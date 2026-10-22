@@ -1220,7 +1220,7 @@
       "successTitle": "✅ Server Pronto",
       "errorTitle": "❌ Riavvio Fallito",
       "idleDesc": "La configurazione è stata salvata in <code>.env.generated</code>.<br/>È richiesto un riavvio del server per applicare le modifiche.",
-      "stopsContainers": "Il riavvio arresterà anche questi container integrati: {{names}}. Vengono conservati con i loro dati, non eliminati.",
+      "stopsContainers": "Il riavvio arresterà anche questi container integrati, che conservano i loro dati e non vengono eliminati:",
       "later": "Riavvia Più Tardi",
       "now": "Riavvia Ora",
       "restartingMsg": "Riavvio del server... {{count}}s",

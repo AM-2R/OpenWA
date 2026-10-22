@@ -1233,7 +1233,7 @@
       "successTitle": "Server bereit",
       "errorTitle": "Neustart fehlgeschlagen",
       "idleDesc": "Die Konfiguration wurde in <code>.env.generated</code> gespeichert.<br/>Ein Serverneustart ist erforderlich, um die Änderungen anzuwenden.",
-      "stopsContainers": "Der Neustart stoppt außerdem diese integrierten Container: {{names}}. Sie bleiben mit ihren Daten erhalten und werden nicht gelöscht.",
+      "stopsContainers": "Der Neustart stoppt außerdem diese integrierten Container, die mit ihren Daten erhalten bleiben und nicht gelöscht werden:",
       "later": "Später neu starten",
       "now": "Jetzt neu starten",
       "restartingMsg": "Server wird neu gestartet... {{count}} s",

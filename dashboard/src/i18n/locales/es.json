@@ -1220,7 +1220,7 @@
       "successTitle": "✅ Servidor listo",
       "errorTitle": "❌ Error al reiniciar",
       "idleDesc": "La configuración se ha guardado en <code>.env.generated</code>.<br/>Es necesario reiniciar el servidor para aplicar los cambios.",
-      "stopsContainers": "El reinicio también detendrá estos contenedores integrados: {{names}}. Se conservan con sus datos; no se eliminan.",
+      "stopsContainers": "El reinicio también detendrá estos contenedores integrados, que conservan sus datos y no se eliminan:",
       "later": "Reiniciar más tarde",
       "now": "Reiniciar ahora",
       "restartingMsg": "Reiniciando servidor... {{count}}s",

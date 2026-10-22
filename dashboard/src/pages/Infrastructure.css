@@ -712,6 +712,10 @@
   margin-bottom: 1.5rem;
 }
 
+.infrastructure-page .restart-stop-name {
+  white-space: nowrap;
+}
+
 .infrastructure-page .restart-actions {
   display: flex;
   gap: 1rem;
