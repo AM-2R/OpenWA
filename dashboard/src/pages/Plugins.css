@@ -1021,6 +1021,11 @@
   box-sizing: border-box;
 }
 
+/* The rule above out-weighs `select:focus` in index.css and repaints its border. */
+.plugins-page .sessions-select:focus {
+  border-color: var(--focus-ring);
+}
+
 .plugins-page .sessions-override-actions {
   display: flex;
   justify-content: flex-end;

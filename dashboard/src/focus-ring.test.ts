@@ -135,9 +135,12 @@ test('every outline switched off leaves a keyboard focus cue in the --focus-ring
 // These fields repaint their own border after the shared `select:focus` and `.modal-body input:focus` rules, which
 // switch the outline off, so without a focus rule of their own a focused one looked like any other. A native checkbox
 // or radio shows no border at all, so the text field rules that reach it leave it only the ring.
-test('filter builder fields and native checkboxes draw their own focus cue', () => {
+test('fields that repaint their own border and native checkboxes draw their own focus cue', () => {
   for (const [selector, cue] of [
     ['.filter-row select:focus', /border-color:\s*var\(--focus-ring\)/],
+    [".chats-page .status-compose-modal input[type='color']:focus", /border-color:\s*var\(--focus-ring\)/],
+    [".sessions-page .proxy-form-section input[type='text']:focus", /border-color:\s*var\(--focus-ring\)/],
+    ['.plugins-page .sessions-select:focus', /border-color:\s*var\(--focus-ring\)/],
     [".filter-text input[type='text']:focus", /border-color:\s*var\(--focus-ring\)/],
     ['.chips-row .chips-text:focus', /border-color:\s*var\(--focus-ring\)/],
     ["input[type='checkbox']:not(.toggle-switch input):focus-visible", /outline:\s*2px solid var\(--focus-ring\)/],
@@ -147,4 +150,50 @@ test('filter builder fields and native checkboxes draw their own focus cue', () 
     assert.ok(rule, `no rule for ${selector}`);
     assert.match(rule.body, cue, selector);
   }
+});
+
+// Specificity as one comparable number: ids, then classes, attributes and pseudo-classes, then element names. A
+// :not() counts its argument.
+const specificity = (selector: string): number => {
+  const s = selector.replace(/:not\(([^)]*)\)/g, ' $1 ');
+  const attributes = s.match(/\[[^\]]*\]/g)?.length ?? 0;
+  const bare = s.replace(/\[[^\]]*\]/g, '');
+  const ids = bare.match(/#[\w-]+/g)?.length ?? 0;
+  const classes = (bare.match(/\.[\w-]+|:(?!:)[\w-]+/g)?.length ?? 0) + attributes;
+  const elements = bare.match(/(?:^|[\s>+~])[a-z][\w-]*/gi)?.length ?? 0;
+  return ids * 10000 + classes * 100 + elements;
+};
+// The field a selector ends in, whatever container it names: `.a .b input` and `.a .c input` both end in `input`.
+const lastElement = (s: string): string => element(s).split(/\s+/).pop() ?? '';
+const unfocused = (s: string): string => s.replace(/:focus(?:-visible|-within)?\b/g, '');
+const drawsFocusBorder = (r: Rule): boolean => /(?:^|;)\s*border(?:-color)?\s*:[^;]*\bvar\(--focus-ring\)/.test(r.body);
+// `border: none` is a native checkbox or radio, which has no border to repaint and draws a ring instead.
+const paintsBorder = (r: Rule): boolean => /(?:^|;)\s*border(?:-color)?\s*:\s*(?!none\b)\S/.test(r.body);
+
+// A rule for one kind of field (`input[type='color']`) that comes later in the same stylesheet than the focus rule of
+// the fields around it, at the same weight or heavier, repaints the border that rule drew, so a focused field looks like
+// an idle one. It needs a focus rule of its own, one step heavier. A field styled by a class from another stylesheet is
+// out of reach here and is pinned below.
+test('no later rule repaints the border a focus rule draws', () => {
+  const offenders = all.flatMap((rule, i) =>
+    rule.selectors
+      .filter(focusState)
+      .filter(() => drawsFocusBorder(rule))
+      .flatMap(cue =>
+        all
+          .slice(i + 1)
+          .filter(later => later.file === rule.file && paintsBorder(later))
+          .flatMap(later => later.selectors.map(s => ({ s, at: later.file })))
+          .filter(
+            ({ s }) => !focusState(s) && lastElement(s) === lastElement(cue) && specificity(s) >= specificity(cue),
+          ),
+      ),
+  );
+  const restored = (s: string): boolean =>
+    all.some(
+      r =>
+        drawsFocusBorder(r) &&
+        r.selectors.some(f => focusState(f) && unfocused(f) === s && specificity(f) > specificity(s)),
+    );
+  assert.deepEqual([...new Set(offenders.filter(({ s }) => !restored(s)).map(({ at, s }) => `${at}: ${s}`))], []);
 });

@@ -1831,6 +1831,11 @@
   box-sizing: border-box;
 }
 
+/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own. */
+.chats-page .status-compose-modal input[type='color']:focus {
+  border-color: var(--focus-ring);
+}
+
 .chats-page .status-compose-modal input[type='file'] {
   width: 100%;
   font-size: 0.8125rem;

@@ -919,3 +919,8 @@
   font-size: 0.9375rem;
   box-sizing: border-box;
 }
+
+/* The rule above repaints the border over `.sessions-page .modal-body input:focus` at the same weight. */
+.sessions-page .proxy-form-section input[type='text']:focus {
+  border-color: var(--focus-ring);
+}
