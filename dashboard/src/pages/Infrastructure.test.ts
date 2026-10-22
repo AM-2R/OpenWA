@@ -90,8 +90,9 @@ let overrides: {
   statusFails?: boolean;
   currentEngine?: { engineType: string };
   restart?: () => Response;
-  // The Docker profiles the save answers with.
+  // The Docker profiles the save answers with, and a gate holding that answer back (a save in flight).
   saveProfiles?: string[];
+  saveGate?: Promise<void>;
   readyFails?: boolean;
 } = {};
 
@@ -173,7 +174,7 @@ function installFetchStub(): void {
           envPath: '.env.generated',
           profiles: overrides.saveProfiles ?? [],
         });
-      return Promise.resolve(answer());
+      return overrides.saveGate ? overrides.saveGate.then(answer) : Promise.resolve(answer());
     }
     if (method === 'POST' && path === '/api/infra/restart') {
       if (overrides.restart) return Promise.resolve(overrides.restart());
@@ -916,6 +917,64 @@ test('bundled containers running with no flag stored show the toggles on and cla
     profiles: ['postgres', 'redis', 'minio'],
     profilesToRemove: [],
   });
+});
+
+// The flag note is a claim about one service, so it needs that same service saved and running.
+test('no built-in note under Redis that is saved but not enabled yet', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    saved: {
+      ...SAVED_CONFIG,
+      redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(toggleInput(container, 'Use Built-in Redis Container').checked, true);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note for a Redis that is not running');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a Redis that is not running');
+});
+
+test('no built-in note under S3 storage that is saved but not running yet', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = { saved: { ...SAVED_CONFIG, storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: true } } };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, true);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note for a storage not running');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a storage not running');
+});
+
+test('the built-in notes are hidden while a save is in flight and back once it settles', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  resetFetchCalls();
+  let release!: () => void;
+  overrides = {
+    status: RUNNING_EXTERNAL,
+    saved: SAVED_BUNDLED,
+    saveGate: new Promise<void>(resolve => (release = resolve)),
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  assert.equal(screen.queryAllByText(PENDING_BUILT_IN_NOTE).length, 2);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+  await waitFor(() => assert.ok(findFetchCall('PUT', '/api/infra/config'), 'expected the save request'));
+  assert.equal(screen.queryAllByText(PENDING_BUILT_IN_NOTE).length, 0, 'a note stayed on screen during the save');
+
+  release();
+  await screen.findByRole('dialog');
+  await waitFor(() => assert.equal(screen.queryAllByText(PENDING_BUILT_IN_NOTE).length, 2));
 });
 
 // SQLite runs and bundled PostgreSQL is saved: the database note names the type change, and a running
