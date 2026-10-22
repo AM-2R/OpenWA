@@ -954,6 +954,36 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     warn.mockClear();
   });
 
+  it('gives a released row back to a session that reported its phone before, on its next report', async () => {
+    await store.remember('111', '628111', s1);
+    await store.remember('111', '628111', s2);
+    await ds.getRepository(Session).delete({ id: s2 });
+    await store.releaseSession(s2);
+
+    await store.remember('111', '628111', s1);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+    await store.remember('111', null, s3);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+    expect(await store.findPhoneForLid('111@lid')).toBe('628111');
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['111'] });
+  });
+
+  it('does so when the release could not write the table as well', async () => {
+    await store.remember('111', '628111', s1);
+    await store.remember('111', '628111', s2);
+    await ds.getRepository(Session).delete({ id: s2 });
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+    await store.releaseSession(s2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockClear();
+
+    await store.remember('111', '628111', s1);
+    await store.remember('111', null, s3);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+  });
+
   it('a phone from any session still replaces the row', async () => {
     await store.remember('111', null, s1);
     await store.remember('111', '628111', s2);

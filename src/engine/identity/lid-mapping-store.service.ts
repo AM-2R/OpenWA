@@ -351,6 +351,10 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    * that never got here. The rows stay: the table is shared. Never throws: the session is already gone.
    */
   async releaseSession(sessionId: string): Promise<void> {
+    // A session that already reported a lid's phone writes nothing when it reports it again, so a row left
+    // without an owner here would stay so. Every set is dropped, even if the update fails, so each live
+    // session's next report takes its rows back.
+    this.seenBy.clear();
     try {
       // updatedAt is kept: no mapping changed, and the preload ranks rows by it.
       await this.repo.update({ sessionId }, { sessionId: null, updatedAt: () => '"updatedAt"' });

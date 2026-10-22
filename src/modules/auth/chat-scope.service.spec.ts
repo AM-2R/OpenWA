@@ -173,6 +173,19 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
     expect(await admitted()).toEqual([false, false]);
   });
 
+  it('still admits it after the latest session to report the phone is deleted, once an earlier one reports it again', async () => {
+    const s3 = '00000003-0000-4000-8000-000000000000';
+    await ds.getRepository(Session).insert({ id: s3, name: s3 });
+    await store.remember(LID, PHONE, s2);
+    await ds.getRepository(Session).delete({ id: s2 });
+    await store.releaseSession(s2);
+
+    await store.remember(LID, PHONE, s1);
+    await store.remember(LID, null, s3);
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
   it('stops admitting it once the session that stored the phone is deleted and another answers no phone', async () => {
     await ds.getRepository(Session).delete({ id: s1 });
 
