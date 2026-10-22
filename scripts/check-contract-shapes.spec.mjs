@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -516,4 +516,104 @@ test('unexposedResources reads the README paragraph as written and refuses a REA
   const exposed = exposedSchemas(openapi, real);
   assert.ok(exposed.has('ValidateApiKeyResponseDto'));
   assert.ok(!exposed.has('ApiKeyCreatedResponseDto'));
+});
+
+const gateRoot = fileURLToPath(new URL('..', import.meta.url));
+
+/**
+ * One run of the gate's CLI on a throwaway root. The gate resolves everything from its own location, so it
+ * runs as a copy of itself beside a copy of the contract and of the dashboard types, with the real SDK
+ * sources linked in. A hook receives the original text (the parsed contract for `contract`) and returns the
+ * one to use.
+ */
+function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s => s } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'contract-shapes-copy-'));
+  const read = (...path) => readFileSync(join(gateRoot, ...path), 'utf8');
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    mkdirSync(join(dir, 'dashboard', 'src', 'services'), { recursive: true });
+    symlinkSync(join(gateRoot, 'sdk'), join(dir, 'sdk'));
+    writeFileSync(
+      join(dir, 'scripts', 'check-contract-shapes.mjs'),
+      script(read('scripts', 'check-contract-shapes.mjs')),
+    );
+    writeFileSync(join(dir, 'openapi.json'), JSON.stringify(contract(JSON.parse(read('openapi.json')))));
+    const api = read('dashboard', 'src', 'services', 'api.ts');
+    writeFileSync(join(dir, 'dashboard', 'src', 'services', 'api.ts'), dashboardTypes(api));
+    const run = spawnSync(process.execPath, [join(dir, 'scripts', 'check-contract-shapes.mjs')], { encoding: 'utf8' });
+    return { status: run.status, output: run.stdout + run.stderr };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Replace text in the gate source, failing loudly when the anchor has moved. */
+function editSource(source, from, to) {
+  assert.ok(source.includes(from), `the gate source no longer contains ${JSON.stringify(from)}: move this anchor`);
+  return source.replace(from, to);
+}
+
+/** One more exposed route, answering a payload that no client maps. */
+function withBrandNewPayload(contract) {
+  contract.components.schemas.BrandNewDto = {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string' } },
+  };
+  contract.paths['/api/sessions/{sessionId}/brand-new'] = {
+    get: { responses: { 200: { description: 'ok', ...json(ref('BrandNewDto')) } } },
+  };
+  return contract;
+}
+
+test('the gate exits 0 on the repository and finds every exposed schema covered', () => {
+  // Also pins the harness below: a copy that cannot run would fail the other cases for the wrong reason.
+  // A pair whose target is a list (a body type that is also its response) has to reach the comparison and
+  // the coverage set as the schemas it names.
+  const run = runGateOnCopy();
+  assert.equal(run.status, 0, run.output);
+  assert.match(
+    run.output,
+    /schema coverage: \d+ schemas sent or returned, \d+ recorded unmapped in UNMAPPED_SCHEMAS, all covered/,
+  );
+});
+
+test('the gate exits 1 and names an exposed payload that no client maps', () => {
+  const run = runGateOnCopy({ contract: withBrandNewPayload });
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.output, /BrandNewDto is sent or returned by the SDKs but no client compares it/);
+  assert.match(run.output, /schema coverage: .*FAILURES/);
+});
+
+test('a schema that only the dashboard compares, or only an excluded pair holds, is reported uncovered', () => {
+  // The dashboard types are not a client of the SDK promise: BrandNewDto is compared there and still reported.
+  const dashboardOnly = runGateOnCopy({
+    contract: withBrandNewPayload,
+    dashboardTypes: api => `${api}\nexport interface BrandNew {\n  id: string;\n}\n`,
+    script: source =>
+      editSource(
+        source,
+        "  'dashboard/src/services/api.ts': {\n    AccountRestriction: 'AccountRestrictionDto',",
+        "  'dashboard/src/services/api.ts': {\n    BrandNew: 'BrandNewDto',\n    AccountRestriction: 'AccountRestrictionDto',",
+      ),
+  });
+  assert.match(dashboardOnly.output, /dashboard\/src\/services\/api\.ts: \d+ pairs compared, all conform/);
+  assert.equal(dashboardOnly.status, 1, dashboardOnly.output);
+  assert.match(dashboardOnly.output, /BrandNewDto is sent or returned by the SDKs but no client compares it/);
+
+  // The Go client excludes its MembershipRequestActionRequest pair and the Java client compares it; with the
+  // Java pair excluded too, no client compares MembershipRequestActionDto, and an excluded pair compares nothing.
+  const excludedOnly = runGateOnCopy({
+    script: source =>
+      editSource(
+        source,
+        "  'sdk/java': {\n    UpdateSessionConfigRequest:",
+        "  'sdk/java': {\n    MembershipRequestActionRequest: 'held back for this run',\n    UpdateSessionConfigRequest:",
+      ),
+  });
+  assert.equal(excludedOnly.status, 1, excludedOnly.output);
+  assert.match(
+    excludedOnly.output,
+    /MembershipRequestActionDto is sent or returned by the SDKs but no client compares it/,
+  );
 });
