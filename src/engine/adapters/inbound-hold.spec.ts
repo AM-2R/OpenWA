@@ -1350,6 +1350,31 @@ describe('Baileys inbound messages held for storage', () => {
     );
   });
 
+  // A message Baileys could not decrypt is upserted as a stub without content, and its content arrives later (a retry
+  // or a resend from the phone) as an ordinary upsert under the same id. Baileys reports an edit only for an edit
+  // message, so the content arriving is no edit.
+  describe.each([
+    ['PostgreSQL', false],
+    ['SQLite', true],
+  ])('a message that arrived undecrypted, on %s', (_, sqlite) => {
+    it('stores and announces it once its content arrives, unedited', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      const { events } = build(4, h.callbacks, memoryStore());
+      const key = { id: 'M', remoteJid: '628111@s.whatsapp.net', fromMe: false };
+      const stub = { key, messageTimestamp: 1_700_000_000, messageStubType: 1, messageStubParameters: ['absent'] };
+      upsert(events, stub);
+      await flush();
+      upsert(events, { key, messageTimestamp: 1_700_000_000, message: { conversation: 'hello' } });
+      await flush();
+
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: 'hello' })]);
+      expect(h.rows[0].metadata ?? {}).not.toHaveProperty('edited');
+      expect(h.announcedAs('message.received')).toEqual([expect.objectContaining({ id: 'M', body: 'hello' })]);
+      expect(h.announcedAs('message.received')[0]).not.toHaveProperty('edited');
+      expect(h.announcedAs('message.edited')).toEqual([]);
+    });
+  });
+
   // Where nothing is admitted before the emit (SQLite), a change waits for its message, and the wait is bounded.
   describe('a change of a message still being processed, where nothing is admitted before the emit', () => {
     const CHAT = '628111@s.whatsapp.net';
