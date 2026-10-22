@@ -836,6 +836,20 @@ describe('ChatStateStoreService', () => {
         expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({ pinned: true });
       });
 
+      it.each([
+        ['61 s', 61_000],
+        ['5 min', 5 * 60_000],
+        ['59 min', 59 * 60_000],
+      ])('follows the clock again after it steps back %s', async (_step, lead) => {
+        const repo = makeRepo();
+        const svc = svcWith(repo);
+        fakeDate(T + lead);
+        await svc.remember('s', PHONE, { pinned: false });
+        jest.setSystemTime(T);
+        await svc.remember('s', LID, { pinned: true });
+        expect(repo.rows.get(KEY('s', LID))!.updatedAt.getTime()).toBe(T);
+      });
+
       it('follows the clock again after it steps back hours, so a twin written after a restart ranks newer', async () => {
         const repo = makeRepo();
         fakeDate(T + 7 * 3_600_000); // booted with the clock seven hours ahead
