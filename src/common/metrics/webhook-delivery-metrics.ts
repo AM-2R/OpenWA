@@ -4,7 +4,7 @@
  * deliveries stopped by shutdown between retries after earlier attempts were sent. It is
  * incremented once per row inserted into the durable `webhook_delivery_failures` dead-letter table;
  * a later replay may replace or remove that row, and the counter keeps the failure. It is also
- * incremented once for each opt-in event dropped past the bound of its session's queue, which files
+ * incremented once for each opt-in event dropped past the bound of its webhook's queue, which files
  * no row because there is nothing to replay. Kept as a plain
  * in-process counter rather than a `COUNT(*)` over that table because the table is pruned on a
  * retention schedule, which would make its count non-monotonic and therefore invalid as a

@@ -503,10 +503,14 @@ WEBHOOK_DISPATCH_MAX_QUEUED=1000
 # The failing state and the cap are held per process, not per cluster.
 # The first 2xx from the webhook lifts it. With the queue disabled, a session parks at most a
 # quarter of WEBHOOK_DISPATCH_MAX_QUEUED behind that limit and sheds the rest, so other sessions
-# keep room. Opt-in events such as message.receipt are bounded per session instead: a quarter of
-# WEBHOOK_DISPATCH_CONCURRENCY deliveries run at once and three quarters of
-# WEBHOOK_DISPATCH_MAX_QUEUED events wait, and further ones are dropped, not replayed, and counted
-# in openwa_webhook_delivery_failures_total.
+# keep room. Opt-in events such as message.receipt are bounded per receiving webhook instead: a
+# quarter of WEBHOOK_DISPATCH_CONCURRENCY deliveries run at once, divided among the session's
+# webhooks that name the event and one at least for each, and three quarters of
+# WEBHOOK_DISPATCH_MAX_QUEUED events wait; further ones are dropped, not replayed, and counted in
+# openwa_webhook_delivery_failures_total. A webhook whose receiver never answers holds only its own
+# places, but the pool is shared: a session holds up to four at once (one per webhook past four), and
+# another session's events wait for a slot once such sessions together hold all of them, which
+# is four sessions at the defaults. There is no process-wide cap on the events waiting.
 # Each running, parked or backoff-waiting inline delivery holds its event's inline media
 # (up to 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES as base64), about 1.3 GiB per process at the defaults
 # when every slot is taken; lower these caps or enable the queue to reduce it.
