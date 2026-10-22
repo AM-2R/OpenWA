@@ -20,6 +20,8 @@ const MAX_CHANGES_KEPT_PER_MESSAGE = 64;
 interface MessageInProcessing {
   /** The text it arrived with, then that of the latest edit. */
   text: string;
+  /** The text the first delivery arrived with: a repeat is built from the message as it is now, edited. */
+  arrived: string;
   /** A delete for everyone reached it. */
   deleted: boolean;
   changes: Array<() => void>;
@@ -108,7 +110,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     if (!kept) {
       // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
       if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return NOT_KEPT;
-      kept = { text: message.body, deleted: false, changes: [] };
+      kept = { text: message.body, arrived: message.body, deleted: false, changes: [] };
       inProcessing.set(message.id, kept);
     }
     const mine = kept;
@@ -116,7 +118,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       handOver: handedOver => {
         if (mine.deleted) return false;
         // The session is told of the edits too, and compares them with the text the message arrived with.
-        if (handedOver.body !== mine.text) handedOver.originalBody = handedOver.body;
+        if (mine.arrived !== mine.text) handedOver.originalBody = mine.arrived;
         handedOver.body = mine.text;
         return true;
       },

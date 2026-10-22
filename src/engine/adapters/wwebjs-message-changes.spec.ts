@@ -511,6 +511,29 @@ describe.each([
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
   });
+
+  // whatsapp-web.js builds a repeat delivery from the message as it is now, so one raised after an edit carries the
+  // edited text, and its lookups can end before those of the first delivery.
+  it.each([
+    ['the edited text', 'v1'],
+    ['the text the message arrived with', 'orig'],
+  ])('marks an edit made before a repeat delivery carrying %s is handed over first', async (_, repeated) => {
+    const first = deferred<null>();
+    const repeat = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    await flush();
+    editEvent(client, 'A', 'v1');
+    await flush();
+    client.emit('message', incoming('A', repeated, { contact: repeat.promise }));
+    await flush();
+    repeat.resolve(null);
+    await flush();
+    first.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'v1', metadata: { edited: true } })]);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'v1', edited: true })]);
+  });
 });
 
 describe('changes kept while whatsapp-web.js processes a message (adapter level)', () => {
@@ -605,6 +628,23 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     await flush();
 
     expect(arrivals).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('hands a repeat delivery that carries an edit over with the text the first delivery arrived with', async () => {
+    const { client, bodies, arrivals } = wire();
+    const first = deferred<null>();
+    const repeat = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    editEvent(client, 'A', 'v1');
+    client.emit('message', incoming('A', 'v1', { contact: repeat.promise }));
+
+    repeat.resolve(null);
+    await flush();
+    first.resolve(null);
+    await flush();
+
+    expect(bodies).toEqual(['v1', 'v1']);
+    expect(arrivals).toEqual(['orig', 'orig']);
   });
 
   it('hands over the text an own send arrived with beside the edit applied to it', async () => {
