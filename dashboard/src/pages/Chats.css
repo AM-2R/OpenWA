@@ -2071,6 +2071,13 @@
   outline-offset: 1px;
 }
 
+/* A touch screen has no hover to reveal the trigger, so it stays visible there. */
+@media (hover: none) {
+  .chats-page .chat-row-menu-trigger {
+    opacity: 1;
+  }
+}
+
 /* The row's and the room's menus share their entries (ChatActionList). */
 .chats-page .room-header-actions {
   margin-inline-start: auto;
