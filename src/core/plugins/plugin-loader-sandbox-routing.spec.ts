@@ -746,9 +746,20 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
 
     loader.capturedOnLog!('log', 'string', 'abc' as unknown as Record<string, unknown>);
     loader.capturedOnLog!('log', 'array', [1, 2] as unknown as Record<string, unknown>);
+    loader.capturedOnLog!(
+      'log',
+      'bytes',
+      structuredClone(new Uint8Array([1, 2])) as unknown as Record<string, unknown>,
+    );
+    loader.capturedOnLog!('log', 'boxed', structuredClone(new String('ab')) as unknown as Record<string, unknown>);
+    loader.capturedOnLog!('log', 'record', structuredClone({ id: 1 }));
 
     expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] string', { meta: 'abc', pluginId: 'p1' });
     expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] array', { meta: [1, 2], pluginId: 'p1' });
+    expect(logSpy).toHaveBeenNthCalledWith(3, '[p1] bytes', { meta: new Uint8Array([1, 2]), pluginId: 'p1' });
+    expect(Object.keys(logSpy.mock.calls[3][1] as object)).toEqual(['meta', 'pluginId']);
+    expect(String((logSpy.mock.calls[3][1] as { meta: unknown }).meta)).toBe('ab');
+    expect(logSpy).toHaveBeenNthCalledWith(5, '[p1] record', { id: 1, pluginId: 'p1' });
   });
 
   it('keeps the error text of a worker error log whose meta is oversized or not serializable', async () => {

@@ -59,11 +59,15 @@ export function dispatchConversationMedia(
 /** The trace for a plugin's ctx.logger.error: an Error's message, or the text of whatever else was passed. */
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** A plugin's log meta as the fields of the line: a record as it is, nothing as no fields, anything else as one field. */
+/** A prototype that is the root of a chain (Object.prototype of any realm, or none): what a plain record has. */
+const isRootPrototype = (prototype: object | null): boolean =>
+  prototype === null || Object.getPrototypeOf(prototype) === null;
+
+/** A plugin's log meta as the fields of the line: a plain record as it is, nothing as no fields, else as one field. */
 const metaFields = (meta: unknown): Record<string, unknown> =>
   meta === undefined || meta === null
     ? {}
-    : typeof meta === 'object' && !Array.isArray(meta)
+    : typeof meta === 'object' && isRootPrototype(Object.getPrototypeOf(meta) as object | null)
       ? (meta as Record<string, unknown>)
       : { meta };
 

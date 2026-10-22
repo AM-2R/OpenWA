@@ -94,6 +94,39 @@ describe('the logger a plugin gets', () => {
       }
     });
 
+    // Only a plain record is spread into the fields of the line; every other object is one value.
+    it.each([
+      ['a String wrapper', (): unknown => new String('hello')],
+      ['a Uint8Array', (): unknown => new Uint8Array([1, 2, 3])],
+      ['a Map', (): unknown => new Map([[1, 2]])],
+      ['a Date', (): unknown => new Date(0)],
+      ['an Error', (): unknown => new Error('boom')],
+      ['an instance of a class', (): unknown => new (class Model {})()],
+    ])('writes %s as one field', (_name, make) => {
+      const { host, logger } = setup();
+      const meta = make();
+
+      logger.warn('m', asRecord(meta));
+
+      expect(host.warn).toHaveBeenCalledWith('[p1] m', { meta, pluginId: 'p1' });
+      expect(Object.keys(metaOf(host.warn, 1) as object)).toEqual(['meta', 'pluginId']);
+    });
+
+    it.each([
+      ['an object literal', (): unknown => ({ sessionId: 's1' })],
+      [
+        'an object without a prototype',
+        (): unknown => Object.assign(Object.create(null) as object, { sessionId: 's1' }),
+      ],
+      ['a record made in another realm', (): unknown => structuredClone({ sessionId: 's1' })],
+    ])('keeps %s as the fields of the line', (_name, make) => {
+      const { host, logger } = setup();
+
+      logger.warn('m', asRecord(make()));
+
+      expect(metaOf(host.warn, 1)).toEqual({ sessionId: 's1', pluginId: 'p1' });
+    });
+
     it('keeps the fields of a record as they are', () => {
       const { host, logger } = setup();
 
