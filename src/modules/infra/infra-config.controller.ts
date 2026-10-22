@@ -17,7 +17,7 @@ import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorat
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
-import { DockerService, MANAGED_DOCKER_PROFILES } from '../docker';
+import { BUNDLED_SERVICE_ENV, DockerService, MANAGED_DOCKER_PROFILES, hostPinnedElsewhere } from '../docker';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
 import { AuditService } from '../audit/audit.service';
@@ -44,13 +44,6 @@ import {
 // (src/common/utils/dto-strict-coercion.spec.ts), which controller-local classes escape, and their
 // boolean/numeric fields carry the @ToStrictBoolean / @ToStrictNumber transforms that keep a form-encoded
 // 'false' from being coerced to `true`.
-
-// The env key and value that point the app at each bundled service, as /infra/status detects them.
-const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
-  postgres: ['DATABASE_HOST', 'postgres'],
-  redis: ['REDIS_HOST', 'redis'],
-  minio: ['S3_ENDPOINT', 'http://minio:9000'],
-};
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
 // values are never echoed back — a `*Set` boolean indicates whether one is stored.
@@ -442,10 +435,7 @@ export class InfraConfigController {
     // Never start a bundled service whose host the environment pins elsewhere: the pin outranks the saved file, so
     // the next boot dials the pinned host and the container would run with nothing using it.
     const requestedStart = body?.profiles || [];
-    const pinnedElsewhere = requestedStart.filter(p => {
-      const [key, value] = BUNDLED_SERVICE_ENV[p] ?? [];
-      return key !== undefined && isEnvPinned(key) && process.env[key] !== value;
-    });
+    const pinnedElsewhere = requestedStart.filter(p => hostPinnedElsewhere(p));
     const profiles = requestedStart.filter(p => !pinnedElsewhere.includes(p));
     if (pinnedElsewhere.length > 0) {
       this.logger.warn('Not starting profiles whose host the environment pins elsewhere', { pinnedElsewhere });

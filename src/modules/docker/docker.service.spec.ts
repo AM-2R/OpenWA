@@ -1,5 +1,6 @@
 import Docker from 'dockerode';
 import { DockerService, prestartBuiltinDatabase } from './docker.service';
+import { recordPinnedEnvKeys } from '../../config/env-precedence';
 
 // Prevent actual Docker connections on module init during tests
 jest.mock('dockerode');
@@ -195,6 +196,9 @@ describe('DockerService.onModuleInit', () => {
     'REDIS_ENABLED',
     'QUEUE_ENABLED',
     'CACHE_ENABLED',
+    'DATABASE_HOST',
+    'REDIS_HOST',
+    'S3_ENDPOINT',
   ];
   let savedEnv: Record<string, string | undefined> = {};
 
@@ -221,6 +225,7 @@ describe('DockerService.onModuleInit', () => {
       if (savedEnv[k] === undefined) delete process.env[k];
       else process.env[k] = savedEnv[k];
     }
+    recordPinnedEnvKeys({});
     DockerMock.mockReset();
   });
 
@@ -295,6 +300,28 @@ describe('DockerService.onModuleInit', () => {
       expect(await started(env)).toBe(false);
     });
   });
+
+  // The host the environment pins outranks the saved file at boot, so a bundled container started for a host pinned
+  // elsewhere would run with nothing dialling it. A pinned bundled host still starts it.
+  describe.each([
+    ['openwa-postgres', 'POSTGRES_BUILTIN', { DATABASE_TYPE: 'postgres' }, 'DATABASE_HOST', 'postgres'],
+    ['openwa-redis', 'REDIS_BUILTIN', { REDIS_ENABLED: 'true' }, 'REDIS_HOST', 'redis'],
+    ['openwa-minio', 'MINIO_BUILTIN', { STORAGE_TYPE: 's3' }, 'S3_ENDPOINT', 'http://minio:9000'],
+  ] as const)('%s with its host pinned', (container, flag, use, hostKey, bundled) => {
+    it.each([
+      [bundled, true],
+      ['external.example', false],
+    ])('to %s is started: %s', async (host, expected) => {
+      Object.assign(process.env, { [flag]: 'true', [hostKey]: host }, use);
+      recordPinnedEnvKeys({ [hostKey]: host });
+      const docker = happyDocker();
+      DockerMock.mockImplementation(() => docker);
+      await new DockerService().onModuleInit();
+
+      const names = docker.createContainer.mock.calls.map(([spec]) => (spec as { name: string }).name);
+      expect(names.includes(container)).toBe(expected);
+    });
+  });
 });
 
 describe('prestartBuiltinDatabase', () => {
@@ -332,6 +359,20 @@ describe('prestartBuiltinDatabase', () => {
     const service = { startBuiltinDatabase: jest.fn().mockResolvedValue(undefined) };
     await prestartBuiltinDatabase(env, service);
     expect(service.startBuiltinDatabase).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['postgres', 1],
+    ['db.external.example', 0],
+  ])('with DATABASE_HOST pinned to %s starts the container %i times', async (host, calls) => {
+    recordPinnedEnvKeys({ DATABASE_HOST: host });
+    const service = { startBuiltinDatabase: jest.fn().mockResolvedValue(undefined) };
+    try {
+      await prestartBuiltinDatabase({ ...builtin, DATABASE_HOST: host }, service);
+    } finally {
+      recordPinnedEnvKeys({});
+    }
+    expect(service.startBuiltinDatabase).toHaveBeenCalledTimes(calls);
   });
 
   it('gives up after the timeout when the Docker endpoint never answers', async () => {

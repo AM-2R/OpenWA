@@ -20,6 +20,22 @@ export function datastoreInUse(profile: string, read: (key: string) => string | 
   return ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'].some(key => read(key) === 'true');
 }
 
+/** The env key and value that point the app at each managed profile's bundled container. */
+export const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
+  postgres: ['DATABASE_HOST', 'postgres'],
+  redis: ['REDIS_HOST', 'redis'],
+  minio: ['S3_ENDPOINT', 'http://minio:9000'],
+};
+
+/**
+ * Whether the environment (or the project .env) pins the profile's host to anything but its bundled container. The
+ * pin outranks the saved file at every boot, so a container started for that profile would run with nothing using it.
+ */
+export function hostPinnedElsewhere(profile: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const [key, value] = BUNDLED_SERVICE_ENV[profile] ?? [];
+  return key !== undefined && isEnvPinned(key) && env[key] !== value;
+}
+
 interface ContainerInfo {
   id: string;
   name: string;
@@ -95,7 +111,8 @@ export class DockerService implements OnModuleInit {
    * Runs from onModuleInit, which Nest calls only after the data connection is up. When that
    * connection is the built-in database (DATABASE_TYPE=postgres), the postgres profile is a no-op
    * here: a stopped container was already started by prestartBuiltinDatabase in main.ts. A flag set
-   * for a datastore this boot does not use (see datastoreInUse) starts nothing.
+   * for a datastore this boot does not use (see datastoreInUse), or whose host the environment pins
+   * elsewhere, starts nothing.
    */
   private async bootstrapOrchestration(): Promise<void> {
     if (!this.isAvailable) {
@@ -103,19 +120,16 @@ export class DockerService implements OnModuleInit {
       return;
     }
 
-    const profiles: string[] = [];
     const env = (key: string): string | undefined => process.env[key];
+    const wanted = (profile: string, flag: string | undefined): boolean =>
+      flag === 'true' && datastoreInUse(profile, env) && !hostPinnedElsewhere(profile);
 
     // Check for built-in services from environment variables
-    if (process.env.REDIS_BUILTIN === 'true' && datastoreInUse('redis', env)) {
-      profiles.push('redis');
-    }
-    if (process.env.POSTGRES_BUILTIN === 'true' && datastoreInUse('postgres', env)) {
-      profiles.push('postgres');
-    }
-    if (process.env.MINIO_BUILTIN === 'true' && datastoreInUse('minio', env)) {
-      profiles.push('minio');
-    }
+    const profiles = [
+      wanted('redis', process.env.REDIS_BUILTIN) && 'redis',
+      wanted('postgres', process.env.POSTGRES_BUILTIN) && 'postgres',
+      wanted('minio', process.env.MINIO_BUILTIN) && 'minio',
+    ].filter((p): p is string => typeof p === 'string');
 
     if (profiles.length === 0) {
       this.logger.log('[Bootstrap Orchestration] No built-in services configured');
@@ -701,7 +715,8 @@ export async function prestartBuiltinDatabase(
   service: Pick<DockerService, 'startBuiltinDatabase'> = new DockerService(),
   timeoutMs = 15_000,
 ): Promise<void> {
-  if (env.DATABASE_TYPE !== 'postgres' || env.POSTGRES_BUILTIN !== 'true') return;
+  if (env.DATABASE_TYPE !== 'postgres' || env.POSTGRES_BUILTIN !== 'true' || hostPinnedElsewhere('postgres', env))
+    return;
   const logger = createLogger('DockerService');
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>(resolve => {
