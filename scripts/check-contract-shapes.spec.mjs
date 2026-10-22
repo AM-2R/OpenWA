@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -524,22 +524,40 @@ const gateRoot = fileURLToPath(new URL('..', import.meta.url));
  * One run of the gate's CLI on a throwaway root. The gate resolves everything from its own location, so it
  * runs as a copy of itself beside a copy of the contract and of the dashboard types, with the real SDK
  * sources linked in. A hook receives the original text (the parsed contract for `contract`) and returns the
- * one to use.
+ * one to use. Every file is read with LF endings, so a hook anchors the same text on any checkout, and
+ * written with `lineEnding`: '\r\n' also copies the SDK sources the gate reads, as a Windows checkout has them.
  */
-function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s => s } = {}) {
+function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s => s, lineEnding = '\n' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'contract-shapes-copy-'));
-  const read = (...path) => readFileSync(join(gateRoot, ...path), 'utf8');
+  const read = (...path) => readFileSync(join(gateRoot, ...path), 'utf8').replace(/\r\n/g, '\n');
+  const write = (path, text) => {
+    mkdirSync(join(dir, ...path.slice(0, -1)), { recursive: true });
+    writeFileSync(join(dir, ...path), text.replace(/\n/g, lineEnding));
+  };
   try {
-    mkdirSync(join(dir, 'scripts'));
-    mkdirSync(join(dir, 'dashboard', 'src', 'services'), { recursive: true });
-    symlinkSync(join(gateRoot, 'sdk'), join(dir, 'sdk'));
-    writeFileSync(
-      join(dir, 'scripts', 'check-contract-shapes.mjs'),
-      script(read('scripts', 'check-contract-shapes.mjs')),
+    if (lineEnding === '\n') {
+      symlinkSync(join(gateRoot, 'sdk'), join(dir, 'sdk'));
+    } else {
+      const modelDir = ['sdk', 'java', 'src', 'main', 'java', 'com', 'rmyndharis', 'openwa', 'model'];
+      const sources = [
+        ['sdk', 'README.md'],
+        ['sdk', 'javascript', 'src', 'types.ts'],
+        ['sdk', 'python', 'openwa', 'types.py'],
+        ...readdirSync(join(gateRoot, 'sdk', 'go'))
+          .filter(f => f.endsWith('.go') && !f.endsWith('_test.go'))
+          .map(f => ['sdk', 'go', f]),
+        ...readdirSync(join(gateRoot, ...modelDir))
+          .filter(f => f.endsWith('.java'))
+          .map(f => [...modelDir, f]),
+      ];
+      for (const path of sources) write(path, read(...path));
+    }
+    write(['scripts', 'check-contract-shapes.mjs'], script(read('scripts', 'check-contract-shapes.mjs')));
+    write(
+      ['openapi.json'],
+      JSON.stringify(contract(JSON.parse(read('openapi.json'))), null, lineEnding === '\n' ? 0 : 2),
     );
-    writeFileSync(join(dir, 'openapi.json'), JSON.stringify(contract(JSON.parse(read('openapi.json')))));
-    const api = read('dashboard', 'src', 'services', 'api.ts');
-    writeFileSync(join(dir, 'dashboard', 'src', 'services', 'api.ts'), dashboardTypes(api));
+    write(['dashboard', 'src', 'services', 'api.ts'], dashboardTypes(read('dashboard', 'src', 'services', 'api.ts')));
     const run = spawnSync(process.execPath, [join(dir, 'scripts', 'check-contract-shapes.mjs')], { encoding: 'utf8' });
     return { status: run.status, output: run.stdout + run.stderr };
   } finally {
@@ -616,4 +634,26 @@ test('a schema that only the dashboard compares, or only an excluded pair holds,
     excludedOnly.output,
     /MembershipRequestActionDto is sent or returned by the SDKs but no client compares it/,
   );
+});
+
+test('the gate and its CLI cases give the same verdicts on a CRLF checkout', () => {
+  // A Windows checkout holds every file with CRLF endings: the parsers, the README reading and the anchors of
+  // these cases must not depend on them. The existing case above covers the parsers on strings only.
+  const clean = runGateOnCopy({ lineEnding: '\r\n' });
+  assert.equal(clean.status, 0, clean.output);
+  assert.match(clean.output, /schema coverage: .*all covered/);
+
+  const dashboardOnly = runGateOnCopy({
+    lineEnding: '\r\n',
+    contract: withBrandNewPayload,
+    dashboardTypes: api => `${api}\nexport interface BrandNew {\n  id: string;\n}\n`,
+    script: source =>
+      editSource(
+        source,
+        "  'dashboard/src/services/api.ts': {\n    AccountRestriction: 'AccountRestrictionDto',",
+        "  'dashboard/src/services/api.ts': {\n    BrandNew: 'BrandNewDto',\n    AccountRestriction: 'AccountRestrictionDto',",
+      ),
+  });
+  assert.equal(dashboardOnly.status, 1, dashboardOnly.output);
+  assert.match(dashboardOnly.output, /BrandNewDto is sent or returned by the SDKs but no client compares it/);
 });
