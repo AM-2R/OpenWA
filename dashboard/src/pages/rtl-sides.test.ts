@@ -72,7 +72,7 @@ function hidesSide(property: string, value: string): boolean {
   if (SIDE_PROPERTY.test(property)) return true;
   if (property === 'text-align') return /^(?:left|right)$/.test(values(value)[0] ?? '');
   const v = values(value);
-  if (property === 'margin' || property === 'padding') return v.length === 4 && v[1] !== v[3];
+  if (property === 'margin' || property === 'padding' || property === 'inset') return v.length === 4 && v[1] !== v[3];
   if (property === 'border-radius') {
     // Corners in order top-left, top-right, bottom-right, bottom-left; a shorter list repeats.
     const [tl, tr = tl, br = tl, bl = tr] = values(splitOutsideParens(value, c => c === '/')[0]);
@@ -130,9 +130,11 @@ function unmirroredSides(source: string, label: string): string[] {
     // A rule that pins the same value to both edges (left: 0; right: 0) is symmetric, not a side.
     const edges = Object.fromEntries(declared(rule.body).filter(([p]) => p === 'left' || p === 'right'));
     const same = edges.left !== undefined && values(edges.left).join(' ') === values(edges.right ?? '').join(' ');
-    // left: 50% with a -50% translation centres the box, which is the same in both directions.
+    // left: 50% with a horizontal -50% translation (translateX or the first argument of translate) centres the
+    // box, which is the same in both directions. translateY(-50%) does not.
     const centred =
-      edges.left === '50%' && declared(rule.body).some(([p, v]) => p === 'transform' && v.includes('-50%'));
+      edges.left === '50%' &&
+      declared(rule.body).some(([p, v]) => p === 'transform' && /translate(?:X)?\(\s*(?:calc\(\s*)?-50%/.test(v));
     const symmetric = same || centred;
     let offset = 0;
     for (const declaration of rule.body.split(';')) {
@@ -180,6 +182,8 @@ test('the side detector reads single-side properties and shorthands', () => {
     ['right', '-15px'],
     ['border-radius', 'calc(var(--radius) - 2px) 0 0 calc(var(--radius) - 2px)'],
     ['border-radius', 'calc(8px / 2) 0 0 calc(8px / 2)'],
+    ['inset', '0 auto auto 8px'],
+    ['inset', '1px 2px 3px 4px'],
   ];
   const neutral: [string, string][] = [
     ['margin', '0 auto'],
@@ -189,6 +193,10 @@ test('the side detector reads single-side properties and shorthands', () => {
     ['border-top', '1px solid red'],
     ['margin-inline-start', '8px'],
     ['inset-inline-end', '-15px'],
+    ['inset', '0'],
+    ['inset', '0 8px'],
+    ['inset', '0 8px 4px'],
+    ['inset', '0 8px 0 8px'],
     ['left', 'auto'],
     ['border-radius', 'calc(var(--radius) - 2px)'],
     ['border-radius', 'calc(var(--a) - calc(1px + 2px)) calc(var(--a) - calc(1px + 2px)) / calc(8px / 2)'],
@@ -262,6 +270,25 @@ test('the scan reads left and right insets, unless the rule is symmetric, a rese
   assert.equal(scan('.pop { left: 50%; transform: translateX(calc(-50% + 4px)); }'), 0);
   assert.equal(scan('.pop { left: 50%; }'), 1);
   assert.equal(scan('.pop { left: auto; inset-inline-end: 0; }'), 0);
+});
+
+// -50% only centres the box when the translation is horizontal: translateY(-50%) leaves the left edge at the middle
+// of the parent, on the left in both directions.
+test('left: 50% counts as centred only with a horizontal -50% translation', () => {
+  assert.equal(scan('.pop { left: 50%; transform: translateX(-50%); }'), 0);
+  assert.equal(scan('.pop { left: 50%; transform: translate(-50%, -50%); }'), 0);
+  assert.equal(scan('.pop { left: 50%; transform: translateX(calc(-50% + 4px)) translateY(-6px); }'), 0);
+  assert.equal(scan('.pop { left: 50%; transform: translateY(-50%); }'), 1);
+  assert.equal(scan('.pop { left: 50%; transform: translateX(10px) translateY(-50%); }'), 1);
+  assert.equal(scan('.pop { left: 50%; transform: translate(0, -50%); }'), 1);
+});
+
+test('the scan reads the inset shorthand when its left and right differ', () => {
+  assert.equal(scan('.pop { position: absolute; inset: 0 auto auto 8px; }'), 1);
+  assert.equal(scan('.pop { position: absolute; inset: 0; }'), 0);
+  assert.equal(scan('.pop { position: absolute; inset: 0 8px; }'), 0);
+  assert.equal(scan(".pop { inset: 0 auto auto 8px; } [dir='rtl'] .pop { inset: 0 8px auto auto; }"), 0);
+  assert.equal(scan(".pop { inset: 0 auto auto 8px; } [dir='rtl'] .pop { color: red; }"), 1);
 });
 
 test('the scan reads text-align with !important', () => {
