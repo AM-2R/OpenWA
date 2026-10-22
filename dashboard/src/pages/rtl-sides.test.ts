@@ -35,30 +35,65 @@ test('the number checker stylesheet uses logical sides only', () => {
 
 // The files above must hold no physical side at all. Everywhere else a physical side is fine only
 // when the layout mirrors it: the rule is written for [dir='rtl'] itself, or a [dir='rtl'] rule for the
-// same selector sets the other side. Besides the single-side properties this also reads the shorthands,
-// where a 4-value margin or padding with unequal left and right, or a border-radius whose left and
-// right corners differ, hides a side.
+// same selector sets the same kind of property (a twin that only changes the colour mirrors nothing).
+// Besides the single-side properties this also reads the shorthands, where a 4-value margin or padding
+// with unequal left and right, or a border-radius whose left and right corners differ, hides a side, and
+// the left and right insets, unless a rule sets both to the same value.
 const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SIDE_PROPERTY =
-  /^(?:(?:margin|padding)-(?:left|right)|border-(?:left|right)(?:-(?:width|style|color))?|border-(?:top|bottom)-(?:left|right)-radius)$/;
+  /^(?:(?:margin|padding)-(?:left|right)|border-(?:left|right)(?:-(?:width|style|color))?|border-(?:top|bottom)-(?:left|right)-radius|left|right)$/;
 
-// Whitespace separated values, keeping var(...) and calc(...) whole.
+// Splits at the characters `at` accepts that sit outside every pair of parentheses, so var(...) and
+// calc(...) stay whole however deeply they nest.
+function splitOutsideParens(value: string, at: (char: string) => boolean): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of value) {
+    if (char === '(') depth++;
+    else if (char === ')') depth--;
+    if (depth === 0 && at(char)) {
+      parts.push(current);
+      current = '';
+    } else current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+// Whitespace separated values.
 function values(value: string): string[] {
-  return value.replace(/\s*!important\s*$/, '').match(/(?:[^\s(]|\([^)]*\))+/g) ?? [];
+  return splitOutsideParens(value.replace(/\s*!important\s*$/, ''), c => /\s/.test(c)).filter(Boolean);
 }
 
 function hidesSide(property: string, value: string): boolean {
+  // `left: auto` resets an inset so that another one can apply; it places nothing on a side.
+  if (property === 'left' || property === 'right') return values(value)[0] !== 'auto';
   if (SIDE_PROPERTY.test(property)) return true;
-  if (property === 'text-align') return /^(?:left|right)$/.test(value.trim());
+  if (property === 'text-align') return /^(?:left|right)$/.test(values(value)[0] ?? '');
   const v = values(value);
   if (property === 'margin' || property === 'padding') return v.length === 4 && v[1] !== v[3];
   if (property === 'border-radius') {
     // Corners in order top-left, top-right, bottom-right, bottom-left; a shorter list repeats.
-    const [tl, tr = tl, br = tl, bl = tr] = values(value.split('/')[0]);
+    const [tl, tr = tl, br = tl, bl = tr] = values(splitOutsideParens(value, c => c === '/')[0]);
     return tl !== tr || bl !== br;
   }
   return false;
 }
+
+// The kind of property a declaration sets, physical or logical alike.
+function family(property: string): string {
+  if (/^border(?:-[a-z]+-[a-z]+)?-radius$/.test(property)) return 'radius';
+  if (/^(?:left|right|inset(?:-inline(?:-start|-end)?)?)$/.test(property)) return 'inset';
+  return /^(?:margin|padding|border)(?:-|$)/.test(property) ? property.split('-')[0] : property;
+}
+
+// Physical edges kept on purpose, as [selector, property]: a switch knob runs from the left (off) to the right
+// (on) by translateX, and the toast stack sits in the bottom right corner it slides in from. Neither mirrors.
+const KEPT: [RegExp, string][] = [
+  [/(?:^|\s)\.toggle-slider::?before$/, 'left'],
+  [/^\.toast-container$/, 'right'],
+];
 
 function stylesheets(dir = SRC): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -68,27 +103,53 @@ function stylesheets(dir = SRC): string[] {
   });
 }
 
-function unmirroredSides(full: string): string[] {
+function unmirroredSides(source: string, label: string): string[] {
   // Blank out comments but keep their line breaks, so a reported line number matches the file.
-  const css = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, comment => comment.replace(/[^\n]/g, ''));
+  const css = source.replace(/\/\*[\s\S]*?\*\//g, comment => comment.replace(/[^\n]/g, ''));
   const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({
     selectors: m[1].split(',').map(s => s.trim().replace(/\s+/g, ' ').replace(/"/g, "'")),
     body: m[2],
     at: m.index + m[1].length + 1,
   }));
-  const known = new Set(rules.flatMap(r => r.selectors));
-  const mirrored = (selector: string): boolean =>
-    selector.startsWith("[dir='rtl']") || known.has(`[dir='rtl'] ${selector}`);
+  const declared = (body: string): [string, string][] =>
+    body
+      .split(';')
+      .map(d => d.split(':'))
+      .filter(([property]) => property?.trim())
+      .map(([property, ...rest]) => [property.trim(), rest.join(':').trim()]);
+  // The kinds of property each selector sets, to find the [dir='rtl'] twin of a rule.
+  const families = new Map<string, Set<string>>();
+  for (const rule of rules)
+    for (const selector of rule.selectors)
+      for (const [property] of declared(rule.body))
+        families.set(selector, (families.get(selector) ?? new Set()).add(family(property)));
+  const mirrored = (selector: string, kind: string): boolean =>
+    selector.startsWith("[dir='rtl']") || (families.get(`[dir='rtl'] ${selector}`)?.has(kind) ?? false);
   const found: string[] = [];
   for (const rule of rules) {
-    if (rule.selectors.every(mirrored)) continue;
+    // A rule that pins the same value to both edges (left: 0; right: 0) is symmetric, not a side.
+    const edges = Object.fromEntries(declared(rule.body).filter(([p]) => p === 'left' || p === 'right'));
+    const same = edges.left !== undefined && values(edges.left).join(' ') === values(edges.right ?? '').join(' ');
+    // left: 50% with a -50% translation centres the box, which is the same in both directions.
+    const centred =
+      edges.left === '50%' && declared(rule.body).some(([p, v]) => p === 'transform' && v.includes('-50%'));
+    const symmetric = same || centred;
     let offset = 0;
     for (const declaration of rule.body.split(';')) {
       const [property, ...rest] = declaration.split(':');
       const value = rest.join(':');
-      if (property && hidesSide(property.trim(), value)) {
+      const name = property?.trim();
+      const edge = name === 'left' || name === 'right';
+      if (
+        name &&
+        hidesSide(name, value) &&
+        !(edge && symmetric) &&
+        !rule.selectors.every(
+          selector => mirrored(selector, family(name)) || KEPT.some(([kept, p]) => p === name && kept.test(selector)),
+        )
+      ) {
         const line = css.slice(0, rule.at + offset + declaration.search(/\S|$/)).split('\n').length;
-        found.push(`${full.slice(SRC.length + 1)}:${line}: ${rule.selectors.join(', ')} { ${declaration.trim()} }`);
+        found.push(`${label}:${line}: ${rule.selectors.join(', ')} { ${declaration.trim()} }`);
       }
       offset += declaration.length + 1;
     }
@@ -99,7 +160,10 @@ function unmirroredSides(full: string): string[] {
 test('every stylesheet either mirrors a physical side under RTL or uses logical ones', () => {
   const files = stylesheets();
   assert.ok(files.length >= 20, `only ${files.length} stylesheets found`);
-  assert.deepEqual(files.flatMap(unmirroredSides), []);
+  assert.deepEqual(
+    files.flatMap(full => unmirroredSides(readFileSync(full, 'utf8'), full.slice(SRC.length + 1))),
+    [],
+  );
 });
 
 test('the side detector reads single-side properties and shorthands', () => {
@@ -111,6 +175,11 @@ test('the side detector reads single-side properties and shorthands', () => {
     ['padding', '0.75rem 3rem 0.75rem 1rem'],
     ['border-radius', '12px 12px 12px 4px'],
     ['border-radius', '12px 4px'],
+    ['text-align', 'right !important'],
+    ['left', '0.5rem'],
+    ['right', '-15px'],
+    ['border-radius', 'calc(var(--radius) - 2px) 0 0 calc(var(--radius) - 2px)'],
+    ['border-radius', 'calc(8px / 2) 0 0 calc(8px / 2)'],
   ];
   const neutral: [string, string][] = [
     ['margin', '0 auto'],
@@ -119,6 +188,10 @@ test('the side detector reads single-side properties and shorthands', () => {
     ['border-radius', '16px 16px 0 0'],
     ['border-top', '1px solid red'],
     ['margin-inline-start', '8px'],
+    ['inset-inline-end', '-15px'],
+    ['left', 'auto'],
+    ['border-radius', 'calc(var(--radius) - 2px)'],
+    ['border-radius', 'calc(var(--a) - calc(1px + 2px)) calc(var(--a) - calc(1px + 2px)) / calc(8px / 2)'],
   ];
   for (const [property, value] of physical) assert.ok(hidesSide(property, value), `${property}: ${value}`);
   for (const [property, value] of neutral) assert.ok(!hidesSide(property, value), `${property}: ${value}`);
@@ -173,4 +246,49 @@ test('the inline side detector reads Left and Right keys and leaves logical ones
     0,
   );
   assert.equal(inlineSides(`const chart = { margin: { top: 5, right: 30, left: 20 } };`).length, 0);
+});
+
+// The whole scan on fixtures, one for each thing it has to see or leave alone.
+const scan = (css: string): number => unmirroredSides(css, 'fixture.css').length;
+
+test('the scan reads left and right insets, unless the rule is symmetric, a reset or mirrored', () => {
+  assert.equal(scan('.mark { position: absolute; right: -15px; bottom: -15px; }'), 1);
+  assert.equal(scan('.mark { position: absolute; left: 0.5rem; }'), 1);
+  assert.equal(scan('.mark { position: absolute; inset-inline-end: -15px; }'), 0);
+  assert.equal(scan(".mark { right: -15px; } [dir='rtl'] .mark { right: auto; left: -15px; }"), 0);
+  // Both edges pinned to one value, a centring translation and an auto reset place nothing on one side.
+  assert.equal(scan('.fill { position: absolute; left: 0; right: 0; }'), 0);
+  assert.equal(scan('.fill { position: absolute; left: 0; right: 8px; }'), 2);
+  assert.equal(scan('.pop { left: 50%; transform: translateX(calc(-50% + 4px)); }'), 0);
+  assert.equal(scan('.pop { left: 50%; }'), 1);
+  assert.equal(scan('.pop { left: auto; inset-inline-end: 0; }'), 0);
+});
+
+test('the scan reads text-align with !important', () => {
+  assert.equal(scan('.cell { text-align: right !important; }'), 1);
+  assert.equal(scan('.cell { text-align: start !important; }'), 0);
+});
+
+test('a right-to-left twin mirrors a side only when it sets the same kind of property', () => {
+  assert.equal(scan(".row { padding-left: 4px; } [dir='rtl'] .row { color: red; }"), 1);
+  assert.equal(scan(".row { padding-left: 4px; } [dir='rtl'] .row { padding-right: 4px; }"), 0);
+  assert.equal(scan(".row { margin-left: 4px; } [dir='rtl'] .row { padding-right: 4px; }"), 1);
+  assert.equal(scan(".row { border-radius: 8px 0 0 8px; } [dir='rtl'] .row { border-radius: 0 8px 8px 0; }"), 0);
+  assert.equal(scan(".row { left: 4px; } [dir='rtl'] .row { right: 4px; }"), 0);
+});
+
+test('a symmetric border radius written with calc() is not a side', () => {
+  assert.equal(scan('.card { border-radius: calc(var(--radius) - 2px); }'), 0);
+  assert.equal(
+    scan('.card { border-radius: calc(var(--radius) - calc(1px + 1px)) calc(var(--radius) - calc(1px + 1px)); }'),
+    0,
+  );
+  assert.equal(scan('.card { border-radius: calc(var(--radius) - 2px) 0 0 calc(var(--radius) - 2px); }'), 1);
+});
+
+test('the edges kept physical on purpose are the switch knob and the toast corner only', () => {
+  assert.equal(scan('.page .toggle-slider::before { left: 3px; }'), 0);
+  assert.equal(scan('.toast-container { right: 1.5rem; }'), 0);
+  assert.equal(scan('.page .knob::before { left: 3px; }'), 1);
+  assert.equal(scan('.toast-container { left: 1.5rem; }'), 1);
 });
