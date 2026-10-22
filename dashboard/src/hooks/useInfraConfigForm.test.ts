@@ -182,6 +182,15 @@ const shownFlags = (form: ReturnType<typeof renderForm>['result']['current']) =>
   form.storageConfig.builtIn,
 ];
 
+// A deployment that pins DATABASE_HOST=postgres (REDIS_HOST=redis, S3_ENDPOINT) in .env never writes the flags:
+// /config reports builtIn false and builtInSet false, and only /status knows a bundled container runs.
+const UNSTORED_BUILTIN: SavedConfig = {
+  ...SAVED,
+  database: { ...SAVED.database, builtIn: false, builtInSet: false },
+  redis: { ...SAVED.redis, builtIn: false, builtInSet: false },
+  storage: { ...SAVED.storage, builtIn: false, builtInSet: false },
+};
+
 // The toggles are the saved choice like every other selection. Shown from what runs, one that reads "external"
 // invites typing an external host and credentials that the gateway then drops under the stored bundled mode.
 test('the built-in toggles show what was saved, not what runs', () => {
@@ -201,6 +210,36 @@ for (const order of ['status first', 'config first'] as const) {
     assert.deepEqual(shownFlags(result.current), [true, true, true]);
   });
 }
+
+test('a built-in flag nothing stores follows what runs, so a save does not claim a switch', () => {
+  const { result } = renderForm({ status: RUNNING_BUILTIN, saved: UNSTORED_BUILTIN });
+
+  assert.deepEqual(shownFlags(result.current), [true, true, true]);
+  const { database, redis, storage } = result.current.buildSavePayload();
+  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [true, true, true]);
+});
+
+for (const order of ['status first', 'config first'] as const) {
+  test(`a built-in flag nothing stores follows what runs when the reads settle ${order}`, () => {
+    const { result, rerender } = renderForm(
+      order === 'status first' ? { status: RUNNING_BUILTIN } : { saved: UNSTORED_BUILTIN },
+    );
+    rerender({ status: RUNNING_BUILTIN, saved: UNSTORED_BUILTIN });
+
+    assert.deepEqual(shownFlags(result.current), [true, true, true]);
+  });
+}
+
+test('each built-in flag is judged on its own: a stored one wins, an unstored one follows what runs', () => {
+  const mixed: SavedConfig = {
+    ...UNSTORED_BUILTIN,
+    database: { ...SAVED.database, builtIn: false, builtInSet: true },
+    storage: { ...SAVED.storage, builtIn: true, builtInSet: true },
+  };
+  const { result } = renderForm({ status: RUNNING_BUILTIN, saved: mixed });
+
+  assert.deepEqual(shownFlags(result.current), [false, true, true]);
+});
 
 test('a save carries the built-in flag the form shows', () => {
   for (const [status, saved] of [

@@ -90,6 +90,8 @@ let overrides: {
   statusFails?: boolean;
   currentEngine?: { engineType: string };
   restart?: () => Response;
+  // The Docker profiles the save answers with.
+  saveProfiles?: string[];
   readyFails?: boolean;
 } = {};
 
@@ -164,9 +166,14 @@ function installFetchStub(): void {
     if (method === 'GET' && path === '/api/infra/engines/current')
       return Promise.resolve(jsonResponse(overrides.currentEngine ?? CURRENT_ENGINE));
     if (method === 'PUT' && path === '/api/infra/config') {
-      return Promise.resolve(
-        jsonResponse({ message: 'Configuration saved', saved: true, envPath: '.env.generated', profiles: [] }),
-      );
+      const answer = () =>
+        jsonResponse({
+          message: 'Configuration saved',
+          saved: true,
+          envPath: '.env.generated',
+          profiles: overrides.saveProfiles ?? [],
+        });
+      return Promise.resolve(answer());
     }
     if (method === 'POST' && path === '/api/infra/restart') {
       if (overrides.restart) return Promise.resolve(overrides.restart());
@@ -859,6 +866,56 @@ test('no built-in note while the toggles agree with what runs', async () => {
   // Only PostgreSQL agrees (bundled on both sides); Redis and MinIO still differ.
   assert.equal(screen.queryAllByText(PENDING_EXTERNAL_NOTE).length, 2);
   assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a note beside a toggle that agrees');
+});
+
+// The documented .env route: DATABASE_HOST=postgres, REDIS_HOST=redis and S3_ENDPOINT are pinned and compose never
+// forwards the flags, so /config holds none and only /status knows the bundled containers run. Nothing was saved, so
+// no toggle, note or warning may claim a switch, and a save must keep sending the running mode.
+const UNSTORED_BUILT_IN: SavedConfig = {
+  ...SAVED_EXTERNAL,
+  database: { ...SAVED_EXTERNAL.database, builtIn: false, builtInSet: false },
+  redis: { ...SAVED_EXTERNAL.redis, builtIn: false, builtInSet: false },
+  storage: { ...SAVED_EXTERNAL.storage, builtIn: false, builtInSet: false },
+};
+
+test('bundled containers running with no flag stored show the toggles on and claim no switch', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: RUNNING_BUNDLED,
+    saved: UNSTORED_BUILT_IN,
+    // What the gateway answers for bundled flags: the profiles of the containers that stay.
+    saveProfiles: ['postgres', 'redis', 'minio'],
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, true);
+  assert.equal(toggleInput(container, 'Use Built-in Redis Container').checked, true);
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, true);
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a switch claimed with nothing saved');
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a switch claimed with nothing saved');
+
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'a warning, no switch');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'a warning, no switch');
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database?: { builtIn?: boolean };
+    redis?: { builtIn?: boolean };
+    storage?: { builtIn?: boolean };
+  };
+  assert.deepEqual([body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn], [true, true, true]);
+
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, {
+    profiles: ['postgres', 'redis', 'minio'],
+    profilesToRemove: [],
+  });
 });
 
 // SQLite runs and bundled PostgreSQL is saved: the database note names the type change, and a running

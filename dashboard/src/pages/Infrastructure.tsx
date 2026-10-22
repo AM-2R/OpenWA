@@ -18,7 +18,7 @@ import { API_BASE_URL, type SavedConfig } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
-import { useInfraConfigForm } from '../hooks/useInfraConfigForm';
+import { savedBuiltIn, useInfraConfigForm } from '../hooks/useInfraConfigForm';
 import { useConfigSave } from '../hooks/useConfigSave';
 import { useRestartFlow } from '../hooks/useRestartFlow';
 import { useDataBackup } from '../hooks/useDataBackup';
@@ -297,7 +297,7 @@ export function Infrastructure() {
               {builtInNote(
                 infraStatus.database.type === 'postgres' && savedConfig.database.type === 'postgres',
                 infraStatus.database.builtIn,
-                savedConfig.database.builtIn,
+                savedBuiltIn(savedConfig.database, infraStatus.database.builtIn),
               )}
 
               {!configForm.dbConfig.builtIn && (
@@ -600,7 +600,7 @@ export function Infrastructure() {
               {builtInNote(
                 infraStatus.redis.enabled && savedConfig.redis.enabled,
                 infraStatus.redis.builtIn,
-                savedConfig.redis.builtIn,
+                savedBuiltIn(savedConfig.redis, infraStatus.redis.builtIn),
               )}
 
               {!configForm.redisConfig.builtIn && (
@@ -799,7 +799,7 @@ export function Infrastructure() {
                 {builtInNote(
                   infraStatus.storage.type === 's3' && savedConfig.storage.type === 's3',
                   infraStatus.storage.builtIn,
-                  savedConfig.storage.builtIn,
+                  savedBuiltIn(savedConfig.storage, infraStatus.storage.builtIn),
                 )}
 
                 {!configForm.storageConfig.builtIn && (

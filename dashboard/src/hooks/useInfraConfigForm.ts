@@ -60,6 +60,14 @@ export interface InfraConfigForm {
 }
 
 /**
+ * The Use Built-in flag as saved. A flag the config does not store says nothing (a Compose deployment that pins
+ * DATABASE_HOST=postgres, REDIS_HOST=redis or S3_ENDPOINT never writes it), so what runs stands in for it: there
+ * is no pending switch, and a save keeps sending the mode that runs.
+ */
+export const savedBuiltIn = (saved: { builtIn: boolean; builtInSet: boolean }, running: boolean): boolean =>
+  saved.builtInSet ? saved.builtIn : running;
+
+/**
  * Owns the editable infrastructure form: dbConfig/redisConfig/storageConfig/engineConfig, the
  * redis-enabled/queue-enabled toggles, and the hydration that seeds them from the two server
  * sources (live /status + saved /config). Takes those two query results as arguments rather than
@@ -141,7 +149,7 @@ export function useInfraConfigForm(
   // Built-in toggles too: shown from what runs, one that reads "external" invites typing an external host
   // and credentials that the gateway drops under the stored bundled mode. What is running is reported by the
   // badges and the pending-restart notes. Only a host, port or path nothing has saved comes from the live
-  // /status. One effect once both exist also keeps the result from depending on which read settled last.
+  // /status, and so does a built-in flag nothing stores. One effect once both exist also keeps the result from depending on which read settled last.
   // Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored secret on
   // the backend (#226).
   useEffect(() => {
@@ -159,13 +167,13 @@ export function useInfraConfigForm(
       poolSize: database.poolSize,
       sslEnabled: database.sslEnabled,
       sslRejectUnauthorized: database.sslRejectUnauthorized,
-      builtIn: database.builtIn,
+      builtIn: savedBuiltIn(database, infraStatus.database.builtIn),
     }));
     setRedisConfig(prev => ({
       ...prev,
       host: redis.host || infraStatus.redis.host,
       port: redis.port || String(infraStatus.redis.port),
-      builtIn: redis.builtIn,
+      builtIn: savedBuiltIn(redis, infraStatus.redis.builtIn),
     }));
     setRedisEnabledState(redis.enabled);
     setQueueEnabled(queue.enabled);
@@ -176,7 +184,7 @@ export function useInfraConfigForm(
       s3Bucket: storage.s3Bucket || prev.s3Bucket,
       s3Region: storage.s3Region || prev.s3Region,
       s3Endpoint: storage.s3Endpoint || prev.s3Endpoint,
-      builtIn: storage.builtIn,
+      builtIn: savedBuiltIn(storage, infraStatus.storage.builtIn),
     }));
     setEngineConfig(prev => ({
       ...prev,
