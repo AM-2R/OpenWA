@@ -391,30 +391,31 @@ mounted for any admin key.
 ### Bespoke components
 
 The UI is built from a small set of project-specific components under `dashboard/src/components/`,
-most with a colocated CSS file. Six top-level components ship none: `ErrorBoundary` styles inline
+most with a colocated CSS file. Seven top-level components ship none: `ErrorBoundary` styles inline
 via `style={{...}}`, `GithubIcon` carries no styling beyond `fill="currentColor"`, `Modal` reuses the
 global `.modal-*` rules from `index.css`, `GroupPicker` and `SessionScopePicker` are styled by the
-one page that uses each (`pages/MessageTester.css`, `pages/ApiKeys.css`), and `RoleProvider` renders
-no DOM. Nothing under `chats/` ships its own stylesheet either: those components take their classes
-from `pages/Chats.css`, and `MediaLightbox` adds the `yet-another-react-lightbox` vendor CSS. There
-is no design-system package to pull from.
+one page that uses each (`pages/MessageTester.css`, `pages/ApiKeys.css`), and `RoleProvider` and
+`NumberCheckProvider` render no DOM. Nothing under `chats/` ships its own stylesheet either: those
+components take their classes from `pages/Chats.css`, and `MediaLightbox` adds the
+`yet-another-react-lightbox` vendor CSS. There is no design-system package to pull from.
 
-| Component                    | File                                | Responsibility                                                                                                               |
-| ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `Layout`                     | `components/Layout.tsx`             | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark/system theme toggle, logout, live version badge |
-| `ToastProvider` / `useToast` | `components/Toast.tsx`              | Context-based toast notifications (success/error/warning/info) with de-dup keys                                              |
-| `PageHeader`                 | `components/PageHeader.tsx`         | Shared page title / subtitle / badge / actions header                                                                        |
-| `Modal`                      | `components/Modal.tsx`              | Accessible dialog (`role="dialog"`, Escape/overlay close, focus trap + restore); uses the global `.modal-*` styles           |
-| `CustomSelect`               | `components/CustomSelect.tsx`       | Keyboard-navigable select replacement (type-ahead, arrow keys) used by Sessions / Logs / Login                               |
-| `DashboardCharts`            | `components/DashboardCharts.tsx`    | `recharts`-based message-volume / activity charts on the Dashboard                                                           |
-| `FilterBuilder`              | `components/FilterBuilder.tsx`      | Visual condition builder for webhook event filters                                                                           |
-| `GlobalSearch`               | `components/GlobalSearch.tsx`       | Debounced message-search box in the Chats header, with all-sessions / current-session scope                                  |
-| `PluginInstances`            | `components/PluginInstances.tsx`    | Per-plugin instance list: create / edit / delete and secret regeneration                                                     |
-| `ErrorBoundary`              | `components/ErrorBoundary.tsx`      | Top-level React error boundary wrapping the whole app                                                                        |
-| `GithubIcon`                 | `components/GithubIcon.tsx`         | Inline brand SVG                                                                                                             |
-| `GroupPicker`                | `components/GroupPicker.tsx`        | Searchable multi-select of a session's groups, used by the Message Tester's multi-group send                                 |
-| `SessionScopePicker`         | `components/SessionScopePicker.tsx` | Per-key session scope checklist on the API Keys page                                                                         |
-| `RoleProvider`               | `components/RoleProvider.tsx`       | Context holding the logged-in key's role, read with `useRole` (`canWrite` gates write actions)                               |
+| Component                    | File                                 | Responsibility                                                                                                                         |
+| ---------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `Layout`                     | `components/Layout.tsx`              | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark/system theme toggle, logout, live version badge           |
+| `ToastProvider` / `useToast` | `components/Toast.tsx`               | Context-based toast notifications (success/error/warning/info) with de-dup keys                                                        |
+| `PageHeader`                 | `components/PageHeader.tsx`          | Shared page title / subtitle / badge / actions header                                                                                  |
+| `Modal`                      | `components/Modal.tsx`               | Accessible dialog (`role="dialog"`, Escape/overlay close, focus trap + restore); uses the global `.modal-*` styles                     |
+| `CustomSelect`               | `components/CustomSelect.tsx`        | Keyboard-navigable select replacement (type-ahead, arrow keys) used by Sessions / Logs / Login                                         |
+| `DashboardCharts`            | `components/DashboardCharts.tsx`     | `recharts`-based message-volume / activity charts on the Dashboard                                                                     |
+| `FilterBuilder`              | `components/FilterBuilder.tsx`       | Visual condition builder for webhook event filters                                                                                     |
+| `GlobalSearch`               | `components/GlobalSearch.tsx`        | Debounced message-search box in the Chats header, with all-sessions / current-session scope                                            |
+| `PluginInstances`            | `components/PluginInstances.tsx`     | Per-plugin instance list: create / edit / delete and secret regeneration                                                               |
+| `ErrorBoundary`              | `components/ErrorBoundary.tsx`       | Top-level React error boundary wrapping the whole app                                                                                  |
+| `GithubIcon`                 | `components/GithubIcon.tsx`          | Inline brand SVG                                                                                                                       |
+| `GroupPicker`                | `components/GroupPicker.tsx`         | Searchable multi-select of a session's groups, used by the Message Tester's multi-group send                                           |
+| `SessionScopePicker`         | `components/SessionScopePicker.tsx`  | Per-key session scope checklist on the API Keys page                                                                                   |
+| `RoleProvider`               | `components/RoleProvider.tsx`        | Context holding the logged-in key's role, read with `useRole` (`canWrite` gates write actions)                                         |
+| `NumberCheckProvider`        | `components/NumberCheckProvider.tsx` | Holds the Number Checker's bulk run and its rows above the routes, so leaving the page does not stop a run; read with `useNumberCheck` |
 
 Chat-specific pieces live one level down in `components/chats/`: `MessageBody` (WhatsApp text
 formatting + link detection), `ChatThread` (bubble list, including inbound Baileys prompt buttons
