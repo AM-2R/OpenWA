@@ -1448,7 +1448,8 @@ export function Chats() {
   const isSavedContact = (chat: Chat) => savedContactKeys?.has(contactKey(chat.id)) ?? false;
 
   const rowActions: ChatRowActions = {
-    onMenuOpen: () => setMenuOpened(true),
+    // Only what a key that can write offers reads the address book (Save or Rename); a read-only menu has no such entry.
+    onMenuOpen: canWrite ? () => setMenuOpened(true) : undefined,
     onGroupInfo: setGroupDialogChat,
     onSaveContact: canWrite ? setContactDialogChat : undefined,
     canSaveContact: chat => addressbookIdOf(chat) !== null,

@@ -2147,6 +2147,18 @@ test("a group's menu has no use for the address book and does not read it", asyn
   assert.equal(contactReads().length, 0, "a group's menu read the address book");
 });
 
+test("a read-only key's room menu has no entry that reads the address book, so it does not read it", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_user_role', 'viewer');
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  await screen.findByRole('button', { name: 'Copy chat ID' });
+  await settle();
+  assert.equal(contactReads().length, 0, 'a viewer key walked the address book to open a menu that cannot use it');
+});
+
 test("the room's menu asks for the address book as well", async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderPage();
