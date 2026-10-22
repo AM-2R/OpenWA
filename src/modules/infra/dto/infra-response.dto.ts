@@ -82,6 +82,14 @@ export class InfraStorageStatusDto {
   @ApiPropertyOptional({ description: 'Bucket name. Present only for `s3`.', example: 'openwa-media' })
   bucket?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'S3 endpoint the app is configured to reach. Present only for `s3` with an endpoint set; absent for the ' +
+      'default AWS endpoint.',
+    example: 'http://minio:9000',
+  })
+  endpoint?: string;
+
   @ApiProperty({ description: "Whether OpenWA's bundled MinIO container is backing this.", example: false })
   builtIn!: boolean;
 

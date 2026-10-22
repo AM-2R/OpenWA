@@ -38,7 +38,14 @@ interface InfraStatus {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  storage: {
+    type: 'local' | 's3';
+    path?: string;
+    bucket?: string;
+    endpoint?: string;
+    builtIn: boolean;
+    s3Available?: boolean;
+  };
   engine: {
     type: string;
     headless: boolean;
@@ -233,6 +240,8 @@ export class InfraStatusController {
         type: storageType,
         path: storagePath,
         ...(storageType === 's3' && storageBucket ? { bucket: storageBucket } : {}),
+        // The endpoint this process dials: a bundled MinIO that is stopped still names it, an external store does not.
+        ...(storageType === 's3' && s3Endpoint ? { endpoint: s3Endpoint } : {}),
         builtIn: storageBuiltIn,
         ...(storageType === 's3' ? { s3Available } : {}),
       },

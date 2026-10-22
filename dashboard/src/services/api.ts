@@ -630,7 +630,15 @@ export interface InfraStatus {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  storage: {
+    type: 'local' | 's3';
+    path?: string;
+    bucket?: string;
+    // S3 only, when an endpoint is set: the one the server dials, which a stopped bundled MinIO still names.
+    endpoint?: string;
+    builtIn: boolean;
+    s3Available?: boolean;
+  };
   engine: {
     type: string;
     headless: boolean;

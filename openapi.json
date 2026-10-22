@@ -22001,6 +22001,11 @@
             "description": "Bucket name. Present only for `s3`.",
             "example": "openwa-media"
           },
+          "endpoint": {
+            "type": "string",
+            "description": "S3 endpoint the app is configured to reach. Present only for `s3` with an endpoint set; absent for the default AWS endpoint.",
+            "example": "http://minio:9000"
+          },
           "builtIn": {
             "type": "boolean",
             "description": "Whether OpenWA's bundled MinIO container is backing this.",

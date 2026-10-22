@@ -230,6 +230,20 @@ describe('InfraStatusController.getStatus storage (reads the real storage.localP
     const status = await buildController({ 'storage.type': 'local' }).getStatus();
     expect(status.storage.bucket).toBeUndefined();
   });
+
+  // The endpoint this process dials, which tells a bundled MinIO that is stopped apart from an external store.
+  it('reports the endpoint in S3 mode, and only there', async () => {
+    const endpoint = 'http://minio:9000';
+    const s3 = await buildController({ 'storage.type': 's3', 'storage.s3.endpoint': endpoint }).getStatus();
+    const local = await buildController({ 'storage.type': 'local', 'storage.s3.endpoint': endpoint }).getStatus();
+    const aws = await buildController({ 'storage.type': 's3' }).getStatus();
+
+    expect([s3.storage.endpoint, local.storage.endpoint, aws.storage.endpoint]).toEqual([
+      endpoint,
+      undefined,
+      undefined,
+    ]);
+  });
 });
 
 // #1082: the Infrastructure page used to INFER an environment pin from "running != saved", which also

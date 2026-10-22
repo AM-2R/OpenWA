@@ -65,32 +65,40 @@ export function Infrastructure() {
   const configSave = useConfigSave({
     buildPayload: configForm.buildSavePayload,
     onSaved: profiles => {
-      // Flag a backend switch vs what's actually running so the restart modal can warn about the
-      // empty-database / orphaned-media data move before it happens. A switch is: changing type;
-      // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
-      // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
-      // /status, so compare the edited form against the saved config as the page loaded it. A key with
-      // nothing saved reads '', and runs on the same fallback the form was seeded with.
+      // Flag a backend switch so the restart modal can warn about the empty-database / orphaned-media data
+      // move before it happens. A switch is a next boot that connects somewhere else than the server does
+      // now: another type, host, port or database name, or another S3 endpoint or bucket. The next boot
+      // connects to a value the environment pins whatever the form says, and to the bundled container for
+      // a built-in choice. Whether that container runs right now is no part of it: a stopped one is started
+      // again on the same volume. /status reports the type, host, endpoint and bucket in use; the port and
+      // the database name are not on it, so those compare with the saved config as the page loaded it. A
+      // key with nothing saved reads '', and runs on the same fallback the form was seeded with. A new local
+      // path is no switch.
       const loaded = loadedConfig.current;
+      const pinned = (key: string) => (infraStatus?.envPinned?.includes(key) ? loaded : undefined);
+      const db = configForm.dbConfig;
+      const dbType = pinned('DATABASE_TYPE')?.database.type ?? db.type;
+      const dbHost =
+        (pinned('DATABASE_HOST')?.database.host ?? (db.builtIn ? 'postgres' : db.host.trim())) || 'localhost';
       const dbExternalRetarget =
-        configForm.dbConfig.type === 'postgres' &&
-        !configForm.dbConfig.builtIn &&
+        !db.builtIn &&
         !!loaded &&
-        (configForm.dbConfig.host !== (loaded.database.host || infraStatus?.database.host || 'localhost') ||
-          configForm.dbConfig.port !== (loaded.database.port || '5432') ||
-          configForm.dbConfig.database !== (loaded.database.database || 'openwa'));
+        (db.port !== (loaded.database.port || '5432') || db.database !== (loaded.database.database || 'openwa'));
       const dbSwitch =
         !!infraStatus &&
-        (configForm.dbConfig.type !== infraStatus.database.type ||
-          (configForm.dbConfig.type === 'postgres' && configForm.dbConfig.builtIn !== infraStatus.database.builtIn) ||
-          dbExternalRetarget);
-      // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
-      // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
-      // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
+        (dbType !== infraStatus.database.type ||
+          (dbType === 'postgres' && (dbHost !== infraStatus.database.host || dbExternalRetarget)));
+      const storage = configForm.storageConfig;
+      const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
+      const endpoint =
+        pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storage.builtIn ? 'http://minio:9000' : storage.s3Endpoint);
+      const bucket = (storage.builtIn ? 'openwa' : storage.s3Bucket) || 'openwa';
       const storageSwitch =
         !!infraStatus &&
-        (configForm.storageConfig.type !== infraStatus.storage.type ||
-          (configForm.storageConfig.type === 's3' && configForm.storageConfig.builtIn !== infraStatus.storage.builtIn));
+        (storageType !== infraStatus.storage.type ||
+          (storageType === 's3' &&
+            (endpoint !== (infraStatus.storage.endpoint ?? '') ||
+              bucket !== (infraStatus.storage.bucket || 'openwa'))));
       // The built-in containers running now, so the restart stops each one the new config dropped. With no
       // status read there is nothing to go on, and nothing is stopped.
       const running = [

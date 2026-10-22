@@ -15,7 +15,15 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { InfraStatus, SavedConfig, Engine } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
-import { EXPECTED_MODE, FILE_STATES, PIN_STATES } from '../../../test/fixtures/builtin-mode-cases.ts';
+import {
+  EXPECTED_MODE,
+  FILE_STATES,
+  PIN_STATES,
+  SERVICES,
+  pinnedHost,
+  type PinState,
+  type ServiceName,
+} from '../../../test/fixtures/builtin-mode-cases.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -741,7 +749,7 @@ const RUNNING_BUNDLED: InfraStatus = {
   ...INFRA_STATUS,
   database: { connected: true, type: 'postgres', host: 'postgres', builtIn: true },
   redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true },
-  storage: { type: 's3', bucket: 'openwa', builtIn: true, s3Available: true },
+  storage: { type: 's3', bucket: 'openwa', endpoint: 'http://minio:9000', builtIn: true, s3Available: true },
 };
 const SAVED_EXTERNAL: SavedConfig = {
   ...SAVED_CONFIG,
@@ -1040,6 +1048,236 @@ test('the built-in notes are hidden while a save is in flight and back once it s
   await waitFor(() => assert.equal(screen.queryAllByText(PENDING_BUILT_IN_NOTE).length, 2));
 });
 
+// ── The data-backend warning compares where the next boot connects with where the server connects now ──
+// Whether a bundled container runs right now says nothing about that: a stopped or removed one is started again
+// on the same host and the same named volume, so nothing starts empty.
+
+const RUNNING_STOPPED: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: false, type: 'postgres', host: 'postgres', builtIn: false },
+  storage: { type: 's3', bucket: 'openwa', endpoint: 'http://minio:9000', builtIn: false, s3Available: false },
+};
+const SAVED_BUNDLED_HOSTS: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: { ...SAVED_CONFIG.database, host: 'postgres', builtIn: true, builtInSet: true },
+  storage: {
+    ...SAVED_CONFIG.storage,
+    type: 's3',
+    builtIn: true,
+    builtInSet: true,
+    s3Bucket: 'openwa',
+    s3Endpoint: 'http://minio:9000',
+  },
+};
+
+test('a saved built-in database and storage whose containers are stopped warn of no switch', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_STOPPED, saved: SAVED_BUNDLED_HOSTS, saveProfiles: ['postgres', 'minio'] };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, {
+    profiles: ['postgres', 'minio'],
+    profilesToRemove: [],
+  });
+});
+
+test('moving off a stopped bundled database and storage still warns of the switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_STOPPED, saved: SAVED_BUNDLED_HOSTS };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+  fireEvent.change(fieldInput(container, 'Host'), { target: { value: 'db.new.example' } });
+  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+  fireEvent.change(fieldInput(container, 'Custom Endpoint (optional)'), {
+    target: { value: 'https://s3.new.example' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
+  within(dialog).getByText(STORAGE_WARNING, { exact: false });
+});
+
+// An external store moved to another bucket or endpoint leaves the media behind just like a backend change.
+test('repointing external S3 storage to another bucket warns that the media stays behind', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      storage: { type: 's3', bucket: 'media', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      storage: { ...SAVED_CONFIG.storage, type: 's3', s3Bucket: 'media', s3Endpoint: 'https://s3.example' },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.change(fieldInput(container, 'Bucket Name'), { target: { value: 'media-2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  within(await screen.findByRole('dialog')).getByText(STORAGE_WARNING, { exact: false });
+});
+
+// The gateway reports no bucket when none is set, and the store then uses its default one.
+test('S3 storage on the default bucket warns of nothing on an unrelated save', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      storage: { type: 's3', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
+    },
+    saved: { ...SAVED_CONFIG, storage: { ...SAVED_CONFIG.storage, type: 's3', s3Endpoint: 'https://s3.example' } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+});
+
+test('pointing an external PostgreSQL at another database name warns of the switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  fireEvent.change(fieldInput(container, 'Database Name'), { target: { value: 'openwa_other' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  within(await screen.findByRole('dialog')).getByText(DB_SWITCH_WARNING, { exact: false });
+});
+
+// A pinned type outranks the radio the same way a pinned host outranks the toggle.
+test('changing a database or storage type the environment pins warns of no switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      storage: { type: 's3', bucket: 'media', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
+      envPinned: ['DATABASE_TYPE', 'STORAGE_TYPE'],
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      storage: { ...SAVED_CONFIG.storage, type: 's3', s3Bucket: 'media', s3Endpoint: 'https://s3.example' },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="dbType"]')[0]);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="storageType"]')[0]);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+});
+
+// A pinned external host outranks the toggle, so turning Use Built-in on moves nothing.
+test('turning Use Built-in on under a pinned external host warns of no switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      database: { connected: true, type: 'postgres', host: 'db.external.example', builtIn: false },
+      storage: { type: 's3', bucket: 'openwa', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
+      envPinned: ['DATABASE_HOST', 'S3_ENDPOINT'],
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, host: 'db.external.example', builtIn: false, builtInSet: false },
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        builtIn: false,
+        builtInSet: false,
+        s3Bucket: 'openwa',
+        s3Endpoint: 'https://s3.example',
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+});
+
+// The host is compared as the save writes it, trimmed and with the default for an empty field.
+test('a host typed with spaces around it is no switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  fireEvent.change(fieldInput(container, 'Host'), { target: { value: '  shared-db-host ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
+});
+
+// A built-in choice saves the bundled port and database name, so values typed in the hidden external fields are
+// not where the next boot connects.
+test('external values typed and then hidden by a running built-in database are no switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: RUNNING_BUNDLED,
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, host: 'postgres', builtIn: true, builtInSet: true },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+  fireEvent.change(fieldInput(container, 'Port'), { target: { value: '6000' } });
+  fireEvent.change(fieldInput(container, 'Database Name'), { target: { value: 'other' } });
+  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
+});
+
 // SQLite runs and bundled PostgreSQL is saved: the database note names the type change, and a running
 // "external" flag would be a claim about a database that is not running.
 test('no built-in note beside a pending database type', async () => {
@@ -1062,18 +1300,42 @@ test('no built-in note beside a pending database type', async () => {
 // ── One rule for every saved and pinned state ────────────────────────────────
 // GET /config answers the saved built-in mode (builtIn, builtInSet) from the file and the environment pins; the
 // table in test/fixtures/builtin-mode-cases.ts is what the controller specs assert it against. Here every one of
-// those answers, with the service running bundled and running external, is rendered into the page. The page
-// follows the saved mode when builtInSet says one is saved and what runs otherwise, so the toggle, the pending
-// note under it, the data-backend warning after a save and the flag the save sends must all come from the same
-// shown mode. The three services are given different combinations in each render, so one reading another's
-// flag or answer shows up.
+// those answers is rendered into the page with each state /status can report beside it: the bundled container
+// running, an external service, or the bundled host the server dials with its container stopped. A pinned
+// bundled host runs the container or finds it stopped, and a pinned external host runs neither. The page follows
+// the saved mode when builtInSet says one is saved and what runs otherwise, so the toggle, the pending note under
+// it and the flag the save sends come from the same shown mode, and the data-backend warning from where the next
+// boot connects against where the server connects now. The three services are given different combinations in
+// each render, so one reading another's flag or answer shows up.
 
+type RunState = 'bundled' | 'external' | 'stopped';
+const RUN_STATES: Record<PinState, RunState[]> = {
+  none: ['bundled', 'external', 'stopped'],
+  bundled: ['bundled', 'stopped'],
+  external: ['external'],
+};
 const COMBOS = FILE_STATES.flatMap(file =>
-  PIN_STATES.flatMap(pin => [true, false].map(running => ({ file, pin, running, mode: EXPECTED_MODE[file][pin] }))),
+  PIN_STATES.flatMap(pin => RUN_STATES[pin].map(run => ({ file, pin, run, mode: EXPECTED_MODE[file][pin] }))),
 );
 type Combo = (typeof COMBOS)[number];
-const comboLabel = (c: Combo) => `${c.file}/${c.pin}/${c.running ? 'bundled' : 'external'}`;
-const shownMode = (c: Combo) => (c.mode.builtInSet ? c.mode.builtIn : c.running);
+const comboLabel = (c: Combo) => `${c.file}/${c.pin}/${c.run}`;
+const containerRuns = (c: Combo) => c.run === 'bundled';
+const shownMode = (c: Combo) => (c.mode.builtInSet ? c.mode.builtIn : containerRuns(c));
+// The host the server connects to now: the bundled one unless an external service runs.
+const statusHost = (service: ServiceName, c: Combo) =>
+  c.run === 'external' ? SERVICES[service].externalHost : SERVICES[service].bundledHost;
+// The host the saved config names: a pin decides it; otherwise a file that holds the bundled host names that one,
+// and any other an external service.
+const savedHost = (service: ServiceName, c: Combo) =>
+  pinnedHost(service, c.pin) ??
+  (c.file === 'bundled-host' || c.file === 'saved-bundled'
+    ? SERVICES[service].bundledHost
+    : SERVICES[service].externalHost);
+// The next boot connects to a pinned host whatever the toggle says, to the bundled one for a built-in choice, and
+// to the saved one otherwise.
+const nextHost = (service: ServiceName, c: Combo) =>
+  c.pin === 'none' && shownMode(c) ? SERVICES[service].bundledHost : savedHost(service, c);
+const bucketFor = (service: ServiceName, host: string) => (host === SERVICES[service].bundledHost ? 'openwa' : 'media');
 
 /** The notes rendered right under a toggle row, in order. */
 function notesUnderToggle(container: HTMLElement, labelText: string): string[] {
@@ -1111,9 +1373,26 @@ COMBOS.forEach((_, i) => {
     overrides = {
       status: {
         ...INFRA_STATUS,
-        database: { connected: true, type: 'postgres', host: 'shared-db-host', builtIn: database.running },
-        redis: { enabled: true, connected: true, host: 'redis.internal', port: 6379, builtIn: redis.running },
-        storage: { type: 's3', bucket: 'media', builtIn: storage.running, s3Available: true },
+        database: {
+          connected: true,
+          type: 'postgres',
+          host: statusHost('database', database),
+          builtIn: containerRuns(database),
+        },
+        redis: {
+          enabled: true,
+          connected: true,
+          host: statusHost('redis', redis),
+          port: 6379,
+          builtIn: containerRuns(redis),
+        },
+        storage: {
+          type: 's3',
+          bucket: bucketFor('storage', statusHost('storage', storage)),
+          endpoint: statusHost('storage', storage),
+          builtIn: containerRuns(storage),
+          s3Available: true,
+        },
         // A pinned host is reported, so the page can say why its toggle cannot take effect.
         envPinned: [
           database.pin !== 'none' && 'DATABASE_HOST',
@@ -1123,9 +1402,15 @@ COMBOS.forEach((_, i) => {
       },
       saved: {
         ...SAVED_CONFIG,
-        database: { ...SAVED_CONFIG.database, ...database.mode },
-        redis: { enabled: true, host: 'redis.internal', port: '6379', passwordSet: false, ...redis.mode },
-        storage: { ...SAVED_CONFIG.storage, type: 's3', ...storage.mode },
+        database: { ...SAVED_CONFIG.database, host: savedHost('database', database), ...database.mode },
+        redis: { enabled: true, host: savedHost('redis', redis), port: '6379', passwordSet: false, ...redis.mode },
+        storage: {
+          ...SAVED_CONFIG.storage,
+          type: 's3',
+          s3Bucket: bucketFor('storage', savedHost('storage', storage)),
+          s3Endpoint: savedHost('storage', storage),
+          ...storage.mode,
+        },
       },
     };
     const { container } = renderInfrastructure();
@@ -1142,7 +1427,7 @@ COMBOS.forEach((_, i) => {
       assert.equal(toggleInput(container, label).checked, shownMode(combo), `${label} toggle`);
       assert.equal(hostPinNoteOf(container, label), combo.pin === 'none' ? null : hostKey, `${label} pin note`);
       const note =
-        !combo.mode.builtInSet || combo.mode.builtIn === combo.running
+        !combo.mode.builtInSet || combo.mode.builtIn === containerRuns(combo)
           ? null
           : combo.mode.builtIn
             ? PENDING_BUILT_IN_NOTE
@@ -1164,15 +1449,15 @@ COMBOS.forEach((_, i) => {
       [shownMode(database), shownMode(redis), shownMode(storage)],
       'the flags the save sends',
     );
-    // Only a database or storage whose shown mode differs from what runs starts empty after the restart.
+    // Only a database or storage the next boot connects to somewhere else starts empty after the restart.
     assert.equal(
       within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) !== null,
-      shownMode(database) !== database.running,
+      nextHost('database', database) !== statusHost('database', database),
       'the database warning',
     );
     assert.equal(
       within(dialog).queryByText(STORAGE_WARNING, { exact: false }) !== null,
-      shownMode(storage) !== storage.running,
+      nextHost('storage', storage) !== statusHost('storage', storage),
       'the storage warning',
     );
   });
