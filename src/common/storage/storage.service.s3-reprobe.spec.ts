@@ -519,7 +519,7 @@ describe('StorageService S3 re-probe and recovery', () => {
   // An S3 store is walked in two parts: the bucket, then the local fallback dir. A sweep only acts on the files it
   // is shown, so a directory it cannot read or a link in that fallback dir has to be skipped there as well, or
   // every pass aborts and reclaims nothing. The count and the export are the other way round and still refuse.
-  it('the orphan sweep of an S3 store skips what it cannot read in the local fallback dir, which the count refuses', async () => {
+  it('the orphan sweep of an S3 store skips what it cannot read in the local fallback dir, which the count and the export refuse', async () => {
     mockSend.mockImplementation((cmd: unknown) => {
       if (cmd instanceof ListObjectsV2Command) {
         return Promise.resolve({ Contents: [{ Key: 'media/statuses/s3-only.bin', Size: 10 }] });
@@ -564,6 +564,13 @@ describe('StorageService S3 re-probe and recovery', () => {
       expect(skipped).toContain('"statuses/linked"');
       expect(skipped).toContain('"statuses/locked"');
       await expect(svc.getFileCount()).rejects.toThrow(/symbolic link.*statuses\/linked/);
+      // The export refuses the same store: an archive that silently lacked those files would lose them.
+      await expect(svc.createExportStream()).rejects.toThrow(/symbolic link.*statuses\/linked/);
+
+      // With the link gone, the unreadable directory alone is refused by both.
+      fs.unlinkSync(path.join(localPath, 'statuses', 'linked'));
+      await expect(svc.getFileCount()).rejects.toThrow(/cannot be read.*statuses\/locked/);
+      await expect(svc.createExportStream()).rejects.toThrow(/cannot be read.*statuses\/locked/);
     } finally {
       readdirSpy.mockRestore();
     }
