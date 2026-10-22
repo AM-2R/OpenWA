@@ -103,7 +103,9 @@ export class AutomationRulesService {
       cooldownSeconds: dto.cooldownSeconds ?? 60,
       enabled: dto.enabled ?? true,
     });
-    return this.ruleRepository.save(rule);
+    // No transaction of its own: on SQLite's single shared connection the rollback of a foreign key failure (the
+    // session deleted since the check above) would discard what other callers wrote while it was open.
+    return this.ruleRepository.save(rule, { transaction: false });
   }
 
   async findAll(sessionId: string): Promise<AutomationRule[]> {
