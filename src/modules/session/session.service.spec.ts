@@ -160,7 +160,7 @@ describe('SessionService', () => {
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
-      update: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       exists: jest.fn().mockResolvedValue(false),
     };
 

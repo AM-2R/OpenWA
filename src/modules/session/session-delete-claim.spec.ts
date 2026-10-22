@@ -13,6 +13,7 @@ import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
 import { SessionOwnershipService } from './session-ownership.service';
+import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -356,6 +357,171 @@ describe('A session deleted on one node while a peer shares the database', () =>
     expect(b.ownership.ownedIds()).toEqual([]);
   });
 
+  // A process that dies while its delete runs never hands the claim back, and the claim lapses. The session it
+  // was removing must stay down, wherever it is picked up next.
+  it('leaves a session whose deleting node died part-way for no peer to adopt', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await startHeldDelete(id);
+    // Node A dies here: nothing resumes its delete or renews its claim.
+    await a.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+
+    const takeover = new SessionTakeoverService(
+      b.service,
+      b.ownership,
+      new ConfigService({ features: { autoStartSessions: true } }),
+    );
+    await takeover.sweep();
+
+    expect(b.engines).toHaveLength(0);
+    expect(await a.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+      nodeId: 'node-a',
+      desiredState: 'stopped',
+    });
+  });
+
+  // A delete records itself as a stop on the row, so the crash above leaves the session down; one that fails
+  // before it removes anything takes that record back.
+  it.each([
+    ['its first teardown fence refuses', 'fence-1'],
+    ['its second teardown fence refuses', 'fence-2'],
+    ['its row read fails', 'read'],
+  ])('leaves the session as it found it when %s', async (_case, failure) => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await a.service.start(id, { explicit: true });
+    const fence = jest.spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown');
+    if (failure === 'fence-1') fence.mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+    if (failure === 'fence-2') {
+      fence.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new ConflictException('a logout is running'));
+    }
+    if (failure === 'read') {
+      jest.spyOn(a.db.getRepository(Session), 'findOne').mockRejectedValueOnce(new Error('connection reset'));
+    }
+
+    await expect(a.service.delete(id)).rejects.toThrow();
+
+    const row = await a.db.getRepository(Session).findOneByOrFail({ id });
+    expect(row.desiredState).toBeNull();
+    // The second fence refuses after the engine is gone, and the claim goes with it.
+    expect(row.nodeId).toBe(failure === 'fence-2' ? null : 'node-a');
+    expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+  });
+
+  it('leaves the session as it found it when a retried delete is refused at the first fence again', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'))
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBeNull();
+  });
+
+  it('refuses the delete and takes nothing down when it cannot record the stop', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await a.service.start(id, { explicit: true });
+    jest.spyOn(a.db.getRepository(Session), 'update').mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(a.service.delete(id)).rejects.toThrow('connection reset');
+
+    expect(a.service.getEngine(id)).toBe(a.engines[0]);
+    expect(a.engines[0].forceDestroy).not.toHaveBeenCalled();
+    expect(leftovers(id)).toEqual({ stopMark: false, stopCount: false });
+    expect(await a.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+      nodeId: 'node-a',
+      desiredState: null,
+    });
+  });
+
+  it('keeps the stop and answers the delete error when it cannot take the stop back', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+    const sessions = a.db.getRepository(Session);
+    const update = sessions.update.bind(sessions);
+    // The stop is recorded; taking it back fails.
+    jest.spyOn(sessions, 'update').mockImplementationOnce(update).mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
+  it('keeps a stop the session already had when its delete fails before removing anything', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED, desiredState: 'stopped' });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
+  it.each([['stop'], ['force-kill']])(
+    'keeps a %s that began before its delete and is recorded after it, when the delete fails before removing',
+    async how => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      await a.service.start(id, { explicit: true });
+      const sessions = a.db.getRepository(Session);
+      const findOne = sessions.findOne.bind(sessions);
+      const update = sessions.update.bind(sessions);
+      const recording = deferred();
+      const recorded = deferred();
+      const reading = deferred();
+      const read = deferred();
+      // The stop's record is held until the delete has written its own; the delete's row read then fails.
+      jest.spyOn(sessions, 'update').mockImplementationOnce(async (...args: Parameters<typeof update>) => {
+        recording.resolve();
+        await recorded.promise;
+        return update(...args);
+      });
+      jest
+        .spyOn(sessions, 'findOne')
+        .mockImplementationOnce(findOne)
+        .mockImplementationOnce(async () => {
+          reading.resolve();
+          await read.promise;
+          throw new Error('connection reset');
+        });
+      const stopping = how === 'stop' ? a.service.stop(id) : a.service.forceKill(id);
+      await recording.promise;
+      const deleting = a.service.delete(id);
+      await reading.promise;
+      recorded.resolve();
+      await stopping;
+      read.resolve();
+
+      await expect(deleting).rejects.toThrow('connection reset');
+
+      expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+    },
+  );
+
+  it('keeps a stop that lands while its delete runs when the delete then fails before removing anything', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const reading = deferred();
+    const read = deferred();
+    // The delete's first row read, which comes after its claim, fails once the stop has finished.
+    jest.spyOn(sessions, 'findOne').mockImplementationOnce(async () => {
+      reading.resolve();
+      await read.promise;
+      throw new Error('connection reset');
+    });
+    const deleting = a.service.delete(id);
+    await reading.promise;
+    await a.service.stop(id);
+    read.resolve();
+
+    await expect(deleting).rejects.toThrow('connection reset');
+
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
   it('refuses the delete and removes nothing when the claim cannot be written', async () => {
     const id = await seed({ status: SessionStatus.DISCONNECTED });
     await a.service.start(id, { explicit: true });
@@ -369,6 +535,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
     expect(a.hooks.execute).not.toHaveBeenCalledWith('session:deleted', expect.anything(), expect.anything());
     expect(a.purge).not.toHaveBeenCalled();
     expect(leftovers(id)).toEqual({ stopMark: false, stopCount: false });
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBeNull();
   });
 
   it('answers 409 and removes nothing when a peer claims the session just before the delete does', async () => {
@@ -395,7 +562,11 @@ describe('A session deleted on one node while a peer shares the database', () =>
 
     await expect(a.service.delete(id)).rejects.toThrow('transaction timed out');
 
-    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).nodeId).toBeNull();
+    // The batches ran before the closing transaction failed, so the session stays down like a crashed delete.
+    expect(await a.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+      nodeId: null,
+      desiredState: 'stopped',
+    });
     expect(a.ownership.ownedIds()).toEqual([]);
   });
 

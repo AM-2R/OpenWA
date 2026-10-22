@@ -147,6 +147,8 @@ export interface StopHooks {
   onReadFailed?: () => void;
   /** forceKill() only: runs synchronously once there is an engine to kill; records the stop request. */
   onEngineFound?: () => void;
+  /** delete() only: runs once the delete starts removing the session's data, the session:deleted hook first. */
+  onRemoving?: () => void;
 }
 
 /**
@@ -850,6 +852,7 @@ export class SessionEngineControls {
       }
 
       await writes.drain();
+      hooks.onRemoving?.();
       // Execute hook BEFORE delete so plugins can access session data
       await this.hookManager.execute(
         'session:deleted',
