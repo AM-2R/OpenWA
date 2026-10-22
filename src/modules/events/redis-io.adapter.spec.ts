@@ -215,6 +215,9 @@ describe('RedisIoAdapter', () => {
         expect(Number.isFinite(WS_REDIS_COMMAND_TIMEOUT_MS)).toBe(true);
         expect(Number.isFinite(WS_REDIS_SOCKET_TIMEOUT_MS)).toBe(true);
         expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBeGreaterThanOrEqual(WS_REDIS_COMMAND_TIMEOUT_MS);
+        // The figure docs/13 and the adapter comment quote ("a pause under 10 s is delivered late", "at most 10 s of
+        // events"): the other tests derive their waits from the constant and would follow it to any value.
+        expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBe(10_000);
         for (const option of [
           'commandTimeout',
           'socketTimeout',
