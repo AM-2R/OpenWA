@@ -210,15 +210,24 @@ test('? and [..] in a COPY source are wildcards of the file name', () => {
   }
 });
 
-test('a scheme in capitals is not a URL to BuildKit, so an ADD of it names a context path', () => {
-  // Real BuildKit fetches ADD https://host/x.tgz, and looks for the file HTTPS:/host/x.tgz in the context for
-  // ADD HTTPS://host/x.tgz, as it does for any scheme that is not in lower case.
-  const run = runGate({
-    Dockerfile: 'COPY control.txt ./\nADD HTTPS://example.com/x.tgz /opt/\n',
-    '.dockerignore': `${REAL_DOCKERIGNORE}\nHTTPS:/example.com/x.tgz\n`,
-  });
-  assert.equal(run.status, 1, run.out);
-  assert.match(run.out, /rejects 'HTTPS:\/example\.com\/x\.tgz'/);
+test('only an http(s) URL or a git reference is a remote ADD source, any other scheme names a context path', () => {
+  // Real BuildKit fetches ADD http://, https://, git://, ssh:// and git@ sources. It looks in the context for
+  // anything else: ftp:// is the file ftp:/host/x.tgz, file:///x.tgz is file:/x.tgz, and a scheme that is not in
+  // lower case, HTTPS://host/x.tgz, is HTTPS:/host/x.tgz.
+  const contextPaths = [
+    ['ftp://example.com/x.tgz', 'ftp:/example.com/x.tgz'],
+    ['s3://example.com/x.tgz', 's3:/example.com/x.tgz'],
+    ['file:///x.tgz', 'file:/x.tgz'],
+    ['HTTPS://example.com/x.tgz', 'HTTPS:/example.com/x.tgz'],
+  ];
+  for (const [source, path] of contextPaths) {
+    const run = runGate({
+      Dockerfile: `COPY control.txt ./\nADD ${source} /opt/\n`,
+      '.dockerignore': `${REAL_DOCKERIGNORE}\n${path}\n`,
+    });
+    assert.equal(run.status, 1, `ADD ${source}: ${run.out}`);
+    assert.match(run.out, new RegExp(`rejects '${path.replaceAll('.', '\\.')}'`), `ADD ${source}: ${run.out}`);
+  }
 });
 
 test('a wildcard in a directory name is reported instead of guessed', () => {
@@ -246,7 +255,10 @@ test('only the context files a COPY or ADD reads are build inputs', () => {
         'COPY --from=builder /stage-src /stage-dest',
         'COPY --from=builder ["/stage-json", "/stage-json-dest"]',
         'COPY ./src-b.txt dest-2',
+        'ADD http://example.com/plain.tgz /opt/',
         'ADD https://example.com/tool.tgz /opt/',
+        'ADD git://example.com/org/repo.git /opt/repo',
+        'ADD ssh://git@example.com/org/repo.git /opt/repo',
         'ADD git@example.com:org/repo.git /opt/repo',
         'COPY . .',
         'COPY ./ ./',
