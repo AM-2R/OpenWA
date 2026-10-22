@@ -187,6 +187,10 @@ export class IntegrationInstanceController {
   @HttpCode(204)
   @ApiResponse({ status: 204, description: 'Instance deleted and its session scope torn down.' })
   @ApiResponse({ status: 404, description: "Unknown instance, or one outside the key's allowedSessions." })
+  @ApiResponse({
+    status: 503,
+    description: 'On SQLite, another database transaction stayed open for 10 s; nothing was deleted, so retry.',
+  })
   async remove(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,

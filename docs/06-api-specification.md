@@ -7014,7 +7014,7 @@ Delete the instance and tear down its session-scope binding.
 
 **Response** `204`
 
-**Errors:** `401` · `403` · `404` unknown instance, or one outside the key's scope
+**Errors:** `401` · `403` · `404` unknown instance, or one outside the key's scope · `503` on SQLite, another database transaction stayed open for 10 s (nothing is deleted; retry)
 
 #### POST /api/integration/plugins/:pluginId/instances/:instanceId/regenerate-secret
 

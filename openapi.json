@@ -17822,6 +17822,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On SQLite, another database transaction stayed open for 10 s; nothing was deleted, so retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "tags": [
