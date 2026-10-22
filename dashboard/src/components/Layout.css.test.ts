@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -150,4 +150,26 @@ test('no rule outweighs the RTL one that moves the collapse toggle to the sideba
     .flatMap(r => r.selectors)
     .filter(s => /\.collapse-toggle$/.test(s) && weight(s) >= weight(mirror) && s !== mirror);
   assert.deepEqual(heavier, []);
+});
+
+// -webkit-overflow-scrolling: touch gave iOS momentum scrolling before iOS 13, which now scrolls every overflow area that
+// way. WebKit still honours the property on iPhone and gives the element a stacking context (StyleAdjuster.cpp:
+// "Touch overflow scrolling creates a stacking context"), which would trap the page-level modal overlays (z-index
+// 1000) inside the scroller, under the fixed mobile header (90) and sidebar (100).
+test('no stylesheet asks for the legacy touch overflow scrolling', () => {
+  const sheets = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return sheets(full);
+      return entry.name.endsWith('.css') ? [full] : [];
+    });
+  const files = sheets(join(DIR, '..'));
+  assert.ok(files.length >= 20, `only ${files.length} stylesheets found`);
+  const offenders = files.filter(file =>
+    /-webkit-overflow-scrolling/.test(readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')),
+  );
+  assert.deepEqual(
+    offenders.map(file => file.slice(DIR.length - 'components'.length)),
+    [],
+  );
 });

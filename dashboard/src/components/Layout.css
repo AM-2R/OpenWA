@@ -427,7 +427,6 @@
     height: 100dvh;
     min-height: 0;
     overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
   }
 
   .collapse-toggle {
