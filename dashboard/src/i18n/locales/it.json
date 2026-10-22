@@ -1224,6 +1224,8 @@
     },
     "envPinNote": "Fissato dalla variabile d'ambiente {{name}}: questo è il valore in esecuzione; le modifiche dalla dashboard non verranno applicate finché quella variabile non viene rimossa.",
     "pendingRestartNote": "Salvato, ma non ancora applicato: riavvia il server perché questa modifica abbia effetto.",
+    "pendingBuiltInNote": "Salvato, ma non ancora applicato: il server usa ora un servizio esterno e un riavvio lo passerà al container integrato.",
+    "pendingExternalNote": "Salvato, ma non ancora applicato: il server usa ora il container integrato e un riavvio lo passerà a un servizio esterno.",
     "migration": {
       "title": "Attenzione: questa operazione cambia il backend dei dati",
       "dbWarning": "Il nuovo database parte vuoto. Scarica ora un backup dei tuoi dati attuali (mentre sei ancora sul vecchio database), poi ripristinalo dopo il riavvio.",

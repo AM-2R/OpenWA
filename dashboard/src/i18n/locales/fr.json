@@ -1224,6 +1224,8 @@
     },
     "envPinNote": "Défini par la variable d'environnement {{name}} — c'est la valeur en cours d'exécution ; les modifications du tableau de bord ne s'appliqueront pas tant que cette variable n'est pas supprimée.",
     "pendingRestartNote": "Enregistré, mais pas encore appliqué — redémarrez le serveur pour que cette modification prenne effet.",
+    "pendingBuiltInNote": "Enregistré, mais pas encore appliqué : le serveur utilise actuellement un service externe, et un redémarrage le basculera vers le conteneur intégré.",
+    "pendingExternalNote": "Enregistré, mais pas encore appliqué : le serveur utilise actuellement le conteneur intégré, et un redémarrage le basculera vers un service externe.",
     "migration": {
       "title": "Attention — cela change le backend de données",
       "dbWarning": "La nouvelle base de données démarre vide. Téléchargez dès maintenant une sauvegarde de vos données actuelles (tant que vous êtes encore sur l'ancienne base de données), puis restaurez-la après le redémarrage.",

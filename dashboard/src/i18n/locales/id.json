@@ -1195,6 +1195,8 @@
     },
     "envPinNote": "Disematkan oleh variabel lingkungan {{name}} — ini adalah nilai yang berjalan; perubahan dasbor tidak akan berlaku sampai variabel tersebut dihapus.",
     "pendingRestartNote": "Tersimpan, tetapi belum diterapkan — restart server agar perubahan berlaku.",
+    "pendingBuiltInNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan layanan eksternal, dan restart akan mengalihkannya ke container bawaan.",
+    "pendingExternalNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan container bawaan, dan restart akan mengalihkannya ke layanan eksternal.",
     "migration": {
       "title": "Perhatian — ini mengubah backend data",
       "dbWarning": "Database baru dimulai kosong. Unduh cadangan data Anda saat ini sekarang (saat masih di database lama), lalu pulihkan setelah restart.",

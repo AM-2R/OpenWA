@@ -794,6 +794,90 @@ test('a switch from bundled to external services is warned of and stops the bund
   });
 });
 
+const PENDING_BUILT_IN_NOTE =
+  'Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.';
+const PENDING_EXTERNAL_NOTE =
+  'Saved, but not applied yet: the server runs with the built-in container now, and a restart switches it to an external service.';
+
+// The note sits under the toggle it explains and names what runs, since the toggle shows what was saved.
+function toggleNote(container: HTMLElement, labelText: string): string | undefined {
+  return toggleInput(container, labelText).closest('.toggle-row')?.nextElementSibling?.textContent?.trim();
+}
+
+test('a switch to a bundled container waiting for a restart says what runs now, under each toggle', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  // External services run on all three cards, and the bundled containers are what was saved.
+  overrides = {
+    status: {
+      ...RUNNING_EXTERNAL,
+      redis: { enabled: true, connected: true, host: 'redis.internal', port: 6379, builtIn: false },
+    },
+    saved: {
+      ...SAVED_BUNDLED,
+      redis: { enabled: true, builtIn: true, host: 'redis', port: '6379', passwordSet: false },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(toggleNote(container, 'Use Built-in PostgreSQL Container'), PENDING_BUILT_IN_NOTE);
+  assert.equal(toggleNote(container, 'Use Built-in Redis Container'), PENDING_BUILT_IN_NOTE);
+  assert.equal(toggleNote(container, 'Use Built-in MinIO Container'), PENDING_BUILT_IN_NOTE);
+});
+
+test('a switch to external services waiting for a restart says what runs now, under each toggle', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_BUNDLED, saved: SAVED_EXTERNAL };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(toggleNote(container, 'Use Built-in PostgreSQL Container'), PENDING_EXTERNAL_NOTE);
+  assert.equal(toggleNote(container, 'Use Built-in Redis Container'), PENDING_EXTERNAL_NOTE);
+  assert.equal(toggleNote(container, 'Use Built-in MinIO Container'), PENDING_EXTERNAL_NOTE);
+});
+
+test('no built-in note while the toggles agree with what runs', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: RUNNING_BUNDLED,
+    saved: { ...SAVED_EXTERNAL, database: { ...SAVED_EXTERNAL.database, builtIn: true } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  // Only PostgreSQL agrees (bundled on both sides); Redis and MinIO still differ.
+  assert.equal(screen.queryAllByText(PENDING_EXTERNAL_NOTE).length, 2);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a note beside a toggle that agrees');
+});
+
+// SQLite runs and bundled PostgreSQL is saved: the database note names the type change, and a running
+// "external" flag would be a claim about a database that is not running.
+test('no built-in note beside a pending database type', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: RUNNING_SQLITE,
+    saved: { ...SAVED_CONFIG, database: { ...SAVED_CONFIG.database, builtIn: true } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note beside a pending type');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note beside a pending type');
+  screen.getByText(PENDING_RESTART_NOTE);
+});
+
 test('the pending-restart note survives a successful save', async () => {
   const { screen, waitFor, fireEvent } = rtl;
   resetFetchCalls();

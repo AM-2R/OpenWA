@@ -1224,6 +1224,8 @@
     },
     "envPinNote": "Fijado por la variable de entorno {{name}}: este es el valor en ejecución; los cambios del panel no se aplicarán hasta que esa variable se elimine.",
     "pendingRestartNote": "Guardado, pero aún no aplicado: reinicia el servidor para que este cambio surta efecto.",
+    "pendingBuiltInNote": "Guardado, pero aún no aplicado: el servidor usa ahora un servicio externo y un reinicio lo cambiará al contenedor integrado.",
+    "pendingExternalNote": "Guardado, pero aún no aplicado: el servidor usa ahora el contenedor integrado y un reinicio lo cambiará a un servicio externo.",
     "migration": {
       "title": "Atención: esto cambia el backend de datos",
       "dbWarning": "La nueva base de datos comienza vacía. Descarga ahora una copia de seguridad de tus datos actuales (mientras sigues en la base de datos anterior) y luego restáurala después del reinicio.",

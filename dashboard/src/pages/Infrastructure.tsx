@@ -209,6 +209,17 @@ export function Infrastructure() {
     ) : null;
   };
 
+  // A switch between a bundled container and an external service that was saved and not restarted for. The
+  // toggle shows what was saved, so the note names what runs. It needs the same service running and saved: a
+  // pending type change has its own note, and a flag says nothing about a service that is not running.
+  const builtInNote = (sameService: boolean, running: boolean, saved: boolean) =>
+    sameService && !configSave.saving && running !== saved ? (
+      <p className="env-pin-note">
+        <AlertTriangle size={14} />{' '}
+        {t(saved ? 'infrastructure.pendingBuiltInNote' : 'infrastructure.pendingExternalNote')}
+      </p>
+    ) : null;
+
   // Built-in services the restart failed to start or stop. Shown whether or not the server came back:
   // a service that failed to start is the likeliest reason it did not.
   const restartWarningBox = restartFlow.restartWarnings.length > 0 && (
@@ -282,6 +293,12 @@ export function Infrastructure() {
                   <span className="toggle-slider"></span>
                 </label>
               </div>
+
+              {builtInNote(
+                infraStatus.database.type === 'postgres' && savedConfig.database.type === 'postgres',
+                infraStatus.database.builtIn,
+                savedConfig.database.builtIn,
+              )}
 
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
@@ -580,6 +597,12 @@ export function Infrastructure() {
                 </label>
               </div>
 
+              {builtInNote(
+                infraStatus.redis.enabled && savedConfig.redis.enabled,
+                infraStatus.redis.builtIn,
+                savedConfig.redis.builtIn,
+              )}
+
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
                   <div className="form-row">
@@ -772,6 +795,12 @@ export function Infrastructure() {
                     <span className="toggle-slider"></span>
                   </label>
                 </div>
+
+                {builtInNote(
+                  infraStatus.storage.type === 's3' && savedConfig.storage.type === 's3',
+                  infraStatus.storage.builtIn,
+                  savedConfig.storage.builtIn,
+                )}
 
                 {!configForm.storageConfig.builtIn && (
                   <>

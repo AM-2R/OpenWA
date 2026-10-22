@@ -1195,6 +1195,8 @@
     },
     "envPinNote": "Pinned by the environment variable {{name}} — this is the running value; dashboard changes won't apply until that variable is unset.",
     "pendingRestartNote": "Saved, but not applied yet — restart the server for this change to take effect.",
+    "pendingBuiltInNote": "Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.",
+    "pendingExternalNote": "Saved, but not applied yet: the server runs with the built-in container now, and a restart switches it to an external service.",
     "migration": {
       "title": "Heads up — this changes the data backend",
       "dbWarning": "The new database starts empty. Download a backup of your current data now (while still on the old database), then restore it after the restart.",
