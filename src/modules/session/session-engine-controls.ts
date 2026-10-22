@@ -817,7 +817,9 @@ export class SessionEngineControls {
       );
 
       // DB removal is NOT best-effort: a genuine failure must surface (500) rather than be swallowed.
-      // Delete every child row explicitly, in one transaction, children before the parent. For
+      // Delete every child row explicitly, children before the parent: the three tables that grow with traffic
+      // go first, in batches (a failure part-way keeps the session with fewer rows), then the rest and the
+      // parent in one transaction. For
       // messages/message_batches this is load-bearing: they carry a plain sessionId with no FK, so
       // nothing else would ever remove them. webhooks/templates/baileys_stored_messages (and
       // automation_rules) DO declare an ON DELETE CASCADE FK that fires on BOTH engines —

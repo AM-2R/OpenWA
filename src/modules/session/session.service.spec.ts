@@ -1356,7 +1356,7 @@ describe('SessionService', () => {
       expect(mockEngine.forceDestroy).toHaveBeenCalled();
     });
 
-    it('removes the session and all its child rows explicitly in one transaction (SQLite cascade is off)', async () => {
+    it('removes the rest of the child rows and the session explicitly in one transaction after the traffic batches (SQLite cascade is off)', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
