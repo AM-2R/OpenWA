@@ -65,7 +65,9 @@ export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<stri
  *     requestRestart: the bundled host is built-in, any other is not, and no saved flag can be a pending
  *     switch because the pin outranks it.
  *  2. Otherwise the flag counts as saved when the environment pins it, or when the file stores it for a
- *     service the file also selects.
+ *     service the file also selects. A flag that is not true beside the bundled host name in the file is no
+ *     choice of an external service, though: the next boot dials the container, so it reads as built-in and
+ *     nothing is saved.
  *  3. Otherwise there is nothing saved.
  */
 export function savedBuiltInMode(service: BuiltInService, saved: Record<string, string>): SavedBuiltInMode {
@@ -76,5 +78,7 @@ export function savedBuiltInMode(service: BuiltInService, saved: Record<string, 
   const flagPinned = isEnvPinned(spec.flag);
   const flag = flagValue(service, saved);
   const selectedInFile = saved[spec.selection] === spec.selected;
+  const dialsBundled = saved[spec.host] === spec.bundledHost;
+  if (flag !== 'true' && dialsBundled) return { builtIn: true, builtInSet: false };
   return { builtIn: flag === 'true', builtInSet: flag !== undefined && (flagPinned || selectedInFile) };
 }

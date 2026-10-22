@@ -7,9 +7,12 @@
 //     and the saved flag says nothing (builtInSet false).
 //  2. Otherwise the saved flag counts (builtInSet true) only when the file also selects the service. The first
 //     boot writes every flag as false next to a service that is not selected, which is a default, not a choice.
+//     A flag that is not true beside the bundled host name in the file is no choice of an external service either:
+//     the next boot dials the container (builtIn true, builtInSet false).
 //  3. Otherwise nothing is saved (builtInSet false) and the page follows what runs.
 
-export type FileState = 'absent' | 'template' | 'stored-false' | 'stored-true' | 'unselected-true';
+export type FileState =
+  'absent' | 'template' | 'stored-false' | 'stored-true' | 'unselected-true' | 'bundled-host' | 'saved-bundled';
 export type PinState = 'none' | 'bundled' | 'external';
 export type ServiceName = 'database' | 'redis' | 'storage';
 
@@ -24,6 +27,8 @@ export const FILE_STATES: readonly FileState[] = [
   'stored-false',
   'stored-true',
   'unselected-true',
+  'bundled-host',
+  'saved-bundled',
 ];
 export const PIN_STATES: readonly PinState[] = ['none', 'bundled', 'external'];
 export const SERVICE_NAMES: readonly ServiceName[] = ['database', 'redis', 'storage'];
@@ -102,6 +107,18 @@ export const EXPECTED_MODE: Record<FileState, Record<PinState, SavedMode>> = {
     bundled: PINNED_BUNDLED,
     external: PINNED_EXTERNAL,
   },
+  // The service selected, the flag false and the bundled host name typed in the file (a compose name).
+  'bundled-host': {
+    none: { builtIn: true, builtInSet: false },
+    bundled: PINNED_BUNDLED,
+    external: PINNED_EXTERNAL,
+  },
+  // What the dashboard writes for a saved built-in choice: the service selected, the flag true, the bundled host.
+  'saved-bundled': {
+    none: { builtIn: true, builtInSet: true },
+    bundled: PINNED_BUNDLED,
+    external: PINNED_EXTERNAL,
+  },
 };
 
 /**
@@ -115,6 +132,8 @@ export const FALLBACK_BUILT_IN: Record<FileState, boolean> = {
   'stored-false': false,
   'stored-true': true,
   'unselected-true': true,
+  'bundled-host': false,
+  'saved-bundled': true,
 };
 
 /** The lines a saved file holds about one service in a given state. */
@@ -131,6 +150,10 @@ export function fileLines(service: ServiceName, state: FileState): string[] {
       return [`${spec.selection}=${spec.selected}`, `${spec.flag}=true`];
     case 'unselected-true':
       return [`${spec.selection}=${spec.unselected}`, `${spec.flag}=true`];
+    case 'bundled-host':
+      return [`${spec.selection}=${spec.selected}`, `${spec.flag}=false`, `${spec.host}=${spec.bundledHost}`];
+    case 'saved-bundled':
+      return [`${spec.selection}=${spec.selected}`, `${spec.flag}=true`, `${spec.host}=${spec.bundledHost}`];
   }
 }
 
