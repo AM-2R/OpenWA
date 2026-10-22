@@ -1216,6 +1216,41 @@ test('changing a database or storage type the environment pins warns of no switc
   assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
 });
 
+// Beside a pinned bundled endpoint the toggle reads on from what runs, but the save leaves the flag out and the
+// gateway keeps the stored bucket, so an unrelated save moves no media.
+test('an unrelated save beside a pinned bundled endpoint warns of no storage switch', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      storage: { type: 's3', bucket: 'media', endpoint: 'http://minio:9000', builtIn: true, s3Available: true },
+      envPinned: ['S3_ENDPOINT'],
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        builtIn: true,
+        builtInSet: false,
+        s3Bucket: 'media',
+        s3Endpoint: 'http://minio:9000',
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, true);
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+});
+
 // A pinned external host outranks the toggle, so turning Use Built-in on moves nothing.
 test('turning Use Built-in on under a pinned external host warns of no switch', async () => {
   const { screen, fireEvent, within } = rtl;

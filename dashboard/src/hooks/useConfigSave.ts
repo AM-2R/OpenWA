@@ -5,8 +5,8 @@ import { useToast } from './useToast';
 
 export interface UseConfigSaveArgs {
   buildPayload: () => SaveConfigPayload;
-  /** Called with the profile list from a successful save. One-way: this hook never reads restart state. */
-  onSaved: (profiles: string[]) => void;
+  /** Called with the profile list from a successful save and the payload it sent. One-way: this hook never reads restart state. */
+  onSaved: (profiles: string[], payload: SaveConfigPayload) => void;
 }
 
 export interface ConfigSave {
@@ -27,9 +27,10 @@ export function useConfigSave({ buildPayload, onSaved }: UseConfigSaveArgs): Con
   const saveConfig = async () => {
     setSaving(true);
     try {
-      const result = await infraApi.saveConfig(buildPayload());
+      const payload = buildPayload();
+      const result = await infraApi.saveConfig(payload);
       if (result.saved) {
-        onSaved(result.profiles || []);
+        onSaved(result.profiles || [], payload);
       } else {
         toast.error(t('infrastructure.toasts.saveFailed'), result.message);
       }

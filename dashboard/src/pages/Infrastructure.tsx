@@ -64,7 +64,7 @@ export function Infrastructure() {
   // to open — the one-way edge between the save and restart hooks.
   const configSave = useConfigSave({
     buildPayload: configForm.buildSavePayload,
-    onSaved: profiles => {
+    onSaved: (profiles, sent) => {
       // Flag a backend switch so the restart modal can warn about the empty-database / orphaned-media data
       // move before it happens. A switch is a next boot that connects somewhere else than the server does
       // now: another type, host, port or database name, or another S3 endpoint or bucket. The next boot
@@ -90,9 +90,12 @@ export function Infrastructure() {
           (dbType === 'postgres' && (dbHost !== infraStatus.database.host || dbExternalRetarget)));
       const storage = configForm.storageConfig;
       const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
+      // The storage section takes the bundled bucket for a flag sent as true only: beside a pinned endpoint an untouched
+      // toggle is left out of the save, and the stored bucket stays.
+      const storageBuiltIn = sent.storage?.builtIn === true;
       const endpoint =
-        pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storage.builtIn ? 'http://minio:9000' : storage.s3Endpoint);
-      const bucket = (storage.builtIn ? 'openwa' : storage.s3Bucket) || 'openwa';
+        pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storageBuiltIn ? 'http://minio:9000' : storage.s3Endpoint);
+      const bucket = (storageBuiltIn ? 'openwa' : storage.s3Bucket) || 'openwa';
       const storageSwitch =
         !!infraStatus &&
         (storageType !== infraStatus.storage.type ||
