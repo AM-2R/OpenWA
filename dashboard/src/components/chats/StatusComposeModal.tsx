@@ -8,6 +8,7 @@ import { useToast } from '../../hooks/useToast';
 import { Modal } from '../Modal';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import { captionLength } from '../../utils/bulkMedia';
+import { matches } from '../../utils/chatFilters';
 
 // Mirrors @ArrayMaxSize(256) on the send-status DTOs — the picker caps selection client-side so the
 // user can't build a list the backend is guaranteed to reject.
@@ -64,10 +65,9 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
     retry: false,
   });
   const composeContacts = composeContactsQuery.data ?? [];
-  const composeRecipientSearchLower = composeRecipientSearch.toLowerCase();
   const filteredComposeContacts = composeContacts.filter(c =>
     // Match against every identity field — a named contact must still be findable by number/JID.
-    [c.name, c.pushName, c.number, c.id].some(v => v?.toLowerCase().includes(composeRecipientSearchLower)),
+    matches(composeRecipientSearch, c.name, c.pushName, c.number, c.id),
   );
 
   const resetComposeForm = useCallback(() => {

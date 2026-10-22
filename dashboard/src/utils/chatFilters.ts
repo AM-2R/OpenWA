@@ -6,11 +6,17 @@
  * As inline consts inside the page these were three unrelated rules reading one piece of state; as
  * functions they take the query as an argument and can be tested.
  */
+import { normalizePhoneText } from './phone.ts';
 
 /** Case-insensitive "does any of these fields contain the query". Absent fields never match. */
-const matches = (query: string, ...fields: (string | undefined)[]): boolean => {
+export const matches = (query: string, ...fields: (string | undefined)[]): boolean => {
   const needle = query.toLowerCase();
-  return fields.some(f => (f ?? '').toLowerCase().includes(needle));
+  // A number typed in the digits of another script matches the ASCII digits of an id.
+  const folded = normalizePhoneText(needle);
+  return fields.some(f => {
+    const field = (f ?? '').toLowerCase();
+    return field.includes(needle) || (folded !== needle && field.includes(folded));
+  });
 };
 
 interface ChatLike {

@@ -201,3 +201,29 @@ test('status text and caption are bounded by Post, not truncated by UTF-16 units
   assert.equal(post.disabled, true, 'a caption over 1024 characters can be posted');
   assert.ok(regions.includes(screen.getByText('Limited to 1024 characters (1025 now).')));
 });
+
+// The recipient search matches a number against the ASCII digits of a contact, whatever script it is typed in.
+test('a number typed in native digits finds a recipient by its number', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const stubbed = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify([
+          { id: '628123456789@c.us', name: 'Ben', number: '628123456789', isMyContact: true, isBlocked: false },
+          { id: '491701234567@c.us', name: 'Anna', number: '491701234567', isMyContact: true, isBlocked: false },
+        ]),
+        { headers: { 'Content-Type': 'application/json' } },
+      ),
+    )) as typeof fetch;
+  try {
+    render('baileys');
+    await screen.findByText('Anna');
+    const search = document.getElementById('scm-6') as HTMLInputElement;
+    fireEvent.change(search, { target: { value: '٦٢٨١٢٣' } });
+    await waitFor(() => assert.equal(screen.queryByText('Anna'), null));
+    assert.ok(screen.getByText('Ben'));
+  } finally {
+    globalThis.fetch = stubbed;
+  }
+});
