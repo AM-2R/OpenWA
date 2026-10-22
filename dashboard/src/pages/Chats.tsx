@@ -226,8 +226,10 @@ export function Chats() {
   const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
   const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
   const [dialogRunning, setDialogRunning] = useState<Chat | null>(null);
-  // Whether a menu has opened on this session, which is when its entries need the address book (see contactsQuery).
-  const [menuOpened, setMenuOpened] = useState<boolean>(false);
+  // The session a menu has opened on, which is when its entries need that session's address book (see contactsQuery).
+  // Keyed by session, so it needs no reset at a switch: a reset lands a render after the new session is selected,
+  // when its address book has already been asked for.
+  const [menuOpenedFor, setMenuOpenedFor] = useState<string>('');
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -562,7 +564,6 @@ export function Chats() {
       setConfirmAction(null);
       setMuteDialogChat(null);
       setContactDialogChat(null);
-      setMenuOpened(false);
       setShowArchived(false);
     }
     return () => {
@@ -1238,7 +1239,7 @@ export function Chats() {
   const contactsQuery = useQuery({
     queryKey: ['contacts', selectedSessionId],
     queryFn: () => contactApi.list(selectedSessionId),
-    enabled: Boolean(selectedSessionId) && (menuOpened || chatFilter === 'unknown'),
+    enabled: Boolean(selectedSessionId) && (menuOpenedFor === selectedSessionId || chatFilter === 'unknown'),
     staleTime: 5 * 60 * 1000,
     // contactApi.list already retried a throttled page; another attempt would walk every page again.
     retry: false,
@@ -1449,7 +1450,7 @@ export function Chats() {
 
   const rowActions: ChatRowActions = {
     // Only what a key that can write offers reads the address book (Save or Rename); a read-only menu has no such entry.
-    onMenuOpen: canWrite ? () => setMenuOpened(true) : undefined,
+    onMenuOpen: canWrite ? () => setMenuOpenedFor(selectedSessionId) : undefined,
     onGroupInfo: setGroupDialogChat,
     onSaveContact: canWrite ? setContactDialogChat : undefined,
     canSaveContact: chat => addressbookIdOf(chat) !== null,

@@ -2136,6 +2136,33 @@ test('the first menu to open reads the address book once, and its Save entry the
   assert.equal(contactReads().length, 1, 'a second menu read the address book again');
 });
 
+test('switching session after a menu opened reads no address book for the new session', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  fireEvent.keyDown(document, { key: 'Escape' });
+  const readsOn = (id: string) =>
+    fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${id}/contacts?`)).length;
+  assert.equal(readsOn(SESSION.id), 1);
+
+  switchSession(container, SECOND_SESSION.id);
+  await waitFor(() =>
+    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+  );
+  await screen.findByText('Alice');
+  await settle();
+  await settle();
+  assert.equal(readsOn(SECOND_SESSION.id), 0, 'the new session paid for an address book nobody asked for');
+
+  // A menu on the new session asks for its own.
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  assert.equal(readsOn(SECOND_SESSION.id), 1);
+});
+
 test("a group's menu has no use for the address book and does not read it", async () => {
   const { screen, fireEvent } = rtl;
   listGroup = true;
