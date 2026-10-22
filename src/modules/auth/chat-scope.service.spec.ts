@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ChatScopeService } from './chat-scope.service';
-import { FindOperator, Repository } from 'typeorm';
+import { DataSource, FindOperator, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 
@@ -114,5 +114,45 @@ describe('ChatScopeService', () => {
     const svc = new ChatScopeService();
     expect(await svc.allows({ allowedChats: [`${PHONE}@c.us`] }, `${LID}@lid`)).toBe(false);
     expect(await svc.allows({ allowedChats: [`${PHONE}@c.us`] }, `${PHONE}@c.us`)).toBe(true);
+  });
+});
+
+describe('ChatScopeService over the shared lid table, with two sessions', () => {
+  const key = { allowedChats: [`${PHONE}@c.us`] };
+  let ds: DataSource;
+  let store: LidMappingStoreService;
+  let svc: ChatScopeService;
+  const admitted = async (): Promise<[boolean, boolean]> => [
+    await svc.allows(key, `${LID}@lid`),
+    (await svc.scopeForFilter(key))!.allowed.has(`${LID}@lid`),
+  ];
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [LidMapping],
+      synchronize: true,
+    }).initialize();
+    store = new LidMappingStoreService(ds.getRepository(LidMapping));
+    await store.onModuleInit();
+    svc = new ChatScopeService(store);
+    await store.remember(LID, PHONE, 's1');
+  });
+
+  afterEach(() => ds.destroy());
+
+  it('still admits the lid of a phone after a session that cannot see the number answers no phone', async () => {
+    expect(await admitted()).toEqual([true, true]);
+
+    await store.remember(LID, null, 's2');
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
+  it('stops admitting it once the session that stored the phone answers no phone', async () => {
+    await store.remember(LID, null, 's1');
+
+    expect(await admitted()).toEqual([false, false]);
   });
 });

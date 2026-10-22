@@ -1,4 +1,4 @@
-import { FindOperator, In, Repository } from 'typeorm';
+import { DataSource, FindOperator, In, Repository } from 'typeorm';
 import { LidMappingStoreService } from './lid-mapping-store.service';
 import { LidMapping } from './lid-mapping.entity';
 
@@ -73,16 +73,7 @@ describe('LidMappingStoreService', () => {
     );
   });
 
-  it('caches a negative result (lid known-but-unresolved)', async () => {
-    const repo = makeFakeRepo();
-    const store = await newStore(repo);
-    await store.remember('333', null);
-    expect(store.getCached('333')).toBeNull();
-    expect(store.lidsForPhone('anything')).toEqual([]);
-    expect(repo.upsert).toHaveBeenCalledWith(expect.objectContaining({ lid: '333', phone: null }), ['lid']);
-  });
-
-  it('is last-write-wins and reindexes the reverse map on a phone change', async () => {
+  it('a phone is last-write-wins and reindexes the reverse map on a phone change', async () => {
     const store = await newStore(makeFakeRepo([{ lid: '111', phone: '628999' }]));
     await store.remember('111', '628000');
     expect(store.getCached('111')).toBe('628000');
@@ -625,9 +616,9 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
   });
 
   it('a stale cached negative never shadows a mapping the table has', async () => {
-    const repo = makeFakeRepo();
-    const store = await newStore(repo);
-    await store.remember('222', null); // this node cached a negative
+    const repo = makeFakeRepo([{ lid: '222', phone: null }]);
+    const store = await newStore(repo); // this node cached a negative
+    expect(store.getCached('222')).toBeNull();
     repo.rows[0].phone = '628888'; // another node has since mapped it in the table
     expect(await store.findPhoneForLid('222@lid')).toBe('628888');
     expect(await store.phonesForLidsPersisted(['222'])).toEqual({ 222: '628888' });
@@ -782,5 +773,119 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
     const store = await newStore(repo);
     repo.find.mockRejectedValueOnce(new Error('no such table'));
     expect(await store.findLidsForPhone('628999')).toEqual(['111']);
+  });
+});
+
+describe('LidMappingStoreService: a negative result on the shared table', () => {
+  let ds: DataSource;
+  let repo: Repository<LidMapping>;
+  let store: LidMappingStoreService;
+  const row = (lid: string) => repo.findOne({ where: { lid } });
+
+  /** Holds the next call of a repository method until `release` is called; `reached` settles on entry. */
+  function hold(method: 'upsert' | 'update') {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const reached = new Promise<void>(resolve => (entered = resolve));
+    const real = repo[method].bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    jest.spyOn(repo, method).mockImplementationOnce((async (...args: unknown[]) => {
+      entered();
+      await gate;
+      return real(...args);
+    }) as never);
+    return { release, reached };
+  }
+
+  beforeEach(async () => {
+    ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [LidMapping],
+      synchronize: true,
+    }).initialize();
+    repo = ds.getRepository(LidMapping);
+    store = new LidMappingStoreService(repo);
+    await store.onModuleInit();
+  });
+
+  afterEach(() => ds.destroy());
+
+  it('records a negative for a lid with no row', async () => {
+    await store.remember('333', null, 's1');
+
+    expect(await row('333')).toMatchObject({ phone: null, sessionId: 's1' });
+    expect(await store.findPhoneForLid('333@lid')).toBeNull();
+  });
+
+  it('leaves the phone another session stored, in the table and in the cache', async () => {
+    await store.remember('111', '628111', 's1');
+    await store.remember('111', null, 's2');
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: 's1' });
+    expect(store.getCached('111')).toBe('628111');
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['111'] });
+  });
+
+  it('clears the phone when the session that stored it answers no phone (#1058)', async () => {
+    await store.remember('111', '628111', 's1');
+    await store.remember('111', null, 's1');
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: 's1' });
+    expect(store.lidsForPhone('628111')).toEqual([]);
+    expect(store.getCached('111')).not.toBe('628111');
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+  });
+
+  it('clears a phone that no session owns', async () => {
+    await repo.save({ lid: '111', phone: '628111', sessionId: null });
+    await store.reload();
+
+    await store.remember('111', null, 's2');
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: 's2' });
+  });
+
+  it('drops a phone cached here once the table holds none, whichever session cleared it', async () => {
+    await store.remember('111', '628111', 's1');
+    await repo.update({ lid: '111' }, { phone: null }); // s1 answered no phone on another node
+
+    await store.remember('111', null, 's2');
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: 's2' });
+    expect(store.lidsForPhone('628111')).toEqual([]);
+  });
+
+  it('a phone from any session still replaces the row', async () => {
+    await store.remember('111', null, 's1');
+    await store.remember('111', '628111', 's2');
+    await store.remember('111', '628222', 's3');
+
+    expect(await row('111')).toMatchObject({ phone: '628222', sessionId: 's3' });
+  });
+
+  it('keeps a phone stored while the negative of another session is being written', async () => {
+    const update = hold('update');
+    const negative = store.remember('111', null, 's2');
+    await update.reached; // the row exists (holding no phone); the conditional update has not run
+    await store.remember('111', '628111', 's1');
+    update.release();
+    await negative;
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: 's1' });
+    expect(store.getCached('111')).toBe('628111');
+  });
+
+  it('does not cache a negative over a phone still being written', async () => {
+    const upsert = hold('upsert');
+    const phone = store.remember('111', '628111', 's1');
+    await upsert.reached;
+    await store.remember('111', null, 's2'); // lands first: there is no row yet
+    upsert.release();
+    await phone;
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: 's1' });
+    expect(store.getCached('111')).not.toBeNull();
+    expect(await store.lidsForPhonesPersisted(['628111'])).toEqual({ 628111: ['111'] });
   });
 });

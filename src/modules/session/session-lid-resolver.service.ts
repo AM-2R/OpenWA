@@ -107,7 +107,8 @@ export class SessionLidResolver {
     // when the operator never sent to them (#583 R3 Phase 2). A definitive null is persisted too, so
     // a phone that later becomes hidden overwrites its stale mapping instead of being served forever
     // (#1058). Reuses the resolution above — no extra network call — and is fire-and-forget so
-    // dispatch never blocks/fails on it.
+    // dispatch never blocks/fails on it. The store keeps a phone another session stored, since that
+    // account may still see the number.
     if (phone || resolved) {
       void this.lidMappingStore?.remember(userPart(contactId), phone, sessionId)?.catch(() => {});
     }

@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { LidMapping } from './lid-mapping.entity';
 import { userPart } from './wa-id';
 import { createLogger } from '../../common/services/logger.service';
@@ -49,7 +49,10 @@ export interface LidMappingStore {
   findPhoneForLid?(jid: string): Promise<string | null>;
   /** The lids the table maps to these phone digits, read from the database. */
   findLidsForPhone?(phone: string): Promise<string[]>;
-  /** Write-through, last-write-wins: update the cache + persist. A `null` phone records a negative result. */
+  /**
+   * Write-through: update the cache + persist. A phone is last-write-wins. A `null` phone records a negative
+   * result, and replaces a stored phone only when the same session (or none) wrote it.
+   */
   remember(lid: string, phone: string | null, sessionId?: string): Promise<void>;
 }
 
@@ -277,11 +280,13 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     if (!lid || this.lidToPhone.get(lid) === phone) {
       return; // unseen-or-changed only; a no-op write would just churn updatedAt
     }
-    this.index(lid, phone);
+    // A negative is not cached until the table has taken it: see clear().
+    if (phone !== null) this.index(lid, phone);
     this.unsettledWrites.set(lid, (this.unsettledWrites.get(lid) ?? 0) + 1);
     if (this.pendingLookups.has(lid)) this.racedLookups.add(lid);
     try {
-      await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
+      if (phone === null) await this.clear(lid, sessionId ?? null);
+      else await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
     } catch (err) {
       this.logger.warn(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
@@ -291,6 +296,36 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       if (left > 0) this.unsettledWrites.set(lid, left);
       else this.unsettledWrites.delete(lid);
     }
+  }
+
+  /**
+   * Record that a session found no phone for a lid. The row is shared by every session, and one account
+   * can see a contact's number while another cannot, so a negative replaces the row only when it holds
+   * no phone or the phone was written by this session (or by none); another session's mapping stays. The
+   * check is part of the update, not a read before it, so a phone stored meanwhile is never overwritten.
+   * When the row is cleared the cached entry is dropped rather than set: a phone written while the
+   * statements ran may be the newer value, and the next read takes whichever the table holds.
+   */
+  private async clear(lid: string, sessionId: string | null): Promise<void> {
+    const updatedAt = new Date();
+    // Creates the row when there is none; an existing one is left to the conditional update.
+    await this.repo
+      .createQueryBuilder()
+      .insert()
+      .values({ lid, phone: null, sessionId, updatedAt })
+      .orIgnore()
+      .execute();
+    const replaceable = [
+      { lid, phone: IsNull() },
+      { lid, sessionId: IsNull() },
+      ...(sessionId ? [{ lid, sessionId }] : []),
+    ];
+    const { affected } = await this.repo.update(replaceable, { phone: null, sessionId, updatedAt });
+    if (!affected) return;
+    const cached = this.lidToPhone.get(lid);
+    this.lidToPhone.delete(lid);
+    if (cached) this.unindex(lid, cached);
+    this.absentFromTable.delete(lid);
   }
 
   /**
