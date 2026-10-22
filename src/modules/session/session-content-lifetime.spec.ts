@@ -21,6 +21,7 @@ import {
   SESSION_DELETE_BATCH_MIN_SQLITE,
   SESSION_DELETE_BATCH_SIZE_POSTGRES,
   SESSION_DELETE_BATCH_TARGET_MS_SQLITE,
+  SESSION_DELETE_READ_AHEAD_POSTGRES,
   SessionEngineControls,
   StopMarks,
 } from './session-engine-controls';
@@ -430,6 +431,67 @@ describe('Session content lifetime', () => {
     for (const spy of [deleteMessages, deleteOutbox, deleteFailures]) {
       expect(spy).toHaveBeenCalledTimes(3);
       for (const [criteria] of spy.mock.calls) expect(Object.keys(criteria as object)).toEqual(['id']);
+    }
+  }, 60000);
+
+  // The outbox records and the delivery failures have no index that orders a session's rows, so a read after every
+  // batch goes back over the session's whole range, including the entries of deleted rows that PostgreSQL keeps
+  // until a vacuum. There one read feeds several batches. The closing transaction is replaced here so that what
+  // is left of the session when the batches are done is what the batches themselves left.
+  it('empties the outbox records and delivery failures of a long session in the batches, one read feeding several on PostgreSQL', async () => {
+    const doomed = await createSession();
+    const kept = await db.getRepository(Session).save({ name: 'kept-session', config: {} });
+    const outbox = db.getRepository(WebhookOutboxEvent);
+    const failures = db.getRepository(WebhookDeliveryFailure);
+    const batch = holdBatchSize();
+    const postgres = db.options.type === 'postgres';
+    const window = postgres ? batch * SESSION_DELETE_READ_AHEAD_POSTGRES : batch;
+    const rows = window + 2 * batch + 7;
+    const chunk = postgres ? 1000 : 100;
+    const seed = async (sessionId: string, count: number): Promise<void> => {
+      for (let from = 0; from < count; from += chunk) {
+        const range = Array.from({ length: Math.min(chunk, count - from) }, (_, i) => from + i);
+        await outbox.insert(
+          range.map(i => ({
+            webhookId: 'hook-1',
+            sessionId,
+            event: 'message.received',
+            idempotencyKey: `${sessionId}-${i}`,
+            deliveryId: `dlv-${sessionId}-${i}`,
+            payload: null,
+            state: 'dispatched' as const,
+          })),
+        );
+        await failures.insert(
+          range.map(i => ({
+            sessionId,
+            webhookId: 'hook-1',
+            event: 'message.received',
+            url: 'https://receiver.example',
+            idempotencyKey: `${sessionId}-${i}`,
+            attempts: 3,
+            lastError: 'HTTP 503',
+            payload: {},
+          })),
+        );
+      }
+    };
+    await seed(doomed.id, rows);
+    await seed(kept.id, 3);
+    const outboxReads = jest.spyOn(outbox, 'find');
+    const failureReads = jest.spyOn(failures, 'find');
+    jest.spyOn(db, 'transaction').mockRejectedValue(new Error('closing transaction not under test'));
+
+    await expect(controls.delete(doomed.id)).rejects.toThrow('closing transaction not under test');
+
+    expect(await outbox.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await failures.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(await outbox.countBy({ sessionId: kept.id })).toBe(3);
+    expect(await failures.countBy({ sessionId: kept.id })).toBe(3);
+    for (const reads of [outboxReads, failureReads]) {
+      expect(reads.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual(
+        Array<number>(Math.ceil(rows / window)).fill(window),
+      );
     }
   }, 60000);
 

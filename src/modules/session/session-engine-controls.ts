@@ -83,6 +83,14 @@ export const SESSION_DELETE_PAUSE_MS_SQLITE = 5;
 export const SESSION_DELETE_BATCH_SIZE_POSTGRES = 500;
 
 /**
+ * How many batches of a webhook outbox or delivery failure pass one read feeds on PostgreSQL. These two tables
+ * have no index that orders a session's rows, so each read goes back over the session's whole index range,
+ * including the entries of rows already deleted that a vacuum has not yet removed; a read after every batch made
+ * the delete take longer than linear, by seconds at 300,000 rows and far more beyond.
+ */
+export const SESSION_DELETE_READ_AHEAD_POSTGRES = 20;
+
+/**
  * The size of the next SQLite batch: the last one scaled to the target time, growing by at most a factor of two
  * so a fast first batch cannot overshoot into a slow one, and kept between the floor and the ceiling.
  */
@@ -983,13 +991,26 @@ export class SessionEngineControls {
     const dataSource = this.host.dataSource();
     const postgres = dataSource.options.type === 'postgres';
     let size = postgres ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_MIN_SQLITE;
-    const head = (entity: EntityTarget<{ id: string; sessionId: string }>): TrafficPass => ({
-      rows: dataSource.getRepository(entity),
-      next: async take =>
-        (await dataSource.getRepository(entity).find({ select: { id: true }, where: { sessionId }, take })).map(
-          row => row.id,
-        ),
-    });
+    const readAhead = postgres ? SESSION_DELETE_READ_AHEAD_POSTGRES : 1;
+    const head = (entity: EntityTarget<{ id: string; sessionId: string }>): TrafficPass => {
+      const repository = dataSource.getRepository(entity);
+      let ahead: string[] = [];
+      let more = true;
+      return {
+        rows: repository,
+        next: async take => {
+          // What is left of the last read is still in the table and comes first in the next, so it is replaced.
+          if (ahead.length < take && more) {
+            const rows = take * readAhead;
+            ahead = (await repository.find({ select: { id: true }, where: { sessionId }, take: rows })).map(
+              row => row.id,
+            );
+            more = ahead.length === rows;
+          }
+          return ahead.splice(0, take);
+        },
+      };
+    };
     const messages = dataSource.getRepository(Message);
     const passes: TrafficPass[] = [
       { rows: messages, next: this.stampedMessageIds(sessionId) },

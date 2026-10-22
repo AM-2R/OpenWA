@@ -25,6 +25,7 @@ import {
   SESSION_DELETE_BATCH_SIZE_SQLITE,
   SESSION_DELETE_BATCH_TARGET_MS_SQLITE,
   SESSION_DELETE_PAUSE_MS_SQLITE,
+  SESSION_DELETE_READ_AHEAD_POSTGRES,
   nextSqliteDeleteBatchSize,
   ServerShuttingDownException,
   SessionStoppedException,
@@ -1518,21 +1519,73 @@ describe('SessionService', () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
         const size = SESSION_DELETE_BATCH_SIZE_POSTGRES;
         const query = messageQuery(stamped(0, size), stamped(size, size), stamped(2 * size, 3));
-        outboxRepository.find.mockResolvedValueOnce(ids(0, size)).mockResolvedValueOnce(ids(size, 3));
+        outboxRepository.find.mockResolvedValueOnce(ids(0, size + 3));
 
         await service.delete('sess-uuid-1');
 
         expect(SESSION_DELETE_BATCH_SIZE_POSTGRES).toBe(500);
         expect(takes(query)).toEqual([size, size, size, size]);
-        expect(outboxRepository.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([
-          size,
-          size,
-        ]);
+        expect(
+          (outboxRepository.delete.mock.calls as Array<[{ id: { value: string[] } }]>).map(
+            ([criteria]) => criteria.id.value.length,
+          ),
+        ).toEqual([size, 3]);
         expect(failureRepository.find).toHaveBeenCalledWith({
           select: { id: true },
           where: { sessionId: 'sess-uuid-1' },
-          take: size,
+          take: size * SESSION_DELETE_READ_AHEAD_POSTGRES,
         });
+      });
+
+      // The outbox records and the delivery failures have no index that orders a session's rows, so a read after
+      // every batch goes back over the session's whole range. On PostgreSQL one read feeds several batches; SQLite
+      // reads one batch at a time.
+      it.each([
+        ['outbox records', () => outboxRepository],
+        ['delivery failures', () => failureRepository],
+      ])('reads the %s ahead on PostgreSQL, one read for several batches', async (_name, pick) => {
+        (dataSource as { options: unknown }).options = { type: 'postgres' };
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const size = SESSION_DELETE_BATCH_SIZE_POSTGRES;
+        const window = size * SESSION_DELETE_READ_AHEAD_POSTGRES;
+        const table = pick();
+        // A stand-in for the table: a read returns the first rows that are left, a delete takes its ids out.
+        const left = new Set(ids(0, window + 2 * size + 7).map(row => row.id));
+        table.find.mockImplementation(({ take }: { take: number }) =>
+          Promise.resolve([...left].slice(0, take).map(id => ({ id }))),
+        );
+        table.delete.mockImplementation(({ id }: { id: { value: string[] } }) => {
+          for (const gone of id.value) left.delete(gone);
+          return Promise.resolve({ affected: id.value.length });
+        });
+        let leftBeforeTransaction = -1;
+        (dataSource.transaction as jest.Mock).mockImplementationOnce(() => {
+          leftBeforeTransaction = left.size;
+          return Promise.reject(new Error('closing transaction not under test'));
+        });
+
+        await expect(service.delete('sess-uuid-1')).rejects.toThrow('closing transaction not under test');
+
+        expect(SESSION_DELETE_READ_AHEAD_POSTGRES).toBe(20);
+        // Two reads of a full window, the second finds the rest; every batch is still out before the transaction.
+        expect(table.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([window, window]);
+        const batches = (table.delete.mock.calls as Array<[{ id: { value: string[] } }]>).map(
+          ([criteria]) => criteria.id.value.length,
+        );
+        expect(batches).toEqual([...Array<number>(SESSION_DELETE_READ_AHEAD_POSTGRES + 2).fill(size), 7]);
+        expect(leftBeforeTransaction).toBe(0);
+      });
+
+      it('reads the outbox records one batch at a time on SQLite', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        outboxRepository.find.mockResolvedValueOnce(ids(0, BATCH)).mockResolvedValueOnce(ids(BATCH, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(outboxRepository.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([
+          BATCH,
+          BATCH,
+        ]);
       });
 
       it.each([
