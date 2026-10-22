@@ -85,6 +85,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
   // unmounts it). Its result then belongs to nothing on screen and is dropped. Setup sets the flag again:
   // StrictMode replays setup after a cleanup on a panel that stays mounted.
   const openRef = useRef(true);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     openRef.current = true;
     return () => {
@@ -258,6 +259,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
       <div className="chat-search-input new-chat-search">
         <Search size={18} />
         <input
+          ref={searchRef}
           type="text"
           placeholder={isGroupMode ? t('chats.newGroup.participantsPlaceholder') : t('chats.newChat.searchPlaceholder')}
           aria-label={isGroupMode ? t('chats.newGroup.participantsPlaceholder') : t('chats.newChat.searchPlaceholder')}
@@ -275,7 +277,11 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
           <button
             type="button"
             className="search-clear"
-            onClick={() => setQuery('')}
+            onClick={() => {
+              setQuery('');
+              // The button leaves the page with the text, and focus would go with it.
+              searchRef.current?.focus();
+            }}
             aria-label={t('chats.clearSearch')}
             title={t('chats.clearSearch')}
           >

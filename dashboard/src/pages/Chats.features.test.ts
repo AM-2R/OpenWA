@@ -453,6 +453,23 @@ for (const reactStrictMode of [false, true]) {
   });
 }
 
+test('the New chat search clear button returns focus to the field it cleared', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  const field = screen.getByLabelText('Search name or number with country code') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'Bo' } });
+  const clear = screen.getByRole('button', { name: 'Clear search' });
+  // A keyboard user reaches the button with Tab and presses Enter on it; the button then leaves the page.
+  clear.focus();
+  fireEvent.click(clear);
+
+  assert.equal(field.value, '');
+  assert.ok(!screen.queryByRole('button', { name: 'Clear search' }), 'the clear button stayed');
+  assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
+});
+
 // ── The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
 // under its @lid: starting a chat with that number has to find it. ──
 
