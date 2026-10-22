@@ -53,7 +53,7 @@ import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Repository } from 'typeorm';
-import { Queue } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -119,6 +119,7 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
   let received: Array<{ headers: http.IncomingHttpHeaders; body: Record<string, unknown> }>;
   let receiver: http.Server;
   let receiverUrl: string;
+  let bootOrder: { loaderInit: number[]; workerRun: number[] };
   const prevSsrf = process.env.WEBHOOK_SSRF_PROTECT;
 
   // Chatwoot-style signed ingress route, mirroring the integration-fabric suite byte-for-byte so the
@@ -150,6 +151,9 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
     // The 127.0.0.1 receiver would trip the SSRF guard at registration AND at delivery time; disable
     // it for this suite like the webhooks suite does (restored in afterAll).
     process.env.WEBHOOK_SSRF_PROTECT = 'false';
+    // Both call through; jest numbers every mock call in one sequence, which gives the boot order.
+    const loaderInit = jest.spyOn(PluginLoaderService.prototype, 'onModuleInit');
+    const workerRun = jest.spyOn(Worker.prototype, 'run');
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -175,6 +179,12 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
       }),
     );
     await app.init();
+    bootOrder = {
+      loaderInit: [...loaderInit.mock.invocationCallOrder],
+      workerRun: [...workerRun.mock.invocationCallOrder],
+    };
+    loaderInit.mockRestore();
+    workerRun.mockRestore();
 
     // Both queues resolve from the same container the workers consume — a boot that fails here is
     // itself the tripwire signal (IngressEnqueueService refuses to boot queue-on without the queue).
@@ -241,6 +251,14 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
   it('boots with QUEUE_ENABLED=true and both BullMQ queues resolved', () => {
     expect(ingressQueue).toBeDefined();
     expect(webhookQueue).toBeDefined();
+  });
+
+  it('marks the plugins it will restore before any queue worker starts', () => {
+    // A worker running first could take a queued ingress job for a plugin not yet marked as restoring and
+    // spend its only attempt on a missing plugin worker. The order comes from AppModule's imports.
+    expect(bootOrder.loaderInit).toHaveLength(1);
+    expect(bootOrder.workerRun.length).toBeGreaterThan(0);
+    expect(bootOrder.loaderInit[0]).toBeLessThan(Math.min(...bootOrder.workerRun));
   });
 
   it('enqueues the ingress delivery and the worker dispatches it', async () => {
