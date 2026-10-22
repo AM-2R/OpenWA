@@ -42,8 +42,10 @@ const REDACT_DEEP_NODES = 1000;
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 // One copy takes at most this many entries at every level: the keys of the objects and the length of the arrays it
 // copies, a shared one charged again at every use, because every use is copied and written out again. It is twice the
-// array limit, so a structure of that size is written whole; an object or array that does not fit in what is left of
-// it is written as [Truncated], which is what keeps a few shared references from expanding into an unbounded copy.
+// array limit, so an array, Set or object of that size is written whole; a Map is charged as the arrays it is written
+// as, its list and a pair of two each, so three entries a pair, and one of more than 666,666 pairs is not. An object or
+// array that does not fit in what is left of it is written as [Truncated], which is what keeps a few shared references
+// from expanding into an unbounded copy.
 const REDACT_MAX_ENTRIES = 2_000_000;
 // A string is written whole and is not copied, so a long one referenced many times, or a long key name of a shared
 // object, expands past what the entries count. One copy writes at most this many characters of string values, BigInt

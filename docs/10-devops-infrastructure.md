@@ -1107,8 +1107,10 @@ replaced with `[REDACTED]` before the line is written, at any depth. A log call 
 metadata: an object that contains itself is written with `[Circular]` in its place, and below the fifth
 level at most 1000 more objects and arrays are copied, the rest written as `[Truncated]`. So is an array,
 Map, Set or object with more entries than that allowance has left (a list of 1000 numbers at the sixth
-level), and, at any level, an array, Map or Set of more than a million entries. At every level one call
-copies at most two million entries in all (the keys of its objects plus the lengths of its arrays) and writes at
+level), and, at any level, an array, Map or Set of more than a million entries. A Map is counted as the arrays
+it is written as: its list of pairs, and each pair an array of two, which below the fifth level is one more of
+those 1000. At every level one call copies at most two million entries in all (the keys of its objects plus the
+lengths of its arrays, so three to a Map's pair: one of more than 666,666 pairs loses its last pairs) and writes at
 most 2^26 (about 67 million) characters of string values, key names and BigInt text (sixteen to the digit); a
 value referenced again is counted again at each use, and what no longer fits is written as `[Truncated]`.
 A value that keeps its data outside its own properties is written readably, at any depth: an Error as its

@@ -1093,9 +1093,13 @@ describe('redactSecrets', () => {
       } finally {
         read.mockRestore();
       }
-      expect(
-        (redactSecrets(fourth(entries(999))) as { a: { b: { c: { d: { list: unknown[] } } } } }).a.b.c.d.list,
-      ).toHaveLength(999);
+      // Below the fifth level each pair array is one more node, and needs room for its two entries in what is left:
+      // the Map of 999 that fits takes 999 more nodes, so its last two pairs are written as [Truncated].
+      const pairs = Array.from({ length: 997 }, (_, key) => [key, 1]);
+      expect(redactSecrets(fourth(entries(999)))).toEqual(fourth([...pairs, '[Truncated]', '[Truncated]']));
+      expect(redactSecrets(fourth(new Set(Array.from({ length: 999 }, (_, key) => key))))).toEqual(
+        fourth(Array.from({ length: 999 }, (_, key) => key)),
+      );
       expect(redactSecrets(fourth(new Set(Array.from({ length: 1000 }, (_, key) => key))))).toEqual(
         fourth('[Truncated]'),
       );
@@ -1409,6 +1413,18 @@ describe('redactSecrets', () => {
       expect(whole.b).toHaveLength(999_998);
       expect(over.a).toHaveLength(1_000_000);
       expect(shown(over.b)).toBe('[Truncated]');
+    });
+
+    // A Map is written as the array of its pairs: its list takes one entry a pair and each pair array two more.
+    it('charges a Map three entries a pair and writes a pair that does not fit as [Truncated]', () => {
+      const pairs = (count: number): number[][] => Array.from({ length: count }, (_, key) => [key, key]);
+      const m = new Map(pairs(10) as [number, number][]);
+      // The top object has 3 keys and `a` takes a million, so `b` leaves `entries` for the Map.
+      const withRoom = (entries: number): unknown =>
+        (redactSecrets({ a: sparse(1_000_000), b: sparse(999_997 - entries), m }) as { m: unknown }).m;
+
+      expect(withRoom(30)).toEqual(pairs(10));
+      expect(withRoom(29)).toEqual([...pairs(9), '[Truncated]']);
     });
 
     it('still copies an empty object and an empty array once the entries are spent, and not an object with a key', () => {
