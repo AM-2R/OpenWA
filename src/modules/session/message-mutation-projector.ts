@@ -23,6 +23,8 @@ export class MessageMutationProjector {
     private readonly webhookService: WebhookService,
     private readonly messageMutations: KeyedMutationQueue,
     private readonly logger: LoggerService,
+    // Told of each row the marker below lands on.
+    private readonly onMarkedEdited: (sessionId: string, waMessageId: string) => void = () => undefined,
   ) {}
 
   /**
@@ -165,10 +167,11 @@ export class MessageMutationProjector {
 
   /** Keep the marker alongside existing reactions, media and quote metadata. */
   async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
-    await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
+    const marked = await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
       ...metadata,
       edited: true,
     }));
+    if (marked) this.onMarkedEdited(sessionId, waMessageId);
   }
 
   /**

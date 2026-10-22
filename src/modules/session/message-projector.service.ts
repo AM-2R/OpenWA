@@ -72,6 +72,9 @@ export const ACK_RECONCILE_DELAY_MS = 750;
  */
 export const PERSIST_RETRY_DELAY_MS = 300;
 
+/** How many of its messages marked edited a session remembers as marked (see markedEdited). */
+const EDITED_MARKS_KEPT_PER_SESSION = 500;
+
 /**
  * How a message insert ended: `yes` the row landed, `dup` a unique violation (`retried` says whether
  * it came from the retry, when the first attempt may have committed before its error), `failed` a
@@ -237,6 +240,11 @@ export class MessageProjector {
   // On PostgreSQL the entry exists from the message's arrival (admitInbound), before its emit.
   private readonly inboundInFlight = new Map<string, InFlightEntry>();
 
+  // Ids whose row was marked edited, by session, while it has an engine: an own message delivered again loses its
+  // insert to that row, and is announced with the mark without reading it (see commitOwnSendEcho). Never stored; past
+  // EDITED_MARKS_KEPT_PER_SESSION the oldest is forgotten, and a repeat of it goes out unmarked.
+  private readonly markedEdited = new Map<string, Set<string>>();
+
   // Reaction/edit applies, extracted to a plain collaborator. It shares this instance's
   // messageMutations queue, so the public enqueue path and the queued applies serialize on one chain.
   private readonly mutationProjector: MessageMutationProjector;
@@ -268,11 +276,20 @@ export class MessageProjector {
       this.webhookService,
       this.messageMutations,
       this.logger,
+      (sessionId, waMessageId) => this.noteMarkedEdited(sessionId, waMessageId),
     );
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
       this.deleteRoomIfIdle(id);
+      if (!this.engines.has(id)) this.markedEdited.delete(id);
     });
+  }
+
+  private noteMarkedEdited(sessionId: string, waMessageId: string): void {
+    let marks = this.markedEdited.get(sessionId);
+    if (!marks) this.markedEdited.set(sessionId, (marks = new Set()));
+    marks.add(waMessageId);
+    if (marks.size > EDITED_MARKS_KEPT_PER_SESSION) marks.delete(marks.values().next().value!);
   }
 
   /**
@@ -971,6 +988,7 @@ export class MessageProjector {
         return;
       }
       const result = await this.messageRepository.update({ sessionId, waMessageId }, REVOKED_ROW_PATCH);
+      this.markedEdited.get(sessionId)?.delete(waMessageId);
       if (!result?.affected || !notify) return;
       const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
       if (!row) return;
@@ -1150,6 +1168,7 @@ export class MessageProjector {
       resolveFeatureFlags(this.configService).storeEphemeralMessages ||
       !(outgoing.ephemeralDuration && outgoing.ephemeralDuration > 0);
 
+    let rowMarked = false;
     if (mayPersist) {
       const dbMessage = this.messageRepository.create({
         sessionId: id,
@@ -1175,8 +1194,19 @@ export class MessageProjector {
       const outcome = await this.insertWithRetry(id, engine, dbMessage, 'outgoing');
       if (outcome.landed === 'stale') return;
       // The REST writer may have won either attempt; its row still takes the echo's pending changes.
-      if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, outgoing.id, false, claimOf(outgoing));
+      if (outcome.landed === 'dup') {
+        this.applyChangesMadeInFlight(id, outgoing.id, false, claimOf(outgoing));
+        // That row may be older than this delivery and edited since, the edit still being written: announced once the
+        // changes queued for the message have run, with the mark they left.
+        rowMarked = await new Promise<boolean>(resolve =>
+          this.enqueueMessageMutation(id, outgoing.id, () =>
+            Promise.resolve(resolve(this.markedEdited.get(id)?.has(outgoing.id) === true)),
+          ),
+        );
+      }
       if (outcome.landed === 'yes') {
+        // The id had no row, so a mark remembered for it was of a row removed since.
+        this.markedEdited.get(id)?.delete(outgoing.id);
         this.applyChangesMadeInFlight(id, outgoing.id, insertedCleared);
         // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
         // composed sends exactly like API sends.
@@ -1201,9 +1231,10 @@ export class MessageProjector {
 
     const announced = this.withChangesMadeInFlight(id, finalMessage);
     if (!announced) return;
-    void this.webhookService.dispatch(id, 'message.sent', announced);
+    const sent = rowMarked ? { ...announced, edited: true as const } : announced;
+    void this.webhookService.dispatch(id, 'message.sent', sent);
     // Emit real-time event to WebSocket clients (as message.sent, not message.received)
-    this.eventsGateway.emitMessageSent(id, announced);
+    this.eventsGateway.emitMessageSent(id, sent);
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */

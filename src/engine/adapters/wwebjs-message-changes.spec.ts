@@ -140,18 +140,26 @@ describe.each([
   // The bodies the message:received and message:sent hooks were given, and a gate that holds the first of them.
   let hooked: string[];
   let hookGate: Promise<void> | undefined;
+  let engines: EngineRegistry;
+  let engine: IWhatsAppEngine;
+  let findOne: jest.Mock;
+  // Holds a row write the test names until the promise it returns settles.
+  let holdWrite: (patch: Row) => Promise<void> | undefined;
+  let projector: MessageProjector;
 
   beforeEach(() => {
     process.env.INBOUND_MEDIA_CONCURRENCY = '1';
     rows = [];
     hooked = [];
     hookGate = undefined;
+    holdWrite = () => undefined;
+    findOne = jest.fn(({ where }: { where: Row }) => Promise.resolve(rows.find(r => matches(r, where)) ?? null));
     // The real projector over a stand-in `messages` table, wired as the database wires it: only PostgreSQL
     // admits a message on arrival.
     const repo = {
       manager: { connection: { options: { type } } },
       find: jest.fn().mockResolvedValue([]),
-      findOne: jest.fn(({ where }: { where: Row }) => Promise.resolve(rows.find(r => matches(r, where)) ?? null)),
+      findOne,
       create: jest.fn((x: Row) => ({ ...x })),
       insert: jest.fn((row: Row) => {
         // As the real table's unique index refuses a second row under an id.
@@ -164,16 +172,20 @@ describe.each([
         return Promise.resolve({ identifiers: [{ id: `pk-${String(row.waMessageId)}` }], generatedMaps: [] });
       }),
       update: jest.fn((where: Row, patch: Row) => {
-        const hit = rows.filter(r => matches(r, where));
-        for (const r of hit) Object.assign(r, patch);
-        return Promise.resolve({ affected: hit.length });
+        const write = () => {
+          const hit = rows.filter(r => matches(r, where));
+          for (const r of hit) Object.assign(r, patch);
+          return { affected: hit.length };
+        };
+        const held = holdWrite(patch);
+        return held ? held.then(write) : Promise.resolve(write());
       }),
     };
     dispatch = jest.fn().mockResolvedValue(undefined);
-    const engines = new EngineRegistry();
-    const engine = {} as IWhatsAppEngine;
+    engines = new EngineRegistry();
+    engine = {} as IWhatsAppEngine;
     engines.set('s1', engine);
-    const projector = new MessageProjector(
+    projector = new MessageProjector(
       repo as unknown as Repository<Message>,
       { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>,
       engines,
@@ -578,6 +590,156 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'v1', metadata: { edited: true } })]);
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'v1', edited: true })]);
+  });
+
+  // An own message delivered again loses its insert to the row stored first, which an edit may have marked since.
+  const own = (id: string, body: string) => incoming(id, body, { fromMe: true });
+  const sentMarks = (): unknown[] => events('message.sent').map(m => m.edited);
+
+  it('announces an own message delivered again after its edit was stored with the mark', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', body: 'e0', metadata: { edited: true } })]);
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+
+    expect(events('message.sent')).toEqual([
+      expect.objectContaining({ body: 'orig' }),
+      expect.objectContaining({ body: 'e0', edited: true }),
+    ]);
+    expect(events('message.sent')[0]).not.toHaveProperty('edited');
+  });
+
+  it('announces an own message delivered again while its edit is written after that edit, with the mark', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    const write = deferred<void>();
+    holdWrite = patch => (patch.body === 'e0' ? write.promise : undefined);
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+    write.resolve();
+    await flush();
+
+    const announced = (dispatch.mock.calls as Array<[string, string, Row]>)
+      .filter(c => c[1] === 'message.sent' || c[1] === 'message.edited')
+      .map(c => `${c[1]} ${String(c[2].body)}${c[2].edited ? ' edited' : ''}`);
+    expect(announced).toEqual(['message.sent orig', 'message.edited e0', 'message.sent e0 edited']);
+  });
+
+  // A send made through the API stores its row before its echo comes, so the echo loses its insert.
+  it('announces the echo of a send the API stored unmarked, reading no row for it', async () => {
+    rows.push({ sessionId: 's1', waMessageId: 'S', chatId: CHAT, direction: 'outgoing', type: 'text', body: 'sent' });
+    client.emit('message_create', own('S', 'sent'));
+    await flush();
+
+    expect(events('message.sent')).toEqual([expect.objectContaining({ body: 'sent' })]);
+    expect(events('message.sent')[0]).not.toHaveProperty('edited');
+    expect(findOne).not.toHaveBeenCalled();
+  });
+
+  it('announces an own send edited during its media download with the mark each time it is delivered', async () => {
+    const media = download();
+    client.emit('message_create', incoming('S', 'sent', { page: media.page, fromMe: true }));
+    await flush();
+    editEvent(client, 'S', 'sent again', { media: true, fromMe: true });
+    await flush();
+    media.finish();
+    await flush();
+    const page = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    client.emit('message_create', incoming('S', 'sent again', { page, fromMe: true }));
+    await flush();
+
+    expect(events('message.sent').map(m => [m.body, m.edited])).toEqual([
+      ['sent again', true],
+      ['sent again', true],
+    ]);
+  });
+
+  it('announces an own message delivered again after its edit and its delete without the mark', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', type: 'revoked', metadata: null })]);
+    client.emit('message_create', { ...own('S', ''), type: 'revoked' });
+    await flush();
+
+    expect(sentMarks()).toEqual([undefined, undefined]);
+    expect(events('message.sent')[1]).not.toHaveProperty('edited');
+  });
+
+  it('announces an own message delivered again after its delete and an API edit of it without the mark', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+    await projector.recordOutboundMessageEdit('s1', 'S', 'e0', { kind: 'edit', chatId: CHAT, fromMe: true });
+    client.emit('message_create', { ...own('S', ''), type: 'revoked' });
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', type: 'revoked', metadata: null })]);
+    expect(sentMarks()).toEqual([undefined, undefined]);
+  });
+
+  it('announces an own message stored again after its row was removed without the mark of that row', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    // The chat was cleared: its rows are removed, and the message can be delivered again.
+    rows.length = 0;
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+
+    expect(sentMarks()).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('forgets the marks of a session once it has no engine', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    engines.delete('s1');
+    engines.set('s1', engine);
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+
+    expect(sentMarks()).toEqual([undefined, undefined]);
+  });
+
+  it('keeps the marks of a session whose engine was replaced', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    engines.set('s1', {} as IWhatsAppEngine);
+    engines.set('s1', engine);
+    client.emit('message_create', own('S', 'e0'));
+    await flush();
+
+    expect(sentMarks()).toEqual([undefined, true]);
+  });
+
+  it('keeps the marks of 500 messages of a session, forgetting the one marked first', async () => {
+    const ids = Array.from({ length: 501 }, (_, i) => `S${i}`);
+    for (const id of ids) {
+      rows.push({ sessionId: 's1', waMessageId: id, chatId: CHAT, direction: 'outgoing', type: 'text', body: 'orig' });
+      editEvent(client, id, 'e0', { fromMe: true });
+    }
+    await flush();
+    client.emit('message_create', own('S0', 'e0'));
+    client.emit('message_create', own('S1', 'e0'));
+    client.emit('message_create', own('S500', 'e0'));
+    await flush();
+
+    expect(sentMarks()).toEqual([undefined, true, true]);
   });
 });
 
