@@ -75,3 +75,14 @@ test('an @ field without a WhatsApp chat id shape is dropped, so an email column
     ['628123456789@s.whatsapp.net', '120363123456789@newsletter', '628123456789:12@lid'],
   );
 });
+
+// A list pasted from an Arabic or a CJK source carries the digits of that script.
+test('a number written in native-script or full-width digits is read as ASCII digits', () => {
+  const toDigits = (ascii: string, zero: number) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+  assert.deepEqual(parseBulkRecipients(toDigits('628123456789', 0x0660)), ['628123456789@c.us']);
+  assert.deepEqual(parseBulkRecipients(toDigits('628123456789', 0xff10)), ['628123456789@c.us']);
+  assert.deepEqual(parseBulkRecipients(`${toDigits('628111222333', 0x0966)}\n628222333444`), [
+    '628111222333@c.us',
+    '628222333444@c.us',
+  ]);
+});

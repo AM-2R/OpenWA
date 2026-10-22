@@ -30,6 +30,7 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { GroupPicker } from '../components/GroupPicker';
 import { groupLabel, isGatewayRefusal, planGroupSend } from '../utils/groupSelection';
+import { normalizePhoneText } from '../utils/phone';
 import { sendSequentially } from '../utils/sendSequentially';
 import { keepsSameKey } from '../utils/authLifecycle';
 import './MessageTester.css';
@@ -507,7 +508,7 @@ export function MessageTester() {
       // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
       let chatId = targetId;
       if (messageType !== 'bulk' && recipientType !== 'group') {
-        const resolved = await contactApi.checkNumber(session, targetId.replace(/[^0-9]/g, ''));
+        const resolved = await contactApi.checkNumber(session, normalizePhoneText(targetId).replace(/[^0-9]/g, ''));
         assertCurrent();
         if (!resolved.exists || !resolved.whatsappId) {
           setResponse({
@@ -589,7 +590,10 @@ export function MessageTester() {
             // through the same check-number flow as the main recipient.
             let toChatId = forwardTo.trim();
             if (!toChatId.includes('@')) {
-              const resolvedTo = await contactApi.checkNumber(session, toChatId.replace(/[^0-9]/g, ''));
+              const resolvedTo = await contactApi.checkNumber(
+                session,
+                normalizePhoneText(toChatId).replace(/[^0-9]/g, ''),
+              );
               assertCurrent();
               if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));
               toChatId = resolvedTo.whatsappId;

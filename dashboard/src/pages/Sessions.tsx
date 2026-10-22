@@ -53,6 +53,7 @@ import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
 import './Sessions.css';
 import { formatLastActive, formatSessionStatus } from '../utils/sessionDisplay';
+import { normalizePhoneText } from '../utils/phone';
 
 /**
  * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
@@ -884,7 +885,7 @@ export function Sessions() {
                       maxLength={15}
                       placeholder={t('sessions.pairing.phonePlaceholder')}
                       value={phoneNumber}
-                      onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                      onChange={e => setPhoneNumber(normalizePhoneText(e.target.value).replace(/\D/g, ''))}
                       onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
                     />
                     <p className="input-hint" style={{ marginBottom: '1.5rem' }}>

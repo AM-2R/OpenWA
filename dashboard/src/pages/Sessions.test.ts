@@ -635,6 +635,26 @@ test('a typed pairing phone number survives toggling to the QR tab and back', as
   );
 });
 
+// The pairing field keeps digits only, so a number typed in another script has to be read, not dropped.
+test('a pairing phone number typed in native-script or full-width digits is kept as ASCII digits', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+  await screen.findByAltText('QR');
+  fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+
+  for (const zero of [0x0660, 0xff10]) {
+    const typed = [...'919876543210'].map(d => String.fromCharCode(zero + Number(d))).join('');
+    fireEvent.change(phoneInput, { target: { value: typed } });
+    assert.equal(phoneInput.value, '919876543210');
+  }
+});
+
 // Nothing server-side refuses a pairing code for a number linked elsewhere, so the panel has to say
 // what it can cost before the operator types one.
 test('the phone pairing tab warns that a code can unlink an existing session', async () => {

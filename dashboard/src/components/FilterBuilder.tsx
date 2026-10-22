@@ -10,6 +10,7 @@ import {
   type WebhookFilterOperator,
 } from '../services/api';
 import { filterValueLabel } from '../utils/enumLabels';
+import { normalizePhoneText } from '../utils/phone';
 import { MAX_FILTER_CONDITIONS, MAX_FILTER_TEXT_LENGTH } from '../utils/webhookFilters';
 import './FilterBuilder.css';
 
@@ -60,7 +61,7 @@ function normalizeToJid(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
   if (value.includes('@')) return value.toLowerCase();
-  const digits = value.replace(/[^0-9]/g, '');
+  const digits = normalizePhoneText(value).replace(/[^0-9]/g, '');
   return digits ? `${digits}@c.us` : null;
 }
 

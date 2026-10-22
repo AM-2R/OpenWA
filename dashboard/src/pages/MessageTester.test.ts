@@ -1031,6 +1031,48 @@ for (const mode of ['text', 'forward'] as const) {
   }
 }
 
+// The recipient and a forward target are resolved through the number check, which takes ASCII digits only.
+for (const [script, zero] of [
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a recipient and a forward target typed in ${script} digits are looked up as ASCII digits`, async () => {
+    const checked: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+      if (path.includes('/contacts/check/')) {
+        const number = path.split('/contacts/check/')[1];
+        checked.push(number);
+        return jsonResponse({ number, exists: true, whatsappId: `${number}@c.us` });
+      }
+      if (path.includes('/messages/')) return jsonResponse({ messageId: 'sent', timestamp: 1 });
+      return jsonResponse([]);
+    }) as typeof fetch;
+    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_user_role', 'operator');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+    const view = rtl.render(
+      createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+    );
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      const native = (ascii: string) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+      type(view.container, '#mt-13', native('15550000001'));
+      rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+      type(view.container, '#mt-9', native('15550000002'));
+      type(view.container, '#mt-10', 'original-message');
+      await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.equal(checked.length, 2));
+      assert.deepEqual(checked, ['15550000001', '15550000002']);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
