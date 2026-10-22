@@ -355,15 +355,29 @@ describe('IngressProcessor while the plugin is still being restored', () => {
     expect(moveToDelayed).toHaveBeenCalledTimes(1);
     const [when, token] = moveToDelayed.mock.calls[0] as [number, string];
     expect(token).toBe('tok-1');
-    // The retry delay, 5 s by default, with nothing added to it.
-    expect(when).toBeGreaterThanOrEqual(before + 5000);
+    // The next multiple of the retry delay, 5 s by default, with nothing added to it.
+    expect(when % 5000).toBe(0);
+    expect(when).toBeGreaterThan(before);
     expect(when).toBeLessThanOrEqual(Date.now() + 5000);
     expect(loader.dispatchWebhookForInstance).not.toHaveBeenCalled();
     expect(failures.save).not.toHaveBeenCalled();
     expect(hooks.execute).not.toHaveBeenCalled();
   });
 
-  it('waits at least a second even when the retry delay is configured as 0', async () => {
+  it('waits for the next multiple of the delay, never for the instant it is held', async () => {
+    const { proc } = build(true);
+    const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(10_000);
+    try {
+      await expect(proc.process(job({ moveToDelayed }), 'tok-4')).rejects.toBeInstanceOf(DelayedError);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(moveToDelayed).toHaveBeenCalledWith(15_000, 'tok-4');
+  });
+
+  it('keeps to a grid of at least a second even when the retry delay is configured as 0', async () => {
     const original = process.env.INGRESS_RETRY_DELAY_MS;
     process.env.INGRESS_RETRY_DELAY_MS = '0';
     try {
@@ -373,56 +387,104 @@ describe('IngressProcessor while the plugin is still being restored', () => {
 
       await expect(proc.process(job({ moveToDelayed }), 'tok-2')).rejects.toBeInstanceOf(DelayedError);
 
-      expect((moveToDelayed.mock.calls[0] as [number])[0] - before).toBeGreaterThanOrEqual(1000);
+      // A grid of a second at least, not a delay of "now", which is promoted straight back and would spin.
+      const [when] = moveToDelayed.mock.calls[0] as [number];
+      expect(when % 1000).toBe(0);
+      expect(when).toBeGreaterThan(before);
+      expect(when).toBeLessThanOrEqual(Date.now() + 1000);
     } finally {
       if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
       else process.env.INGRESS_RETRY_DELAY_MS = original;
     }
   });
 
-  // BullMQ promotes delayed jobs in order of their due time, so jobs held for the same length of time come back in
-  // the order they were held. A random addition to each delay would put two deliveries of one conversation in a
-  // random order once the restore is over.
-  it('brings the jobs of one conversation back in the order they were held, whatever the random draw', async () => {
-    let restoring = true;
-    const dispatched: string[] = [];
-    const loader = {
-      isRestorePending: jest.fn(() => restoring),
-      dispatchWebhookForInstance: jest.fn((d: { deliveryId: string }) => {
-        dispatched.push(d.deliveryId);
-        return Promise.resolve();
-      }),
-    };
-    const proc = new IngressProcessor(loader as never, {} as never, {} as never, {} as never, {} as never);
-    const held: Array<{ id: string; when: number }> = [];
-    const heldJob = (id: string) =>
-      job({
-        data: {
-          pluginId: 'chatwoot',
-          instanceId: 'acct1',
-          route: 'chatwoot',
-          deliveryId: id,
-          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
-        },
-        moveToDelayed: jest.fn((when: number) => {
-          held.push({ id, when });
+  // BullMQ promotes the delayed jobs that are due in order of their due time, equal ones in the order they were delayed,
+  // and a job that finds the plugin still restoring is delayed again. A fixed delay from "now" gives two deliveries that
+  // arrived a fraction of a period apart polls a fraction of a period apart, so a restore that ends between the polls lets
+  // the later one through first. The test plays that out on a clock of its own: a then b, 30% of a period apart, and a
+  // restore that ends between the polls a fixed delay would give them.
+  describe.each([1000, 5000])('with a retry delay of %i ms', period => {
+    const original = process.env.INGRESS_RETRY_DELAY_MS;
+    beforeEach(() => {
+      process.env.INGRESS_RETRY_DELAY_MS = String(period);
+    });
+    afterEach(() => {
+      if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+      else process.env.INGRESS_RETRY_DELAY_MS = original;
+    });
+
+    const [arrivesA, arrivesB, restoreEnds] = [2.4 * period, 2.7 * period, 3.55 * period];
+
+    const playOut = async (): Promise<{ dispatched: string[]; dues: number[] }> => {
+      let now = arrivesA;
+      const dispatched: string[] = [];
+      const loader = {
+        isRestorePending: jest.fn(() => now < restoreEnds),
+        dispatchWebhookForInstance: jest.fn((d: { deliveryId: string }) => {
+          dispatched.push(d.deliveryId);
           return Promise.resolve();
         }),
-      });
-    const [first, second] = [heldJob('a'), heldJob('b')];
-    // The first job draws the larger number, which is what would make it fall due after the second.
-    const random = jest.spyOn(Math, 'random').mockReturnValueOnce(0.9).mockReturnValueOnce(0.1);
-    try {
-      await expect(proc.process(first, 'tok-a')).rejects.toBeInstanceOf(DelayedError);
-      await expect(proc.process(second, 'tok-b')).rejects.toBeInstanceOf(DelayedError);
-      restoring = false;
-      // The restore is over: the jobs fall due in the order of their due time.
-      for (const { id } of [...held].sort((x, y) => x.when - y.when)) await proc.process(id === 'a' ? first : second);
-    } finally {
-      random.mockRestore();
-    }
+      };
+      const proc = new IngressProcessor(loader as never, {} as never, {} as never, {} as never, {} as never);
+      const delayed: Array<{ id: string; when: number; seq: number }> = [];
+      const jobs = new Map<string, ReturnType<typeof job>>();
+      for (const id of ['a', 'b']) {
+        jobs.set(
+          id,
+          job({
+            data: {
+              pluginId: 'chatwoot',
+              instanceId: 'acct1',
+              route: 'chatwoot',
+              deliveryId: id,
+              payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+            },
+            moveToDelayed: jest.fn((when: number) => {
+              delayed.push({ id, when, seq: delayed.length });
+              return Promise.resolve();
+            }),
+          }),
+        );
+      }
+      const run = async (id: string): Promise<void> => {
+        await proc.process(jobs.get(id) as never, `tok-${id}`).catch((error: unknown) => {
+          if (!(error instanceof DelayedError)) throw error;
+        });
+      };
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      // Random draws that would put a before b if they were added to the delay.
+      const random = jest.spyOn(Math, 'random').mockReturnValueOnce(0.9).mockReturnValueOnce(0.1);
+      try {
+        await run('a');
+        now = arrivesB;
+        await run('b');
+        const dues = delayed.map(entry => entry.when);
+        // The jobs due first run first, equal due times in the order they were delayed.
+        for (let wakes = 0; dispatched.length < 2 && wakes < 20; wakes++) {
+          delayed.sort((x, y) => x.when - y.when || x.seq - y.seq);
+          const next = delayed.shift();
+          if (!next) break;
+          now = next.when;
+          await run(next.id);
+        }
+        return { dispatched, dues };
+      } finally {
+        clock.mockRestore();
+        random.mockRestore();
+      }
+    };
 
-    expect(dispatched).toEqual(['a', 'b']);
+    it('brings two deliveries of one conversation back in the order they arrived', async () => {
+      const { dispatched } = await playOut();
+
+      expect(dispatched).toEqual(['a', 'b']);
+    });
+
+    it('delays them to the next multiple of the delay, so jobs held at different moments wake together', async () => {
+      const { dues } = await playOut();
+
+      expect(dues).toEqual([3 * period, 3 * period]);
+    });
   });
 
   it('dispatches as usual once the restore is done with the plugin', async () => {
