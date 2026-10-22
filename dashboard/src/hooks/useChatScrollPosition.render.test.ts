@@ -617,6 +617,59 @@ test('a message announced while its chat is still loading does not override wher
   }
 });
 
+// A chat dropped from the cache reopens with a spinner, and the composer is live meanwhile: what the reader sends then
+// lands with the first page, and the chat opens on it rather than on the spot they left.
+test('a message the reader sends while a chat with a saved spot loads opens the chat at it', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the spot the reader left in A
+    rerender(createElement(Probe, { chatId: null }));
+
+    g.height = CLIENT_HEIGHT;
+    rerender(createElement(Probe, { chatId: 'A', loaded: false }));
+    hook().onMessageAppended('outgoing');
+    g.height = 4900; // the first page, with the message sent meanwhile
+    rerender(createElement(Probe, { chatId: 'A', loaded: true }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the message the reader sent was left below the fold');
+
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader leaves A at its bottom
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'A reopened at the old spot instead of at the bottom');
+  } finally {
+    restore();
+  }
+});
+
+test('a message sent in a loading chat the reader then left does not move the next chat', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'B' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1000); // the spot the reader left in B
+    rerender(createElement(Probe, { chatId: null }));
+
+    g.height = CLIENT_HEIGHT;
+    rerender(createElement(Probe, { chatId: 'A', loaded: false }));
+    hook().onMessageAppended('outgoing');
+    g.height = 4600;
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader opens B before A has loaded
+    assert.equal(el.scrollTop, 1000, 'B did not open at the spot the reader left');
+  } finally {
+    restore();
+  }
+});
+
 // ── Media decoding ───────────────────────────────────────────────────────────
 // Media has no box before it decodes, so a thread grows after it was positioned.
 

@@ -3543,6 +3543,55 @@ test('a message sent from the page scrolls a chat reopened at its saved spot to 
   }
 });
 
+test('a message sent while a chat with a saved spot loads again opens the chat at it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  // Forty more of Alice's messages, so her thread scrolls.
+  firstPageExtra = Array.from({ length: 40 }, (_, i) => ({
+    ...DB_MESSAGE,
+    id: `db-extra-${i}`,
+    waMessageId: `wamid.extra.${i}`,
+    body: `alice extra ${i}`,
+    timestamp: 1_700_000_100 + i,
+    createdAt: new Date((1_700_000_100 + i) * 1000).toISOString(),
+  }));
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    await screen.findByText('Main (15551234567)');
+    fireEvent.click(await screen.findByText('Alice'));
+    const thread = container.querySelector('.room-messages') as HTMLElement;
+    await within(thread).findByText('alice extra 39');
+    thread.scrollTop = 300; // the reader's spot in Alice's thread
+    fireEvent.scroll(thread);
+
+    fireEvent.click(await screen.findByText('Carol'));
+    await within(thread).findByText('paged message 119');
+    // Alice's thread leaves the cache while the reader is elsewhere, and her first page is slow to come back.
+    queryClient!.removeQueries({ queryKey: ['messages', SESSION.id, CHAT.id] });
+    let releaseFirstPage!: () => void;
+    firstPageGate = new Promise<void>(resolve => {
+      releaseFirstPage = resolve;
+    });
+    fireEvent.click(await screen.findByText('Alice'));
+    await waitFor(() => assert.ok(thread.querySelector('.messages-loading')));
+
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'sent while loading' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => assert.ok(findFetchCall('POST', `/api/sessions/${SESSION.id}/messages/send-text`)));
+    await flush();
+    releaseFirstPage();
+    await within(thread).findByText('sent while loading');
+    assert.equal(
+      thread.scrollTop,
+      thread.scrollHeight - thread.clientHeight,
+      'the message sent while the chat loaded was left below the fold',
+    );
+  } finally {
+    restoreGeometry();
+  }
+});
+
 // ── Live feed subscription ───────────────────────────────────────────────────
 
 const MESSAGE_FEED_EVENTS = [

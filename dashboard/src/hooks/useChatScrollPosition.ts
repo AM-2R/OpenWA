@@ -190,6 +190,8 @@ export function useChatScrollPosition(
   const wasFetchingOlderRef = useRef<boolean>(false);
   // The element the reader was on when the older page was requested; see the landing effect.
   const olderAnchorRef = useRef<{ node: Element; top: number } | null>(null);
+  // The chat whose thread was still loading when the reader sent a message in it, until its restore decision.
+  const sentWhileLoadingRef = useRef<string | null>(null);
   // Box height of each mounted media element, recorded at DOM insertion: the one moment a browser
   // guarantees is before the decode. A WeakMap so entries die with the nodes on a chat switch.
   const mediaHeights = useRef(new WeakMap<Element, number>());
@@ -263,9 +265,15 @@ export function useChatScrollPosition(
     if (next !== prevChatIdRef.current) awaitingOlderPageRef.current = false;
 
     const decision = decideRestoreTarget(next, isLoaded, next !== null ? scrollMap.current.get(next) : undefined);
+    // A message the reader sent while this chat loaded opens it at that message, the way a send in a loaded chat
+    // scrolls to it. Only in the chat it was sent in: the next restore decision, in whichever chat, forgets it.
+    const sentWhileLoading = sentWhileLoadingRef.current === next;
+    if (decision.restore !== null) sentWhileLoadingRef.current = null;
 
     if (el) {
-      if (decision.restore === 'saved' && next !== null) {
+      if (decision.restore !== null && sentWhileLoading) {
+        followBottom(el);
+      } else if (decision.restore === 'saved' && next !== null) {
         const saved = scrollMap.current.get(next);
         if (saved !== undefined) {
           pendingRestoreRef.current = saved; // re-applied on media loads until the user scrolls
@@ -279,7 +287,7 @@ export function useChatScrollPosition(
 
     prevChatIdRef.current = next;
     loadedRef.current = isLoaded;
-  }, [activeChatId, isLoaded, pinToBottom, writeScrollTop]);
+  }, [activeChatId, isLoaded, followBottom, pinToBottom, writeScrollTop]);
 
   // Older messages are prepended ABOVE the viewport, so the thread grows upward and what the user
   // was reading is pushed down by however much taller it just got. Left alone the view jumps
@@ -367,8 +375,11 @@ export function useChatScrollPosition(
     // A chat that has not rendered its thread has nothing to follow: the restore decides where it opens. Nor has one
     // that is still on its way to a saved spot, for a message that arrives: the short, undecoded thread reads as at
     // the bottom, and following it would drop the saved spot the next decode puts the reader back on. A message the
-    // reader sends themselves always scrolls, saved spot or not.
-    if (!el || !loadedRef.current) return;
+    // reader sends themselves always scrolls, saved spot or not, and one sent while the thread loads opens it there.
+    if (!el || !loadedRef.current) {
+      if (direction === 'outgoing') sentWhileLoadingRef.current = prevChatIdRef.current;
+      return;
+    }
     if (direction === 'incoming' && pendingRestoreRef.current !== null) return;
     const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
     if (decideScroll(direction, geometry) === 'preserve') return;
