@@ -674,6 +674,23 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     await flush();
   });
 
+  // An id that could not be read keys nothing: two such messages in flight must not share what is kept for either.
+  it('hands over each of two messages whose id could not be read with its own text', async () => {
+    const { client, order, bodies } = wire();
+    const first = deferred<null>();
+    const second = deferred<null>();
+    client.emit('message', { ...incoming('x', 'first text', { contact: first.promise }), id: {} });
+    client.emit('message', { ...incoming('x', 'second text', { contact: second.promise }), id: {} });
+    editEvent(client, '', 'an edit of neither');
+    expect(order).toEqual(['edit  an edit of neither']);
+
+    second.resolve(null);
+    first.resolve(null);
+    await flush();
+
+    expect(bodies).toEqual(['second text', 'first text']);
+  });
+
   it('hands over neither delivery of an id that was deleted meanwhile', async () => {
     const { client, order, bodies } = wire();
     const first = deferred<null>();
