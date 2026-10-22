@@ -135,6 +135,13 @@ case "$RESOLVED_CWD/" in
     exit 1
     ;;
 esac
+# The root directory under a name no path comparison recognises is refused by identity: a bind mount of /, or
+# a link whose name is not valid UTF-8, which node reads back with replacement characters so that the
+# resolution above misses it. test -ef compares device and inode, as the kernel does.
+if [ "$DATA_DIR" -ef / ]; then
+  log "ERROR: refusing unsafe OPENWA_DATA_DIR target: $DATA_DIR"
+  exit 1
+fi
 if [ "$RESOLVED_DATA_DIR" = "$RESOLVED_USER_HOME" ]; then
   log "ERROR: OPENWA_DATA_DIR must not be the user home directory: $DATA_DIR"
   exit 1
@@ -151,7 +158,7 @@ refuse_unwritable() {
 # snapshotted with cp -pRH, which copies the whole filesystem into a directory inside it, and a root user can
 # write there. Checked first in the snapshot phase, ahead of the writability test a non-root user stops at.
 refuse_root_target() {
-  if [ "$(resolve_path "$1")" = / ]; then
+  if [ "$(resolve_path "$1")" = / ] || [ "$1" -ef / ]; then
     log "ERROR: refusing to replace broad $2 target: $1"
     exit 1
   fi
@@ -168,7 +175,7 @@ replace_tree() {
       ;;
   esac
   resolved_target="$(resolve_path "$target_dir")"
-  if [ "$resolved_target" = "/" ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
+  if [ "$resolved_target" = "/" ] || [ "$target_dir" -ef / ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
     log "ERROR: refusing to replace broad $label target: $target_dir"
     exit 1
   fi

@@ -71,14 +71,14 @@
 #   (am) restore refuses an OPENWA_DATA_DIR that is ., ./, .., ../, /, the working directory, a parent of
 #       it, a link to it or the home directory, before it reads the archive; and, behind a cp that
 #       stops at /, //, /., /./, /.. and a link to / with or without a trailing .., or a link whose
-#       target ends in one (the / cases are skipped where a user can write /); on a filesystem that
-#       ignores case, the workspace's parent typed in other case
+#       target ends in one, or a link to / whose name is not valid UTF-8 (the / cases are skipped where
+#       a user can write /); on a filesystem that ignores case, the workspace's parent typed in other case
 #   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to / with or without a
-#       trailing .. or through a link whose target ends in one, the working directory (also through
-#       such a link), the data dir, the home directory or a directory around the workspace or the data
-#       dir, before it replaces anything (the data-dir safety snapshot is taken first; the / cases are
-#       skipped where a user can write /); on a filesystem that ignores case or Unicode form, the
-#       workspace's parent typed in another spelling
+#       trailing .. or through a link whose target ends in one, or whose name is not valid UTF-8, the
+#       working directory (also through such a link), the data dir, the home directory or a directory
+#       around the workspace or the data dir, before it replaces anything (the data-dir safety snapshot
+#       is taken first; the / cases are skipped where a user can write /); on a filesystem that ignores
+#       case or Unicode form, the workspace's parent typed in another spelling
 #   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
@@ -86,8 +86,9 @@
 #       link points at and beside the link's own name, and an external database's are kept in its
 #       snapshot
 #   (ar) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that is /, //, /., a
-#       link to /, one of those followed by .. or a link whose target ends in one, ahead of the
-#       writability check a non-root user would stop at (skipped where a user can write /)
+#       link to /, one of those followed by .. or a link whose target ends in one, or a link to / whose
+#       name is not valid UTF-8, ahead of the writability check a non-root user would stop at (skipped
+#       where a user can write /)
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2443,6 +2444,18 @@ EOF
   am_root "link to / and .." "$AM/links/rootlink/.."
   am_root "link to a link to / and .." "$AM/links/rootlink2/.."
   am_root "link to a directory holding a link to / and .." "$AM/links/self/rootlink/.."
+  # A name that is not valid UTF-8 is read back by node with replacement characters, so no path comparison finds
+  # the link; only the identity of the directory it names does. Skipped where the filesystem refuses such a name
+  # (APFS does).
+  BAD_LINK="$WORK/badlinks/$(printf 'bad\377name')"
+  mkdir -p "$WORK/badlinks"
+  ln -s / "$BAD_LINK" 2>/dev/null || BAD_LINK=""
+  if [ -n "$BAD_LINK" ]; then
+    am_refused "$AM" "am: link to / with a name that is not valid UTF-8" 'refusing unsafe OPENWA_DATA_DIR target' \
+      "$AM/work" "$ARCHIVE_AM" PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$BAD_LINK"
+  else
+    echo "SKIP: (am) the link to / with a name that is not valid UTF-8, which needs a filesystem that accepts one"
+  fi
   am_root "link whose target is a link to / and .." "$AM/links/up"
   am_root "link to a link whose target is a link to / and .." "$AM/links/up2"
   pass "(am) //, /., /./, /.., links to / and links whose target ends in a link to / plus .. are refused as OPENWA_DATA_DIR, before the archive is read"
@@ -2527,6 +2540,10 @@ if [ "$ROOT_SAFE" -eq 1 ]; then
     SESSION_DATA_PATH="$AN/work/data/sub/rootlink/.."
   refused_restore "$AN" "an: link whose target is a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
     SESSION_DATA_PATH="$AN/rootlink/up"
+  if [ -n "${BAD_LINK:-}" ]; then
+    refused_restore "$AN" "an: link to / with a name that is not valid UTF-8" "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
+      SESSION_DATA_PATH="$BAD_LINK"
+  fi
   refused_restore "$AN" "an: link to a link whose target is a link to / and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_AM" \
     SESSION_DATA_PATH="$AN/rootlink/up2"
   pass "(an) / and a link to / with or without a trailing .. are refused as a state dir"
@@ -2674,7 +2691,7 @@ if [ "$ROOT_SAFE" -eq 1 ]; then
   for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
     ar_var="${target%% *}"
     ar_label="${target#* }"
-    for ar_spelling in / // /. "$AR/links/rootlink" "$AR/links/rootlink/.." "$AR/links/rootlink2/.." "$AR/links/up" "$AR/links/up2"; do
+    for ar_spelling in / // /. "$AR/links/rootlink" "$AR/links/rootlink/.." "$AR/links/rootlink2/.." "$AR/links/up" "$AR/links/up2" ${BAD_LINK:+"$BAD_LINK"}; do
       refused_restore "$AR" "ar: $ar_var=$ar_spelling" "refusing to replace broad $ar_label target" "$AR/work" "$ARCHIVE_AP" \
         PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$AR/work/data" "$ar_var=$ar_spelling"
     done
