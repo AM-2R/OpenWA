@@ -8,7 +8,7 @@ export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'err
 
 export interface RestartOpenRequest {
   profiles: string[];
-  // The built-in profiles running now; the restart stops each one the new config no longer needs.
+  // The built-in profiles to stop: the restart stops each one the new config does not start.
   running: string[];
   dbSwitch: boolean;
   storageSwitch: boolean;
@@ -26,6 +26,8 @@ export interface RestartFlow {
   restartWarnings: string[];
   pendingProfiles: string[];
   runningProfiles: string[];
+  /** What Restart Now asks the server to stop: the running profiles the new config does not start. */
+  profilesToRemove: string[];
   dbSwitch: boolean;
   storageSwitch: boolean;
   open: (req: RestartOpenRequest) => void;
@@ -142,12 +144,12 @@ export function useRestartFlow(): RestartFlow {
     schedulePollTimeout(check, 3000);
   };
 
+  const profilesToRemove = profiles.running.filter(p => !profiles.pending.includes(p));
+
   const start = async () => {
     setRestartStatus('restarting');
     setRestartCountdown(30);
     setRestartTotal(30);
-
-    const profilesToRemove = profiles.running.filter(p => !profiles.pending.includes(p));
 
     // Kept outside the try: the poll deadline is derived from it, and the restart call is expected to
     // fail sometimes (the server may go down before it answers).
@@ -211,6 +213,7 @@ export function useRestartFlow(): RestartFlow {
     restartWarnings,
     pendingProfiles: profiles.pending,
     runningProfiles: profiles.running,
+    profilesToRemove,
     dbSwitch,
     storageSwitch,
     open,

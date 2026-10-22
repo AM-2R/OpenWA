@@ -1233,6 +1233,7 @@
       "successTitle": "Server ready",
       "errorTitle": "Restart failed",
       "idleDesc": "Configuration has been saved to <code>.env.generated</code>.<br/>A server restart is required to apply the changes.",
+      "stopsContainers": "The restart also stops these built-in containers: {{names}}. They are kept with their data, not deleted.",
       "later": "Restart Later",
       "now": "Restart Now",
       "restartingMsg": "Server restarting... {{count}}s",

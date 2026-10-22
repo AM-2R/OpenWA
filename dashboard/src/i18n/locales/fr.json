@@ -1220,6 +1220,7 @@
       "successTitle": "✅ Serveur prêt",
       "errorTitle": "❌ Échec du redémarrage",
       "idleDesc": "La configuration a été enregistrée dans <code>.env.generated</code>.<br/>Un redémarrage du serveur est nécessaire pour appliquer les modifications.",
+      "stopsContainers": "Le redémarrage arrêtera aussi ces conteneurs intégrés : {{names}}. Ils sont conservés avec leurs données, pas supprimés.",
       "later": "Redémarrer plus tard",
       "now": "Redémarrer maintenant",
       "restartingMsg": "Redémarrage du serveur... {{count}}s",

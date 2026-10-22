@@ -95,6 +95,8 @@ const CURRENT_ENGINE = { engineType: 'whatsapp-web.js' };
 let overrides: {
   status?: InfraStatus;
   saved?: SavedConfig;
+  // What /config reports once a save went through (the file that save wrote), when it differs from `saved`.
+  savedAfterSave?: SavedConfig;
   savedFails?: boolean;
   statusFails?: boolean;
   currentEngine?: { engineType: string };
@@ -170,6 +172,9 @@ function installFetchStub(): void {
     }
     if (method === 'GET' && path === '/api/infra/config') {
       if (overrides.savedFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
+      if (overrides.savedAfterSave && findFetchCall('PUT', '/api/infra/config')) {
+        return Promise.resolve(jsonResponse(overrides.savedAfterSave));
+      }
       return Promise.resolve(jsonResponse(overrides.saved ?? SAVED_CONFIG));
     }
     if (method === 'GET' && path === '/api/infra/engines') return Promise.resolve(jsonResponse(ENGINES));
@@ -805,6 +810,7 @@ test('a switch from bundled to external services is warned of and stops the bund
   };
   assert.deepEqual([body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn], [false, false, false]);
 
+  within(dialog).getByText(STOPS_ALL_THREE);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
   assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, {
@@ -812,6 +818,9 @@ test('a switch from bundled to external services is warned of and stops the bund
     profilesToRemove: ['postgres', 'redis', 'minio'],
   });
 });
+
+const STOPS_ALL_THREE =
+  'The restart also stops these built-in containers: openwa-postgres, openwa-redis, openwa-minio. They are kept with their data, not deleted.';
 
 const PENDING_BUILT_IN_NOTE =
   'Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.';
@@ -1843,6 +1852,56 @@ test('turning a running built-in Redis off asks the restart to stop its containe
       ...SAVED_CONFIG,
       redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
     },
+    savedAfterSave: {
+      ...SAVED_CONFIG,
+      redis: {
+        enabled: true,
+        builtIn: false,
+        builtInSet: true,
+        host: 'cache.example.com',
+        port: '6379',
+        passwordSet: false,
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  const builtInRedis = toggleInput(container, 'Use Built-in Redis Container');
+  await waitFor(() => assert.equal(builtInRedis.checked, true));
+  fireEvent.click(builtInRedis);
+  fireEvent.change(fieldInput(card(container, 'Redis'), 'Host'), { target: { value: 'cache.example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  within(dialog).getByText(/stops these built-in containers: openwa-redis\./);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  // The page reloads after every restart, so the first save of a page visit is the normal case: the
+  // container to stop must come from what is running, not from an earlier save on this page.
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: ['redis'] });
+});
+
+function card(container: HTMLElement, heading: string): HTMLElement {
+  const found = Array.from(container.querySelectorAll<HTMLElement>('.infra-card')).find(
+    c => c.querySelector('h2')?.textContent === heading,
+  );
+  if (!found) throw new Error(`no card headed "${heading}"`);
+  return found;
+}
+
+// The restart never stops a container the next boot still reaches, read from the file the save wrote, so the page
+// asks for and names only the others.
+test('a built-in Redis switched off but left on the bundled host is neither stopped nor named', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const redis = { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false };
+  overrides = {
+    status: { ...INFRA_STATUS, redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true } },
+    saved: { ...SAVED_CONFIG, redis },
+    savedAfterSave: { ...SAVED_CONFIG, redis: { ...redis, builtIn: false } },
   };
   const { container } = renderInfrastructure();
 
@@ -1854,12 +1913,131 @@ test('turning a running built-in Redis off asks the restart to stop its containe
   fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
 
   const dialog = await screen.findByRole('dialog');
+  assert.doesNotMatch(dialog.textContent ?? '', /openwa-/);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
-
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
-  // The page reloads after every restart, so the first save of a page visit is the normal case: the
-  // container to stop must come from what is running, not from an earlier save on this page.
-  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: ['redis'] });
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: [] });
+});
+
+test('bundled containers the environment pins the hosts to are neither stopped nor named', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_BUNDLED, envPinned: ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT'] },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, builtIn: true, builtInSet: false, host: 'postgres' },
+      redis: { enabled: true, builtIn: true, builtInSet: false, host: 'redis', port: '6379', passwordSet: false },
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        builtIn: true,
+        builtInSet: false,
+        s3Endpoint: 'http://minio:9000',
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.doesNotMatch(dialog.textContent ?? '', /openwa-/);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: [] });
+});
+
+// Containers the dashboard created, then the environment pinned the three hosts to external services: the next boot
+// uses none of them, and the save still asks for the profiles of the stored built-in flags.
+const PINNED_AWAY: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: true, type: 'postgres', host: 'db.ext.example', builtIn: false, running: true },
+  redis: { enabled: true, connected: true, host: 'cache.ext.example', port: 6379, builtIn: false, running: true },
+  storage: {
+    type: 's3',
+    bucket: 'media',
+    endpoint: 'https://s3.ext.example',
+    builtIn: false,
+    running: true,
+    s3Available: true,
+  },
+  envPinned: ['DATABASE_TYPE', 'DATABASE_HOST', 'REDIS_ENABLED', 'REDIS_HOST', 'STORAGE_TYPE', 'S3_ENDPOINT'],
+};
+const PINNED_AWAY_SAVED: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: { ...SAVED_CONFIG.database, builtIn: false, builtInSet: false, host: 'db.ext.example' },
+  redis: {
+    enabled: true,
+    builtIn: false,
+    builtInSet: false,
+    host: 'cache.ext.example',
+    port: '6379',
+    passwordSet: false,
+  },
+  storage: {
+    ...SAVED_CONFIG.storage,
+    type: 's3',
+    builtIn: false,
+    builtInSet: false,
+    s3Bucket: 'media',
+    s3Endpoint: 'https://s3.ext.example',
+  },
+};
+
+async function saveAndRestart(): Promise<{ dialogText: string; body: unknown }> {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  const { container } = renderInfrastructure();
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+  const dialog = await screen.findByRole('dialog');
+  const dialogText = dialog.textContent ?? '';
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  return { dialogText, body: findFetchCall('POST', '/api/infra/restart')!.body };
+}
+
+test('a bundled container OpenWA created whose host the environment pins elsewhere is stopped and named', async () => {
+  resetFetchCalls();
+  overrides = { status: PINNED_AWAY, saved: PINNED_AWAY_SAVED, saveProfiles: ['postgres', 'redis', 'minio'] };
+
+  const { dialogText, body } = await saveAndRestart();
+
+  assert.ok(dialogText.includes(STOPS_ALL_THREE), dialogText);
+  assert.deepEqual(body, { profiles: [], profilesToRemove: ['postgres', 'redis', 'minio'] });
+});
+
+test('a bundled container Docker Compose created is left alone under a host pinned elsewhere', async () => {
+  resetFetchCalls();
+  const compose = {
+    ...PINNED_AWAY,
+    database: { ...PINNED_AWAY.database, running: false },
+    redis: { ...PINNED_AWAY.redis, running: false },
+    storage: { ...PINNED_AWAY.storage, running: false },
+  };
+  overrides = { status: compose, saved: PINNED_AWAY_SAVED, saveProfiles: ['postgres', 'redis', 'minio'] };
+
+  const { dialogText, body } = await saveAndRestart();
+
+  assert.doesNotMatch(dialogText, /openwa-/);
+  assert.deepEqual(body, { profiles: ['postgres', 'redis', 'minio'], profilesToRemove: [] });
+});
+
+test('a host pinned to the container name still reaches the container, which is kept', async () => {
+  resetFetchCalls();
+  const status = { ...PINNED_AWAY, database: { ...PINNED_AWAY.database, host: 'OpenWA-Postgres' } };
+  const saved = { ...PINNED_AWAY_SAVED, database: { ...PINNED_AWAY_SAVED.database, host: 'OpenWA-Postgres' } };
+  overrides = { status, saved, saveProfiles: ['postgres', 'redis', 'minio'] };
+
+  const { dialogText, body } = await saveAndRestart();
+
+  assert.ok(dialogText.includes('stops these built-in containers: openwa-redis, openwa-minio.'), dialogText);
+  assert.deepEqual(body, { profiles: ['postgres'], profilesToRemove: ['redis', 'minio'] });
 });
 
 // ── Restart-flow timer cleanup on unmount ────────────────────────────────────

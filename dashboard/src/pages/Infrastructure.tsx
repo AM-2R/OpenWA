@@ -14,7 +14,7 @@ import {
   Download,
   Upload,
 } from 'lucide-react';
-import { API_BASE_URL, type SavedConfig } from '../services/api';
+import { API_BASE_URL, infraApi, type SavedConfig } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
@@ -37,6 +37,36 @@ interface QueueStats {
   completed: number;
   failed: number;
 }
+
+// The container each managed profile runs, as the restart dialog names it.
+const CONTAINER_OF: Record<string, string> = {
+  postgres: 'openwa-postgres',
+  redis: 'openwa-redis',
+  minio: 'openwa-minio',
+};
+
+/**
+ * Whether a host (for minio, the host of an S3 endpoint) reaches the profile's bundled container: its network alias
+ * (the profile name) or its container name, in any letter case, with or without a trailing dot. The same rule as the
+ * server's namesBundledContainer, which never lets a restart stop such a container.
+ */
+function namesBundledContainer(profile: string, value: string | undefined): boolean {
+  if (!CONTAINER_OF[profile] || value === undefined) return false;
+  let host = value.trim();
+  if (profile === 'minio') {
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      return false;
+    }
+  }
+  host = host.toLowerCase().replace(/\.$/, '');
+  return host === profile || host === CONTAINER_OF[profile];
+}
+
+/** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
+const nextBootHost = (profile: string, config: SavedConfig): string =>
+  profile === 'postgres' ? config.database.host : profile === 'redis' ? config.redis.host : config.storage.s3Endpoint;
 
 export function Infrastructure() {
   const { t } = useTranslation();
@@ -64,7 +94,7 @@ export function Infrastructure() {
   // to open — the one-way edge between the save and restart hooks.
   const configSave = useConfigSave({
     buildPayload: configForm.buildSavePayload,
-    onSaved: (profiles, sent) => {
+    onSaved: async (profiles, sent) => {
       // Flag a backend switch so the restart modal can warn about the empty-database / orphaned-media data
       // move before it happens. A switch is a next boot that connects somewhere else than the server does
       // now: another type, host, port or database name, or another S3 endpoint or bucket. The next boot
@@ -109,9 +139,32 @@ export function Infrastructure() {
         infraStatus?.redis.builtIn && 'redis',
         infraStatus?.storage.type === 's3' && infraStatus.storage.builtIn && 'minio',
       ].filter((p): p is string => typeof p === 'string');
-      restartFlow.open({ profiles, running, dbSwitch, storageSwitch });
+      // A bundled container OpenWA created that no boot uses while the environment pins its host elsewhere: the
+      // restart stops it. The server starts nothing for that host whatever the save asked, so it is no start either.
+      const pinnedAway = (
+        [
+          ['postgres', infraStatus?.database.running, pinned('DATABASE_HOST')?.database.host],
+          ['redis', infraStatus?.redis.running, pinned('REDIS_HOST')?.redis.host],
+          ['minio', infraStatus?.storage.running, pinned('S3_ENDPOINT')?.storage.s3Endpoint],
+        ] as const
+      )
+        .filter(([profile, up, host]) => up && host !== undefined && !namesBundledContainer(profile, host))
+        .map(([profile]): string => profile);
+      // The server never stops a container the next boot still reaches, read from the file this save wrote, so the
+      // page reads that file back and asks for (and names) only the others. Without the read, the server decides.
       // The form is seeded once, so the refetch keeps any edit in progress.
-      void queryClient.invalidateQueries({ queryKey: ['infra', 'config'] });
+      const saved = await queryClient
+        .fetchQuery({ queryKey: ['infra', 'config'], queryFn: infraApi.getConfig, staleTime: 0 })
+        .catch(() => undefined);
+      const toStop = [...running, ...pinnedAway].filter(
+        profile => !saved || !namesBundledContainer(profile, nextBootHost(profile, saved)),
+      );
+      restartFlow.open({
+        profiles: profiles.filter(p => !pinnedAway.includes(p)),
+        running: toStop,
+        dbSwitch,
+        storageSwitch,
+      });
     },
   });
 
@@ -906,6 +959,13 @@ export function Infrastructure() {
               <p className="restart-idle-desc">
                 <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
               </p>
+              {restartFlow.profilesToRemove.length > 0 && (
+                <p className="restart-idle-desc">
+                  {t('infrastructure.restart.stopsContainers', {
+                    names: restartFlow.profilesToRemove.map(p => CONTAINER_OF[p] ?? p).join(', '),
+                  })}
+                </p>
+              )}
               {(restartFlow.dbSwitch || restartFlow.storageSwitch) && (
                 <div className="migration-warning">
                   <AlertTriangle size={18} />

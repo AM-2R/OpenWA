@@ -1233,6 +1233,7 @@
       "successTitle": "Sunucu hazır",
       "errorTitle": "Yeniden başlatma başarısız",
       "idleDesc": "Yapılandırma <code>.env.generated</code> dosyasına kaydedildi.<br/>Değişikliklerin uygulanması için sunucunun yeniden başlatılması gerekir.",
+      "stopsContainers": "Yeniden başlatma şu dahili konteynerleri de durdurur: {{names}}. Verileriyle birlikte saklanırlar, silinmezler.",
       "later": "Daha Sonra Yeniden Başlat",
       "now": "Şimdi Yeniden Başlat",
       "restartingMsg": "Sunucu yeniden başlatılıyor... {{count}}s",

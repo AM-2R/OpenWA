@@ -1220,6 +1220,7 @@
       "successTitle": "✅ Servidor pronto",
       "errorTitle": "❌ Erro ao reiniciar",
       "idleDesc": "A configuração foi salva em <code>.env.generated</code>.<br/>É necessário reiniciar o servidor para aplicar as alterações.",
+      "stopsContainers": "A reinicialização também vai parar estes contêineres integrados: {{names}}. Eles são mantidos com seus dados, não excluídos.",
       "later": "Reiniciar depois",
       "now": "Reiniciar agora",
       "restartingMsg": "Reiniciando servidor... {{count}}s",
