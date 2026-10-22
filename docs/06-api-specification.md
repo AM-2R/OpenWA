@@ -2577,7 +2577,7 @@ Check whether a phone number exists on WhatsApp and return its canonical WhatsAp
 }
 ```
 
-`whatsappId` is the canonical native chat id, or `null` when the number is not on WhatsApp; `exists` is `whatsappId !== null`.
+`whatsappId` is the chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines (it can differ from the digits supplied), or `null` when the number is not on WhatsApp; `exists` is `whatsappId !== null`.
 
 > Route-order caveat: this route is two path segments (`check/:number`), so it never collides with the single-segment `GET /:contactId` — a contact id of literally `check` resolves to `GET /:contactId`.
 

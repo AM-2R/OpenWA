@@ -149,8 +149,8 @@ export class ContactController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
-    // The engine returns the canonical chat id in its native format; we don't build the JID here
-    // (decoupled from the whatsapp-web.js `@c.us` scheme).
+    // The engine returns the id already in the neutral `<phone>@c.us` form (the Baileys adapter neutralizes its
+    // own answer, the whatsapp-web.js one folds an `@lid` back to the phone id); we don't build the JID here.
     const whatsappId = await this.contactService.getNumberId(sessionId, number);
     return {
       number,
