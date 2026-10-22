@@ -20,7 +20,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
 import { holdConnect, lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
-import { SESSION_FEED_EVENTS } from '../utils/sessionFeedSubscription.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -2157,6 +2156,10 @@ test('Sessions.css aligns text to the text direction, not a physical side', () =
 
 // ── Live feed subscription ───────────────────────────────────────────────────
 
+// Written out, not imported: the page handles exactly these three events, and a list taken from the module that
+// builds the frames would follow it when one is dropped.
+const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
+
 /** The payload of every frame the page sent over the socket. */
 const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
 
@@ -2168,7 +2171,7 @@ test('the page joins the live session feed once connected, with the events it re
 
   await screen.findByText('new-device');
   await waitFor(() =>
-    assert.deepEqual(feedFrames(), [{ type: 'subscribe', sessionId: '*', events: [...SESSION_FEED_EVENTS] }]),
+    assert.deepEqual(feedFrames(), [{ type: 'subscribe', sessionId: '*', events: SESSION_FEED_EVENTS }]),
   );
 });
 
@@ -2193,6 +2196,6 @@ test('a key refused the wildcard room joins each listed session instead', async 
       .sort();
   await waitFor(() => assert.deepEqual(joined(), SESSIONS.map(session => session.id).sort()));
   for (const frame of feedFrames().slice(1)) {
-    assert.deepEqual((frame as { events: string[] }).events, [...SESSION_FEED_EVENTS]);
+    assert.deepEqual((frame as { events: string[] }).events, SESSION_FEED_EVENTS);
   }
 });
