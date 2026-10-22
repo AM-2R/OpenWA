@@ -388,18 +388,22 @@ export function useChatScrollPosition(
 
   const onMediaLoad = useCallback(
     (event?: { currentTarget: Element | null }) => {
+      // The container is reused across chats, so a switch between the event and its frame would apply the frame's
+      // write to a different thread, and save it under that thread's id. prevChatIdRef holds whichever chat is
+      // actually on screen, set by the restore effect above.
+      const onScreen = () => prevChatIdRef.current === activeChatId;
       const pending = pendingRestoreRef.current;
       if (pending !== null) {
         requestAnimationFrame(() => {
           const cur = containerRef.current;
-          if (cur && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
+          if (cur && onScreen() && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
         });
         return;
       }
       if (pinnedRef.current) {
         requestAnimationFrame(() => {
           const cur = containerRef.current;
-          if (cur && pinnedRef.current) followBottom(cur);
+          if (cur && onScreen() && pinnedRef.current) followBottom(cur);
         });
         return;
       }
@@ -422,11 +426,7 @@ export function useChatScrollPosition(
       if (grew === null) return;
       requestAnimationFrame(() => {
         const cur = containerRef.current;
-        if (!cur) return;
-        // The container is reused across chats, so a switch between the event and this frame would
-        // apply the correction to a different thread and save it under the outgoing chat's id.
-        // prevChatIdRef holds whichever chat is actually on screen, set by the restore effect above.
-        if (prevChatIdRef.current !== activeChatId) return;
+        if (!cur || !onScreen()) return;
         // Add to the LIVE scrollTop, not a value captured at event time: a sibling element decoding
         // in the same frame has its own rAF that already moved scrollTop, and this one must stack on
         // top of it. A captured absolute would re-assert the pre-sibling position and lose the sum.

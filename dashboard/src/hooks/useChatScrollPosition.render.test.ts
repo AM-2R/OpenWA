@@ -687,6 +687,59 @@ test('a thread pinned to the bottom stays there as media decodes, until the read
   }
 });
 
+// The container is reused across chats, so a decode's frame that runs after a switch must not act on the chat entered.
+test('a decode in the chat being left does not put the chat entered in the same frame at the spot of the one left', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the reader's spot in A
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1000); // and in B
+    rerender(createElement(Probe, { chatId: 'A' })); // back in A, its restore pending
+    fireEvent.scroll(el);
+
+    hook().onMediaLoad(); // an image of A decodes; its re-apply waits for the frame
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader opens B before that frame
+    await nextFrame();
+    assert.equal(el.scrollTop, 1000, 'B was put at the spot saved for A');
+  } finally {
+    restore();
+  }
+});
+
+test('a decode in a chat pinned to its bottom does not erase the saved spot of the chat entered in the same frame', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1000); // the reader's spot in B
+    rerender(createElement(Probe, { chatId: 'A' })); // A opens at its bottom, pinned
+    fireEvent.scroll(el);
+
+    hook().onMediaLoad(); // an image of A decodes; its re-pin waits for the frame
+    g.height = CLIENT_HEIGHT; // B was dropped from the cache: a spinner while it loads
+    rerender(createElement(Probe, { chatId: 'B', loaded: false }));
+    await nextFrame();
+    g.height = 4600;
+    rerender(createElement(Probe, { chatId: 'B', loaded: true }));
+    assert.equal(el.scrollTop, 1000, `B opened at ${el.scrollTop}, not at the reader's spot`);
+  } finally {
+    restore();
+  }
+});
+
 // A chat comes back at its saved spot while its media has not decoded: the short thread clamps the write, so it reads
 // as at the bottom. A live message announced in that window is not the reader following the conversation.
 test('a live message in the decode window of a restored chat does not erase the saved spot', async () => {
