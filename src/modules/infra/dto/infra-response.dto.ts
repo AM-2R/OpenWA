@@ -30,13 +30,13 @@ export class InfraDatabaseStatusDto {
   })
   builtIn!: boolean;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
       'Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created and when Docker is unreachable.',
+      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
-  running!: boolean;
+  running?: boolean;
 }
 
 export class InfraRedisStatusDto {
@@ -55,13 +55,13 @@ export class InfraRedisStatusDto {
   @ApiProperty({ description: "Whether OpenWA's bundled Redis container is backing this.", example: true })
   builtIn!: boolean;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
       'Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created and when Docker is unreachable.',
+      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
-  running!: boolean;
+  running?: boolean;
 }
 
 export class InfraQueueDepthDto {
@@ -109,13 +109,13 @@ export class InfraStorageStatusDto {
   @ApiProperty({ description: "Whether OpenWA's bundled MinIO container is backing this.", example: false })
   builtIn!: boolean;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
       'Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created and when Docker is unreachable.',
+      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
-  running!: boolean;
+  running?: boolean;
 
   @ApiPropertyOptional({ description: 'Whether the S3 endpoint answered a probe. Present only for `s3`.' })
   s3Available?: boolean;

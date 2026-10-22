@@ -33,9 +33,9 @@ interface InfraStatus {
   // service (detected live from the labeled container), not merely the saved intent. Falls back to the
   // saved flag, the environment's first, when Docker is unavailable. (#488)
   // `running` is whether a bundled container OpenWA created is up, whether or not the service uses it; false for
-  // one Docker Compose created and when Docker is unavailable.
-  database: { connected: boolean; type: string; host: string; builtIn: boolean; running: boolean };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running: boolean };
+  // one Docker Compose created, and absent when Docker is unavailable, since nothing can be seen or stopped then.
+  database: { connected: boolean; type: string; host: string; builtIn: boolean; running?: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running?: boolean };
   queue: {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
@@ -46,7 +46,7 @@ interface InfraStatus {
     bucket?: string;
     endpoint?: string;
     builtIn: boolean;
-    running: boolean;
+    running?: boolean;
     s3Available?: boolean;
   };
   engine: {
@@ -232,7 +232,7 @@ export class InfraStatusController {
         type: dbType,
         host: dbHost,
         builtIn: dbBuiltIn,
-        running: running?.database === 'openwa',
+        ...(running ? { running: running.database === 'openwa' } : {}),
       },
       redis: {
         enabled: redisEnabled,
@@ -240,7 +240,7 @@ export class InfraStatusController {
         host: redisHost,
         port: redisPort,
         builtIn: redisBuiltIn,
-        running: running?.cache === 'openwa',
+        ...(running ? { running: running.cache === 'openwa' } : {}),
       },
       queue: {
         enabled: queueEnabled,
@@ -253,7 +253,7 @@ export class InfraStatusController {
         // The endpoint this process dials: a bundled MinIO that is stopped still names it, an external store does not.
         ...(storageType === 's3' && s3Endpoint ? { endpoint: s3Endpoint } : {}),
         builtIn: storageBuiltIn,
-        running: running?.storage === 'openwa',
+        ...(running ? { running: running.storage === 'openwa' } : {}),
         ...(storageType === 's3' ? { s3Available } : {}),
       },
       engine: {

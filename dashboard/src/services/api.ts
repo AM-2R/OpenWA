@@ -624,7 +624,7 @@ export interface InfraStatus {
   // `builtIn` = OpenWA's own bundled container is actually running and backing this service (live),
   // not just the saved intent; falls back to the saved flag (the environment's first) when Docker is
   // unavailable. (#488) `running` = a bundled container OpenWA created is up, whether or not the service uses it
-  // (false for one Docker Compose created); optional only because an older gateway does not send it.
+  // (false for one Docker Compose created); absent while Docker is unreachable, and from an older gateway.
   database: { connected: boolean; type: string; host: string; builtIn: boolean; running?: boolean };
   redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running?: boolean };
   queue: {

@@ -21892,7 +21892,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           }
         },
@@ -21900,8 +21900,7 @@
           "connected",
           "type",
           "host",
-          "builtIn",
-          "running"
+          "builtIn"
         ]
       },
       "InfraRedisStatusDto": {
@@ -21932,7 +21931,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           }
         },
@@ -21941,8 +21940,7 @@
           "connected",
           "host",
           "port",
-          "builtIn",
-          "running"
+          "builtIn"
         ]
       },
       "InfraQueueDepthDto": {
@@ -22025,7 +22023,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           },
           "s3Available": {
@@ -22035,8 +22033,7 @@
         },
         "required": [
           "type",
-          "builtIn",
-          "running"
+          "builtIn"
         ]
       },
       "InfraEngineStatusDto": {

@@ -451,9 +451,14 @@ describe('InfraStatusController.getStatus running bundled containers', () => {
     expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
   });
 
-  it('reports nothing running when Docker is unreachable', async () => {
+  // Nothing can be seen or stopped then, so a reader cannot take the absence of a container for a fact.
+  it('leaves running out when Docker is unreachable', async () => {
     const status = await build(null).getStatus();
 
-    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+    expect(['running' in status.database, 'running' in status.redis, 'running' in status.storage]).toEqual([
+      false,
+      false,
+      false,
+    ]);
   });
 });
