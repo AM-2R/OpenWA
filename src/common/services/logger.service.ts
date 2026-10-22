@@ -81,8 +81,8 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
     const room = deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH;
     if (Array.isArray(node)) {
-      // Read once: the same number gates the copy and sizes it, whatever the object answers the next time.
-      const length = node.length;
+      // Read once and taken as a count (whole, from zero), as map takes it: one number gates the copy and sizes it.
+      const length = Math.max(0, Math.trunc(node.length) || 0);
       if (length > room) return '[Truncated]';
       // A plain Array filled by index, holes skipped: map would build it through the constructor of an Array subclass.
       const plain = new Array<unknown>(length);

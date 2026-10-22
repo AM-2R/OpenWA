@@ -954,6 +954,60 @@ describe('redactSecrets', () => {
       expect(reads).toBe(1);
     });
 
+    // The length is taken as a count the way Array.prototype.map takes it: a value that is not a number, a negative or
+    // fractional one is cut to a whole number from zero, never handed on as it is.
+    describe('an array that reports a length that is not a count', () => {
+      const reporting = (length: unknown, items: unknown[] = []): unknown[] =>
+        new Proxy(items, {
+          get: (target, key, receiver): unknown => (key === 'length' ? length : Reflect.get(target, key, receiver)),
+        });
+      const secret = { password: 'value-length', toJSON: () => ({ password: 'value-length' }) };
+
+      it.each([
+        ['an object with a secret-named key', secret],
+        ['an object with nothing', {}],
+        ['an array', ['value-length']],
+        ['a string that is not a number', 'value-length'],
+        ['undefined', undefined],
+        ['NaN', NaN],
+        ['a negative number', -1],
+        ['a negative infinity', -Infinity],
+      ])('copies the array as empty when the length is %s, and keeps what is beside it', (_name, length) => {
+        const copy = redactSecrets({ list: reporting(length), keep: 1 }) as { list: unknown[]; keep: number };
+
+        expect(JSON.stringify(copy)).toBe('{"list":[],"keep":1}');
+        expect(JSON.stringify(copy)).not.toContain('value-length');
+      });
+
+      it.each([
+        ['a fractional number', 1.5, 1],
+        ['a number as text', '2', 2],
+      ])('cuts %s to a whole count', (_name, length, count) => {
+        const copy = redactSecrets({ list: reporting(length, [10, 20, 30]) }) as { list: unknown[] };
+
+        expect(copy.list).toEqual([10, 20, 30].slice(0, count));
+      });
+
+      it('writes an infinite length as [Truncated]', () => {
+        expect(redactSecrets({ list: reporting(Infinity) })).toEqual({ list: '[Truncated]' });
+      });
+
+      it('keeps the line of a record whose array reports such a length', () => {
+        const metadata = { list: reporting(-1), keep: 1 };
+        const logger = new LoggerService();
+        const log = jest.spyOn(console, 'log').mockImplementation();
+        LoggerService.setLogFormat(LogFormat.JSON);
+        try {
+          logger.log('saved', metadata);
+
+          expect(JSON.parse((log.mock.calls as string[][])[0][0])).toMatchObject({ list: [], keep: 1 });
+        } finally {
+          log.mockRestore();
+          LoggerService.setLogFormat(null);
+        }
+      });
+    });
+
     describe('a typed array that claims another length than it has', () => {
       class Claiming extends Uint8Array {
         get length(): number {

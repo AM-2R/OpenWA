@@ -201,6 +201,19 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(write({ file, jid: 'j' }, 'x')).toMatchObject({ file: '[Truncated]', jid: 'j', msg: 'x' });
   });
 
+  it('copies an array that reports a length that is not a count as empty, and keeps the rest of the record', () => {
+    const reporting = (length: unknown): unknown[] =>
+      new Proxy([], {
+        get: (target, key, receiver): unknown => (key === 'length' ? length : Reflect.get(target, key, receiver)),
+      });
+    const line = JSON.stringify(
+      write({ a: reporting({ password: 'value-length' }), b: reporting(-1), c: reporting(NaN), keep: 1 }, 'x'),
+    );
+
+    expect(line).not.toContain('value-length');
+    expect(JSON.parse(line)).toMatchObject({ a: [], b: [], c: [], keep: 1, msg: 'x' });
+  });
+
   it('writes a record that is an array longer than the limit as one [Truncated] field', () => {
     const line = write(new Array<number>(1_000_001).fill(0), 'x');
 
