@@ -1103,7 +1103,11 @@ configured for stdout alone drops exactly the lines you most want. `LOG_LEVEL`
 (`error|warn|info|debug|verbose`) sets verbosity and `LOG_FORMAT` (`json|pretty`) the rendering,
 defaulting to `json` under `NODE_ENV=production` and `pretty` elsewhere. Metadata whose **key name**
 looks like a secret (password, token, api-key, authorization, …) keeps the key and has its **value**
-replaced with `[REDACTED]` before the line is written.
+replaced with `[REDACTED]` before the line is written, at any depth. A log call never throws on its
+metadata: an object that contains itself is written with `[Circular]` in its place, and below the fifth
+level at most 1000 more objects and arrays are copied, the rest written as `[Truncated]`. So is an array,
+typed array or object with more entries than that allowance has left (a list of 1000 numbers at the sixth
+level), and, at any level, an array or typed array of more than a million entries.
 
 The same logger is installed as Nest's framework logger, so framework lines (route mapping, unhandled
 exception stacks from the exception handler) follow `LOG_LEVEL` and `LOG_FORMAT` and carry the
