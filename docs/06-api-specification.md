@@ -3383,7 +3383,8 @@ Update group settings. Each present field maps to one engine call; absent fields
 > is supported on both engines and is therefore applied after it.
 >
 > The fields are applied one at a time. A failure on the first propagates unchanged, with nothing
-> applied; a failure on a later one leaves the earlier ones applied, keeps the failed call's status
+> applied unless it is a `503` (a WhatsApp timeout can still land the change); a failure on a later
+> one leaves the earlier ones applied, keeps the failed call's status
 > (a `503` WhatsApp throttle or timeout included) and names both in its message:
 > `Group settings only partially applied: 'announce' failed (...); already applied: ephemeralSeconds`.
 > Re-read the settings before retrying, or send one field per request.
