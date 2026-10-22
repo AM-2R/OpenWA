@@ -1591,8 +1591,11 @@ export interface ChatCapability {
    * `messageIds` names exactly which messages to acknowledge. Engines that acknowledge per
    * message (Baileys) need it to mark a burst, or anything at all after a restart; engines with a
    * chat-level receipt (whatsapp-web.js) ignore it.
+   *
+   * `authors` maps a message id to who posted it, for a group: a receipt names its sender, and an id the
+   * engine never kept (history backfill) has no key to read it from. An id with neither is not acknowledged.
    */
-  sendSeen(chatId: string, messageIds?: string[]): Promise<boolean>;
+  sendSeen(chatId: string, messageIds?: string[], authors?: ReadonlyMap<string, string>): Promise<boolean>;
 
   markUnread(chatId: string): Promise<boolean>;
 

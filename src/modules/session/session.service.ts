@@ -57,7 +57,8 @@ import { ShutdownService } from '../../common/services/shutdown.service';
 import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
-import { Message } from '../message/entities/message.entity';
+import { chatKind } from '../../engine/identity/wa-id';
+import { Message, MessageDirection } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
@@ -1130,7 +1131,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.sendSeen(chatId, messageIds);
+    return engine.sendSeen(chatId, messageIds, await this.groupAuthors(id, chatId, messageIds));
+  }
+
+  /**
+   * Who posted each named message of a group, from the rows the gateway stored. A group read receipt
+   * names the sender, and for a message the engine never kept (history backfill) these rows are the only
+   * place it is recorded. Best-effort: a read that cannot learn them still acknowledges what the engine
+   * can name on its own.
+   */
+  private async groupAuthors(
+    sessionId: string,
+    chatId: string,
+    messageIds?: string[],
+  ): Promise<ReadonlyMap<string, string> | undefined> {
+    if (!messageIds?.length || chatKind(chatId) !== 'group') return undefined;
+    try {
+      const rows = await this.messageRepository.find({
+        where: { sessionId, chatId, waMessageId: In(messageIds), direction: MessageDirection.INCOMING },
+        select: { waMessageId: true, author: true },
+      });
+      return new Map(rows.flatMap(row => (row.waMessageId && row.author ? [[row.waMessageId, row.author]] : [])));
+    } catch (error) {
+      this.logger.warn('Could not read who posted the messages a read names; sending the read without them', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   async markUnread(id: string, chatId: string): Promise<boolean> {

@@ -973,6 +973,9 @@ adapter boundary — none silently stubs.
   resolves `false` rather than throwing, so a chat the session has seen no message in, or one holding
   only this account's own sends, answers `POST chats/read` with `{"success": false}`, where
   whatsapp-web.js marks it read from the page-side chat object without needing any local history.
+  With message ids, a group id the message store never held (history backfill) takes its receipt's
+  participant from the author the gateway stored for it; one with no stored author is left out of the
+  receipt, and the answer is `false` when no id could be named.
 - **`setProfileName` / `setProfilePicture` / `deleteProfilePicture` refusals (baileys).**
   whatsapp-web.js reads a page-side verdict for all three (`setDisplayName` and `setProfilePicture`
   resolve `false`, `deleteProfilePicture` resolves an explicit `false`) and raises a `403`. The

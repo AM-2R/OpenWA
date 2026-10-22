@@ -8322,7 +8322,7 @@ describe('SessionService', () => {
 
       // Second argument is the optional messageIds, absent here — the engine falls back to the
       // newest message it still holds.
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined);
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined, undefined);
       expect(result).toBe(true);
     });
 
@@ -8336,7 +8336,63 @@ describe('SessionService', () => {
 
       await service.sendSeen('sess-uuid-1', '123@c.us', ['M1', 'M2']);
 
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2']);
+      // A one to one receipt needs no sender, so the rows are not read.
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2'], undefined);
+      expect(messageRepository.find).not.toHaveBeenCalled();
+    });
+
+    describe('in a group', () => {
+      const GROUP = '120363000000000001@g.us';
+      const start = async (): Promise<void> => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        await service.start('sess-uuid-1');
+        mockEngine.sendSeen.mockResolvedValue(true);
+      };
+
+      it('hands the engine who posted each named message, from the rows the gateway stored', async () => {
+        await start();
+        (messageRepository.find as jest.Mock).mockResolvedValue([
+          { waMessageId: 'M1', author: '628111@c.us' },
+          { waMessageId: 'M2', author: '9988@lid' },
+          { waMessageId: 'M3', author: null },
+        ]);
+
+        await service.sendSeen('sess-uuid-1', GROUP, ['M1', 'M2', 'M3']);
+
+        expect(messageRepository.find).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              sessionId: 'sess-uuid-1',
+              chatId: GROUP,
+              direction: MessageDirection.INCOMING,
+            }) as unknown,
+          }),
+        );
+        const [, , authors] = mockEngine.sendSeen.mock.calls[0] as [string, string[], ReadonlyMap<string, string>];
+        expect([...authors]).toEqual([
+          ['M1', '628111@c.us'],
+          ['M2', '9988@lid'],
+        ]);
+      });
+
+      it('reads no rows when it names no message', async () => {
+        await start();
+
+        await service.sendSeen('sess-uuid-1', GROUP);
+
+        expect(messageRepository.find).not.toHaveBeenCalled();
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, undefined, undefined);
+      });
+
+      it('still reads the chat when the rows cannot be read', async () => {
+        await start();
+        (messageRepository.find as jest.Mock).mockRejectedValue(new Error('database is locked'));
+
+        await expect(service.sendSeen('sess-uuid-1', GROUP, ['M1'])).resolves.toBe(true);
+
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, ['M1'], undefined);
+      });
     });
 
     it('should throw BadRequestException when session is not started', async () => {
