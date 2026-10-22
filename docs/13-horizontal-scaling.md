@@ -48,8 +48,8 @@
 > `qr_ready` row is marked too while it has no phone, since the sweep never adopts a row without one;
 > a `qr_ready` row with a phone keeps its status, so the correction never makes it adoptable.
 > Nothing else revisits such a row, since the boot reset skips a foreign claim that is still live.
-> A session an operator stopped (`POST /stop` or `/force-kill`) is never adopted, even when its
-> claim did lapse, until an explicit `POST /start`.
+> A session an operator stopped (`POST /stop` or `/force-kill`), or whose `DELETE` failed part-way or
+> died with its node, is never adopted, even when its claim did lapse, until an explicit `POST /start`.
 >
 > Known limitation: a holder that is alive but cannot reach the database for more than three lease
 > TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its
