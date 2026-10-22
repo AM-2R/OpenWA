@@ -184,6 +184,11 @@ async function send<T>(
       throw new TypeError(`OpenWA: dot path segment in ${JSON.stringify(options.path)}`);
     }
   }
+  // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH and any other verb as written, and the
+  // gateway answers 400 to a lowercase method; a caller without the HttpMethod type can pass one. A missing
+  // method stays undefined, which fetch sends as GET. Read before the timer is armed: a value that is not a
+  // string throws here, and nothing would clear the timer.
+  const method = options.method?.toUpperCase();
   const timeoutMs = toTimeoutMs(options.timeoutMs ?? config.timeoutMs);
 
   const controller = new AbortController();
@@ -207,11 +212,6 @@ async function send<T>(
   const headers: Record<string, string> = Object.fromEntries(merged.values());
   headers['Content-Type'] = 'application/json';
   headers['X-API-Key'] = config.apiKey;
-
-  // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH and any other verb as written, and the
-  // gateway answers 400 to a lowercase method; a caller without the HttpMethod type can pass one. A missing
-  // method stays undefined, which fetch sends as GET.
-  const method = options.method?.toUpperCase();
 
   // Called without a receiver: a platform fetch passed in as `fetch: globalThis.fetch` throws
   // "Illegal invocation" in browsers and Workers when invoked as a method of `config`.

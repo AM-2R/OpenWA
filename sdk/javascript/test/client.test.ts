@@ -666,6 +666,21 @@ describe('OpenWAClient', () => {
     expect(sent).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'PATCH', 'PATCH', 'PATCH']);
   });
 
+  it('refuses a method that is not a string without leaving the request timer running', async () => {
+    // A timer left pending keeps a short script's process alive until the whole timeout has passed.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.fn<FetchLike>(async () => new Response('[]', { status: 200 }));
+      const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', timeoutMs: 5000, fetch: fetchSpy });
+      await expect(c.request({ method: 5 as never, path: '/api/sessions' })).rejects.toBeInstanceOf(TypeError);
+      await expect(c.requestBytes({ method: {} as never, path: '/api/sessions' })).rejects.toBeInstanceOf(TypeError);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('calls the global fetch unbound from the client config when none is injected', async () => {
     // Browsers and Workers reject a fetch invoked as a method of another object ("Illegal invocation").
     vi.stubGlobal('fetch', function (this: unknown) {
