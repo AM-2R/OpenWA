@@ -287,6 +287,37 @@ test('NumberChecker: a bulk list numbered with circled digits looks up the numbe
   assert.deepEqual(lookups, ['6281234567890', '6281345678901', '6281456789012']);
 });
 
+// The bulk list is folded before it is split, so the full-width comma and semicolon of a CJK input method separate numbers.
+for (const [label, separator] of [
+  ['comma', 0xff0c],
+  ['semicolon', 0xff1b],
+] as const) {
+  test(`NumberChecker: a bulk list separated by the full-width ${label} is several numbers`, async () => {
+    const lookups = stubLookups(registered);
+    renderComponent();
+    const textarea = await openBulkTab();
+    rtl.fireEvent.change(textarea, { target: { value: `+62 812 3456 7890${char(separator)}+62 813 4567 8901` } });
+    assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b2 unique numbers parsed$/);
+    startBatch();
+    await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+    assert.deepEqual(lookups, ['6281234567890', '6281345678901']);
+  });
+}
+
+// The single-number preview counts the digits typed after folding them, so ten Devanagari digits still read as a
+// ten-digit number that the +91 rule prefixes.
+test('NumberChecker: ten Devanagari digits with +91 on show the auto-prefixed preview', async () => {
+  const { container } = renderComponent();
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.click(rtl.screen.getByRole('checkbox'));
+  const typed = [...'9876543210'].map(d => char(0x0966 + Number(d))).join('');
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: typed } });
+  assert.equal(
+    container.querySelector('.nc-format-pill.highlight')?.textContent,
+    'Will check as: +919876543210 (10 digits \u2192 auto-prefixed with 91)',
+  );
+});
+
 test('NumberChecker: a bulk list keeps wrapped and full-width plus numbers international with +91 on', async () => {
   const lookups = stubLookups(registered);
   renderComponent();
