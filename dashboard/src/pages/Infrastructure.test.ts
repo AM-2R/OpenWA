@@ -1670,6 +1670,28 @@ test('saving while the selections are pinned leaves them out so the stored choic
   assert.equal(body.database.username, 'openwa_admin', 'the rest of the section still goes out');
 });
 
+// The compose .env route: the type is pinned and the file holds the first-boot SQLite. A PostgreSQL field edited on
+// the page belongs to the pinned mode, so the save names it rather than letting the stored SQLite drop the edit.
+test('a field edited in a pinned database card is saved with its type', async () => {
+  const { screen, waitFor, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = { status: { ...INFRA_STATUS, envPinned: ['DATABASE_TYPE', 'STORAGE_TYPE'] } };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  fireEvent.click(toggleInput(container, 'SSL Connection'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.ok(findFetchCall('PUT', '/api/infra/config'), 'expected a PUT to /infra/config'));
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database: { type?: string; sslEnabled?: boolean };
+    storage: Record<string, unknown>;
+  };
+  assert.deepEqual([body.database.type, body.database.sslEnabled], ['postgres', true]);
+  assert.equal('type' in body.storage, false, 'the untouched storage card');
+});
+
 test('a pinned selection the operator changes is saved', async () => {
   const { screen, waitFor, fireEvent } = rtl;
   resetFetchCalls();

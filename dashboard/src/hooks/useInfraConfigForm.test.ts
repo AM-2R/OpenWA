@@ -355,3 +355,19 @@ test('one pinned selection is left out without the others', () => {
 
   assert.deepEqual([database?.type, redis?.enabled, storage?.type], ['postgres', true, undefined]);
 });
+
+// An edited field of a pinned database or storage card belongs to the pinned mode, so the save names that mode:
+// applied to a stored selection of the other mode, the edit would be dropped. The Redis switch needs no such rule,
+// as the gateway saves the Redis fields whatever the switch.
+test('editing a field of a pinned database or storage card sends its type, a Redis field keeps the switch out', () => {
+  const { result } = renderForm({ status: PINNED_SELECTIONS, saved: SAVED });
+
+  rtl.act(() => {
+    result.current.updateDbConfig('sslEnabled', false);
+    result.current.updateStorageConfig('s3Bucket', 'media-2');
+    result.current.updateRedisConfig('host', 'redis-2.internal');
+  });
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.type, redis?.enabled, storage?.type], ['postgres', undefined, 's3']);
+});

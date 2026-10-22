@@ -137,10 +137,10 @@ export function useInfraConfigForm(
   // their selection (#735).
   const engineHydrated = useRef(false);
   const engineTouched = useRef(false);
-  // The database type, storage type and Redis switch the operator has changed here. Until then a value the
-  // environment pins is the pin, not a choice, and a save leaves it out (see buildSavePayload).
-  const dbTypeTouched = useRef(false);
-  const storageTypeTouched = useRef(false);
+  // Whether the operator has edited the database card, the storage card or the Redis switch here. Until then a
+  // selection the environment pins is the pin, not a choice, and a save leaves it out (see buildSavePayload).
+  const dbTouched = useRef(false);
+  const storageTouched = useRef(false);
   const redisEnabledTouched = useRef(false);
 
   /** Whether engineConfig.type reflects a real value (seeded from the saved config or user-picked)
@@ -217,13 +217,13 @@ export function useInfraConfigForm(
   }, [savedConfig]);
 
   const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) => {
-    if (key === 'type') dbTypeTouched.current = true;
+    dbTouched.current = true;
     setDbConfig(prev => ({ ...prev, [key]: value }));
   };
   const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
     setRedisConfig(prev => ({ ...prev, [key]: value }));
   const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) => {
-    if (key === 'type') storageTypeTouched.current = true;
+    storageTouched.current = true;
     setStorageConfig(prev => ({ ...prev, [key]: value }));
   };
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
@@ -243,7 +243,9 @@ export function useInfraConfigForm(
   // /config reports the EFFECTIVE selection, so under a pin the form shows the pinned value. Sending it back would
   // write the pin into data/.env.generated over the stored choice, which unsetting the variable was supposed to
   // reveal (#1082), and drop the stored settings of the mode it replaces. Untouched, it is left out, and the
-  // gateway keeps the stored selection. Read at save time, like the engine pin below.
+  // gateway keeps the stored selection. Any edit in the database or storage card sends it: the edited fields belong
+  // to the mode the card shows, and a stored selection of the other mode would drop them. Read at save time, like
+  // the engine pin below.
   const pinnedSeed = (key: string, touched: { current: boolean }) =>
     !touched.current && !!infraStatus?.envPinned?.includes(key);
 
@@ -253,7 +255,7 @@ export function useInfraConfigForm(
     // An emptied pool size is NaN, which JSON writes as null and the backend refuses: leave it out.
     database: {
       ...dbConfig,
-      type: pinnedSeed('DATABASE_TYPE', dbTypeTouched) ? undefined : dbConfig.type,
+      type: pinnedSeed('DATABASE_TYPE', dbTouched) ? undefined : dbConfig.type,
       password: dbConfig.builtIn ? '' : dbConfig.password,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
@@ -269,7 +271,7 @@ export function useInfraConfigForm(
     queue: { enabled: queueEnabled },
     storage: {
       ...storageConfig,
-      type: pinnedSeed('STORAGE_TYPE', storageTypeTouched) ? undefined : storageConfig.type,
+      type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
     },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState
