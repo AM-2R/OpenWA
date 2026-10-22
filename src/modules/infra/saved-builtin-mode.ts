@@ -44,6 +44,21 @@ export interface SavedBuiltInMode {
   builtInSet: boolean;
 }
 
+/** The flag value the next boot reads: the environment's when it pins the flag, else the file's. */
+function flagValue(service: BuiltInService, saved: Record<string, string>): string | undefined {
+  const flag = SERVICES[service].flag;
+  return isEnvPinned(flag) ? process.env[flag] : saved[flag];
+}
+
+/**
+ * The built-in flag as GET /infra/status falls back to it with Docker unreachable. No host rule here: with no
+ * container to see, a host called postgres is as likely an external server (a Kubernetes Service, say) and must
+ * not read as the bundled container.
+ */
+export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<string, string>): boolean {
+  return flagValue(service, saved) === 'true';
+}
+
 /**
  * Rules, in order:
  *  1. A host pinned by the environment (or the project .env) decides, as it does at boot and in
@@ -59,7 +74,7 @@ export function savedBuiltInMode(service: BuiltInService, saved: Record<string, 
     return { builtIn: process.env[spec.host] === spec.bundledHost, builtInSet: false };
   }
   const flagPinned = isEnvPinned(spec.flag);
-  const flag = (flagPinned ? process.env[spec.flag] : undefined) ?? saved[spec.flag];
+  const flag = flagValue(service, saved);
   const selectedInFile = saved[spec.selection] === spec.selected;
   return { builtIn: flag === 'true', builtInSet: flag !== undefined && (flagPinned || selectedInFile) };
 }

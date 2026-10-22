@@ -23,7 +23,7 @@ import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
 import { readGeneratedEnv } from './generated-env';
-import { savedBuiltInMode } from './saved-builtin-mode';
+import { effectiveBuiltInFlag } from './saved-builtin-mode';
 import { isEnvPinned } from '../../config/env-precedence';
 import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { checkForUpdate, type UpdateCheck } from './update-check';
@@ -31,7 +31,7 @@ import { checkForUpdate, type UpdateCheck } from './update-check';
 interface InfraStatus {
   // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
   // service (detected live from the labeled container), not merely the saved intent. Falls back to the
-  // saved flag when Docker is unavailable. (#488)
+  // saved flag, the environment's first, when Docker is unavailable. (#488)
   database: { connected: boolean; type: string; host: string; builtIn: boolean };
   redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
@@ -182,8 +182,8 @@ export class InfraStatusController {
 
     // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
-    // pointed at the bundled service. Fall back to the saved *_BUILTIN intent when Docker is
-    // unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
+    // pointed at the bundled service. Fall back to the saved *_BUILTIN flag (the environment's first) when
+    // Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
     const s3Endpoint = this.configService.get<string>('storage.s3.endpoint');
     const running = this.dockerService.isDockerAvailable()
       ? await this.dockerService.getRunningBuiltinServices()
@@ -244,16 +244,16 @@ export class InfraStatusController {
   }
 
   /**
-   * The saved built-in mode, the fallback when Docker isn't reachable. The same answer GET /infra/config gives,
-   * so a host the environment pins decides here too and the page never claims a switch no restart makes.
+   * The saved built-in flags, the fallback when Docker isn't reachable: the environment's, else
+   * data/.env.generated's. A host name proves nothing without a container to see, so none counts here.
    */
   private readSavedBuiltinFlags(): { database: boolean; cache: boolean; storage: boolean } {
     try {
       const saved = readGeneratedEnv();
       return {
-        database: savedBuiltInMode('database', saved).builtIn,
-        cache: savedBuiltInMode('redis', saved).builtIn,
-        storage: savedBuiltInMode('storage', saved).builtIn,
+        database: effectiveBuiltInFlag('database', saved),
+        cache: effectiveBuiltInFlag('redis', saved),
+        storage: effectiveBuiltInFlag('storage', saved),
       };
     } catch {
       return { database: false, cache: false, storage: false };

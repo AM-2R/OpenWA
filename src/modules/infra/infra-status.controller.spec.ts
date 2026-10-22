@@ -20,7 +20,7 @@ import { recordPinnedEnvKeys } from '../../config/env-precedence';
 import { producerConnectWaitMs } from '../queue/redis-connection';
 import * as fs from 'fs';
 import {
-  EXPECTED_MODE,
+  FALLBACK_BUILT_IN,
   FILE_STATES,
   PIN_STATES,
   SERVICES,
@@ -294,9 +294,10 @@ describe('InfraStatusController.getStatus envPinned', () => {
   });
 });
 
-// With Docker unreachable the status falls back to the saved built-in mode, and it must be the one GET /infra/config
-// answers with, or the page claims a switch that no restart makes. Every file and pin state, each service.
-describe('InfraStatusController.getStatus built-in fallback agrees with the saved mode when Docker is unreachable', () => {
+// With Docker unreachable the status falls back to the saved flag, the environment's first. A host name proves
+// nothing without a container to see (an external server may be called postgres), so a pinned bundled host must not
+// read as built-in there: it would replace the stored external credentials with the bundled defaults on a save.
+describe('InfraStatusController.getStatus built-in fallback reads the flag only when Docker is unreachable', () => {
   const build = () => {
     const config = { get: (k: string, def?: unknown) => (k === 'engine.type' ? 'baileys' : def) };
     const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
@@ -343,9 +344,28 @@ describe('InfraStatusController.getStatus built-in fallback agrees with the save
 
           const status = await build().getStatus();
 
-          expect(status[service].builtIn).toBe(EXPECTED_MODE[state][pin].builtIn);
+          expect(status[service].builtIn).toBe(FALLBACK_BUILT_IN[state]);
         });
       }
     }
   }
+
+  it('a flag pinned by the environment wins over the file, and a pinned host still proves nothing', async () => {
+    const pins = {
+      POSTGRES_BUILTIN: 'true',
+      REDIS_BUILTIN: 'false',
+      DATABASE_HOST: 'postgres',
+      REDIS_HOST: 'redis',
+      S3_ENDPOINT: 'http://minio:9000',
+    };
+    recordPinnedEnvKeys(pins);
+    Object.assign(process.env, pins);
+    pinnedKeys = Object.keys(pins);
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\nMINIO_BUILTIN=false\n');
+
+    const status = await build().getStatus();
+
+    expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([true, false, false]);
+  });
 });

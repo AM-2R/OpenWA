@@ -104,6 +104,19 @@ export const EXPECTED_MODE: Record<FileState, Record<PinState, SavedMode>> = {
   },
 };
 
+/**
+ * What GET /infra/status answers with Docker unreachable, where there is no container to see. A host name proves
+ * nothing there (an external server may be called postgres), so only the flag counts: the environment's, else the
+ * file's, whatever the host pins say.
+ */
+export const FALLBACK_BUILT_IN: Record<FileState, boolean> = {
+  absent: false,
+  template: false,
+  'stored-false': false,
+  'stored-true': true,
+  'unselected-true': true,
+};
+
 /** The lines a saved file holds about one service in a given state. */
 export function fileLines(service: ServiceName, state: FileState): string[] {
   const spec = SERVICES[service];
