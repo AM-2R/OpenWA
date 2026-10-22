@@ -103,6 +103,29 @@ test('a rule spelled ./data/ keeps data/ out of the context as data/ does', () =
   assert.equal(run.status, 0, run.out);
 });
 
+test('an instruction continued over several lines is read whole', () => {
+  const run = runGate({
+    Dockerfile: 'COPY control.txt \\\n  scripts/new.js \\\n  ./scripts/\n',
+    '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n`,
+  });
+  assert.equal(run.status, 1, run.out);
+  assert.match(run.out, /rejects 'scripts\/new\.js'/);
+});
+
+test('a comment ends with its line, whatever it ends in, and is not part of a continued instruction', () => {
+  // BuildKit does not continue a comment, so the COPY below one that ends in a backslash is an instruction
+  // of its own, and a comment between the lines of a continued instruction is dropped.
+  const dockerfiles = [
+    'COPY control.txt ./\n# a comment ending in a backslash \\\nCOPY scripts/new.js ./scripts/\n',
+    'COPY control.txt \\\n  # a comment inside the instruction\n  scripts/new.js ./scripts/\n',
+  ];
+  for (const dockerfile of dockerfiles) {
+    const run = runGate({ Dockerfile: dockerfile, '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n` });
+    assert.equal(run.status, 1, `${JSON.stringify(dockerfile)}: ${run.out}`);
+    assert.match(run.out, /rejects 'scripts\/new\.js'/, `${JSON.stringify(dockerfile)}: ${run.out}`);
+  }
+});
+
 test('an indented or lower-case instruction is read like any other', () => {
   for (const line of [
     '  COPY ./scripts/new.js ./scripts/',

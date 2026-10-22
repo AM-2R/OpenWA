@@ -170,7 +170,13 @@ const errors = [];
 // instead of restating them: a hand-written list lost eight of the patchers, and a rule dropping one of
 // them then broke the image build rather than this check. A copy from another stage, a flag, the
 // destination, a remote ADD source and `.` (the whole context) are not inputs.
-const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8').replace(/\\\n/g, ' ');
+// Comment lines go first, as in BuildKit: a comment is never continued, so one that ends in a backslash must
+// not swallow the instruction below it, and one inside a continued instruction drops out of it.
+const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
+  .split('\n')
+  .filter(line => !/^\s*#/.test(line))
+  .join('\n')
+  .replace(/\\\n/g, ' ');
 const wildcard = /[*?[]/;
 function copyInputs(source) {
   if (/^[a-z][a-z0-9+.-]*:\/\/|^git@/i.test(source)) return [];
