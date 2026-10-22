@@ -24,8 +24,8 @@ export class InfraDatabaseStatusDto {
   @ApiProperty({
     description:
       "Whether OpenWA's own bundled container is actually running and backing this service, " +
-      'detected live from the labelled container rather than read from the saved intent. Falls back ' +
-      'to the saved flag when Docker is unavailable.',
+      'detected live from the labelled container rather than read from the saved intent. When Docker is ' +
+      "unavailable it falls back to the saved flag (the environment's first), and a host name alone proves nothing.",
     example: true,
   })
   builtIn!: boolean;
@@ -238,8 +238,9 @@ export class InfraUpdateCheckResponseDto {
 const BUILT_IN_SET_DESCRIPTION =
   'Whether the saved configuration states the built-in mode of this service. False when a host pinned by the ' +
   'environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not ' +
-  'select the service (the first boot writes every flag as false next to a service that is not in use), and when ' +
-  'nothing is saved. When false, read what runs from /infra/status.';
+  'select the service (the first boot writes every flag as false next to a service that is not in use), when the ' +
+  'file holds the bundled host with the flag not true (the next boot dials the container, builtIn is true), and ' +
+  'when nothing is saved. When false, read what runs from /infra/status.';
 
 export class InfraConfigDatabaseDto {
   @ApiProperty({ enum: ['sqlite', 'postgres'], example: 'postgres' })

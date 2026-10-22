@@ -622,7 +622,8 @@ export interface UpdateCheck {
 
 export interface InfraStatus {
   // `builtIn` = OpenWA's own bundled container is actually running and backing this service (live),
-  // not just the saved intent — falls back to the saved flag when Docker is unavailable. (#488)
+  // not just the saved intent; falls back to the saved flag (the environment's first) when Docker is
+  // unavailable. (#488)
   database: { connected: boolean; type: string; host: string; builtIn: boolean };
   redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
@@ -656,8 +657,9 @@ export interface SavedConfig {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
     // Whether the saved config states the built-in mode of this service. False when a host the environment
-    // pins decides it, when the file does not select the service (the first boot writes every flag as false)
-    // and when nothing is saved: the form then follows what /infra/status reports as running.
+    // pins decides it, when the file does not select the service (the first boot writes every flag as false),
+    // when the file holds the bundled host with the flag not true (the next boot dials the container) and when
+    // nothing is saved: the form then follows what /infra/status reports as running.
     builtInSet: boolean;
     host: string;
     port: string;
