@@ -263,34 +263,53 @@ describe('production HTTP surface (configureApp)', () => {
     expect(res.status).toBe(201);
   });
 
-  // The raw scan reads UTF-8. A body in another UTF charset is decoded by the parser first, so it is walked
-  // after the parse instead and meets the same limit. Sent with node's http client: supertest would turn a
-  // Buffer into JSON.
-  it.each([
-    [100, 201],
-    [101, 400],
-  ])('holds a UTF-16 body nested %i levels to the same limit (%i)', async (levels, status) => {
-    const bytes = Buffer.from(nestedObjects(levels), 'utf16le');
+  // Posts raw bytes with node's http client: supertest would turn a Buffer into JSON.
+  const postBytes = async (contentType: string, bytes: Buffer): Promise<{ status: number; body: string }> => {
     const { port } = (app.getHttpServer() as Server).address() as AddressInfo;
-    const answered = await new Promise<number>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const req = httpRequest(
         {
           host: '127.0.0.1',
           port,
           path: '/api/echo',
           method: 'POST',
-          headers: { 'Content-Type': 'application/json; charset=utf-16le', 'Content-Length': String(bytes.length) },
+          headers: { 'Content-Type': contentType, 'Content-Length': String(bytes.length) },
         },
         res => {
-          res.resume();
-          resolve(res.statusCode ?? 0);
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
         },
       );
       req.on('error', reject);
       req.end(bytes);
     });
+  };
+  const NESTING_MESSAGE = 'Request body must not nest objects or arrays more than 100 levels deep';
 
-    expect(answered).toBe(status);
+  // body-parser hands the charset to iconv-lite, which reads every one of these as UTF-8: it lower-cases the
+  // name and drops every character that is not a letter or digit, and a trailing ':NNNN' year. A client must
+  // not be able to pick the slow path by spelling UTF-8 differently, so each is refused for its depth before
+  // the parse, like the plain spelling.
+  it.each(['utf-8', 'UTF-8', 'utf-8.', 'utf-_8', 'utf--8', 'utf-8:1993', 'utf-8!'])(
+    'scans a body declared as charset "%s" before it is parsed',
+    async charset => {
+      const res = await postBytes(`application/json; charset="${charset}"`, Buffer.from('['.repeat(101)));
+
+      expect(res.status).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ message: NESTING_MESSAGE });
+    },
+  );
+
+  // The raw scan reads UTF-8. A body in another UTF charset is decoded by the parser first, so it is walked
+  // after the parse instead and meets the same limit.
+  it.each([
+    [100, 201],
+    [101, 400],
+  ])('holds a UTF-16 body nested %i levels to the same limit (%i)', async (levels, status) => {
+    const res = await postBytes('application/json; charset=utf-16le', Buffer.from(nestedObjects(levels), 'utf16le'));
+
+    expect(res.status).toBe(status);
   });
 
   it('answers a DTO route 400, not 500, for a body nested thousands of levels deep', async () => {

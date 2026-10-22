@@ -19,7 +19,12 @@ import { injectDashboardCspNonce } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
 import { parseTrustedProxies } from './common/utils/ip';
-import { BODY_NESTING_MESSAGE, exceedsBodyNesting, exceedsJsonNesting } from './common/validation/body-nesting';
+import {
+  BODY_NESTING_MESSAGE,
+  exceedsBodyNesting,
+  exceedsJsonNesting,
+  isUtf8Charset,
+} from './common/validation/body-nesting';
 
 /** Where the bundled dashboard documents come from, and whether to serve them at all. */
 export interface DashboardSource {
@@ -289,7 +294,7 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       inflate: false,
       verify: (req: Request & { rawBody?: Buffer; nestingScanned?: boolean }, _res, buf, encoding) => {
         req.rawBody = buf;
-        if (encoding.toLowerCase() === 'utf-8') {
+        if (isUtf8Charset(encoding)) {
           if (exceedsJsonNesting(buf)) throw new BadRequestException(BODY_NESTING_MESSAGE);
           req.nestingScanned = true;
         }

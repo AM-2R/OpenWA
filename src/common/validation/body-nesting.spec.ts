@@ -1,4 +1,4 @@
-import { exceedsBodyNesting, exceedsJsonNesting, MAX_BODY_NESTING } from './body-nesting';
+import { exceedsBodyNesting, exceedsJsonNesting, isUtf8Charset, MAX_BODY_NESTING } from './body-nesting';
 
 // One value holding `levels` nested containers: {} is one level, {a:{}} is two.
 const objects = (levels: number): unknown => {
@@ -176,5 +176,23 @@ describe('exceedsJsonNesting', () => {
       expect(scanMs).toBeLessThan(parseMs / 2);
     },
     60_000,
+  );
+});
+
+describe('isUtf8Charset', () => {
+  // The labels iconv-lite, which decodes the body, reads as UTF-8: lower-cased, with every character that is
+  // not a letter or digit dropped, and a trailing ':NNNN' year.
+  it.each(['utf-8', 'UTF-8', 'Utf-8', 'utf8', 'utf-8.', 'utf-_8', 'utf--8', 'utf-8:1993', 'utf-8!'])(
+    'reads %j as UTF-8',
+    charset => {
+      expect(isUtf8Charset(charset)).toBe(true);
+    },
+  );
+
+  it.each(['utf-16', 'utf-16le', 'utf-16be', 'utf-32', 'utf-7', 'utf-80', 'utf-8:19930', 'iso-8859-1', 'ascii', ''])(
+    'does not read %j as UTF-8',
+    charset => {
+      expect(isUtf8Charset(charset)).toBe(false);
+    },
   );
 });

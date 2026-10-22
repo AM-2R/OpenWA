@@ -9,6 +9,16 @@ export const MAX_BODY_NESTING = 100;
 /** The 400 text, the same whether the depth was read from the raw bytes or from the parsed body. */
 export const BODY_NESTING_MESSAGE = `Request body must not nest objects or arrays more than ${MAX_BODY_NESTING} levels deep`;
 
+/**
+ * Whether a charset label names UTF-8 the way the body decoder reads it. body-parser passes the label to
+ * iconv-lite, which lower-cases it and drops every character that is not a letter or digit, and a trailing
+ * ':NNNN' year, so 'utf-8.', 'utf-_8', 'utf--8' and 'utf-8:1993' all decode as UTF-8. Comparing the label
+ * with 'utf-8' would let a client pick the slower path by spelling it differently. The only other labels the
+ * parser lets through (it requires the prefix 'utf-') are UTF-16, UTF-32 and UTF-7.
+ */
+export const isUtf8Charset = (charset: string): boolean =>
+  charset.toLowerCase().replace(/:\d{4}$|[^0-9a-z]/g, '') === 'utf8';
+
 const QUOTE = 0x22; // "
 const BACKSLASH = 0x5c;
 const OPEN_BRACKET = 0x5b; // [
