@@ -782,7 +782,10 @@ export interface ContactRecord {
 export interface CheckNumberResponse {
   number: string;
   exists: boolean;
-  /** The canonical chat id in the engine's native format, or `null` when the number is not registered. */
+  /**
+   * The chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines (it can
+   * differ from the digits supplied), or `null` when the number is not registered.
+   */
   whatsappId: string | null;
 }
 
