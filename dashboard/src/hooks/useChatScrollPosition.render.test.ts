@@ -1554,3 +1554,35 @@ test('a decode whose frame runs after a chat switch does not stop the next chat 
     restore();
   }
 });
+
+// A correction raises a scroll event of its own, which the hook skips as its write: the correction is what records
+// the spot it moved the reader to, so a chat left without scrolling again reopens on the message they were on.
+test('a chat left right after a correction for an image above the reader reopens on the message they were on', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  t.rows[10] = { id: 'a10', h: 100, img: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 1210); // the reader reads back in A, a12 the first row they see
+    t.rows[10] = { id: 'a10', h: 100, img: 300 };
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="a10"]') });
+    await nextFrame();
+    fireEvent.scroll(el); // the correction's own event
+    assert.equal(el.scrollTop, 1510, 'the image above the reader moved them');
+
+    const rowsOfA = t.rows;
+    t.rows = textRows('b', 46);
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows })); // the reader opens B without scrolling
+    fireEvent.scroll(el);
+    t.rows = rowsOfA;
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows })); // and comes back
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 1510, 'A reopened at the spot from before the image grew');
+  } finally {
+    restore();
+  }
+});
