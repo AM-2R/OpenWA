@@ -5,12 +5,13 @@ import { ChatState } from './baileys-chat-state.entity';
 const KEY = (s: string, c: string): string => `${s}\u0000${c}`;
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-type Waiting = { name: string; apply: () => unknown; answer: (value: unknown) => void };
+type Waiting = { name: string; key: string; apply: () => unknown; answer: (value: unknown) => void };
 
 /**
- * A repository whose calls wait for the test. `start` applies the oldest waiting call of a kind to the
- * table at once and returns the function that hands its answer back, so a read can run before a write
- * and still be answered after it, as calls over pooled connections can.
+ * A repository whose calls wait for the test. `start` applies the oldest waiting call of a kind (the nth,
+ * or the oldest for one chat id) to the table at once and returns the function that hands its answer
+ * back, so a read can run before a write and still be answered after it, as calls over pooled
+ * connections can.
  */
 function scriptedRepo(initial: Partial<ChatState>[] = []) {
   const rows = new Map<string, ChatState>();
@@ -21,28 +22,28 @@ function scriptedRepo(initial: Partial<ChatState>[] = []) {
   const waiting: Waiting[] = [];
   const answers: Array<() => void> = [];
   let stamp = 10;
-  const issue = (name: string, apply: () => unknown) =>
-    new Promise<unknown>(answer => waiting.push({ name, apply, answer }));
+  const issue = (name: string, key: string, apply: () => unknown) =>
+    new Promise<unknown>(answer => waiting.push({ name, key, apply, answer }));
   const repo = {
     find: (opts?: { where?: { sessionId: string }; order?: { updatedAt?: 'DESC' }; take?: number }) =>
-      issue('find', () => {
+      issue('find', '*', () => {
         const found = [...rows.values()].filter(r => !opts?.where || r.sessionId === opts.where.sessionId);
         const at = (r: ChatState) => r.updatedAt?.getTime() ?? 0;
         if (opts?.order?.updatedAt === 'DESC') found.sort((a, b) => at(b) - at(a));
         return (opts?.take ? found.slice(0, opts.take) : found).map(r => ({ ...r }));
       }),
     findOne: ({ where }: { where: { sessionId: string; chatId: string } }) =>
-      issue('findOne', () => {
+      issue('findOne', where.chatId, () => {
         const r = rows.get(KEY(where.sessionId, where.chatId));
         return r ? { ...r } : undefined;
       }),
     upsert: (v: ChatState) =>
-      issue('upsert', () => {
+      issue('upsert', v.chatId, () => {
         const k = KEY(v.sessionId, v.chatId);
         rows.set(k, { ...rows.get(k), ...v, updatedAt: new Date(stamp++) });
       }),
     delete: ({ sessionId, chatId }: { sessionId: string; chatId?: string }) =>
-      issue('delete', () => {
+      issue('delete', chatId ?? '*', () => {
         for (const [k, r] of rows)
           if (r.sessionId === sessionId && (chatId === undefined || r.chatId === chatId)) rows.delete(k);
       }),
@@ -52,18 +53,21 @@ function scriptedRepo(initial: Partial<ChatState>[] = []) {
     const value = call.apply();
     return () => call.answer(value);
   };
-  /** Applies the oldest waiting call of that kind now; the returned function hands its answer back. */
-  const start = async (name: string, nth = 0): Promise<() => Promise<void>> => {
+  /** Applies a waiting call of that kind now; the returned function hands its answer back. */
+  const start = async (name: string, which: number | string = 0): Promise<() => Promise<void>> => {
     await settle();
-    const i = waiting.map((w, ix) => (w.name === name ? ix : -1)).filter(ix => ix >= 0)[nth] ?? -1;
-    if (i < 0) throw new Error(`no waiting ${name}; waiting: ${waiting.map(w => w.name).join(',')}`);
+    const match = (w: Waiting) => w.name === name && (typeof which === 'number' || w.key === which);
+    const i =
+      waiting.map((w, ix) => (match(w) ? ix : -1)).filter(ix => ix >= 0)[typeof which === 'number' ? which : 0] ?? -1;
+    if (i < 0)
+      throw new Error(`no waiting ${name} ${which}; waiting: ${waiting.map(w => `${w.name}:${w.key}`).join(',')}`);
     const answer = applyAt(i);
     return async () => {
       answer();
       await settle();
     };
   };
-  const run = async (name: string, nth = 0) => (await start(name, nth))();
+  const run = async (name: string, which: number | string = 0) => (await start(name, which))();
   /** Runs what is waiting, oldest first, until nothing is. */
   const drain = async () => {
     for (await settle(); waiting.length; await settle()) await run(waiting[0].name);
@@ -211,6 +215,28 @@ describe('ChatStateStoreService loads that overlap a write, a forget or an unlin
     svc.get('s', 'c'); // a cold read must warm from the table, not trust an absent mark
     await t.drain();
     expect(svc.get('s', 'c')?.archived).toBe(true);
+  });
+
+  it('does not leave a written twin chat hidden behind a no-row answer a fold read before its write', async () => {
+    const t = scriptedRepo();
+    const svc = storeOf(t);
+    const fold = svc.fold('s', 'p@s.whatsapp.net', ['l@lid'], { archived: true });
+    const write = svc.remember('s', 'l@lid', { pinned: true });
+    const reload = svc.reload();
+    const snapshot = await t.start('find'); // the reload reads the empty table
+    await t.run('findOne', 'l@lid'); // the write finds no row, caches its change and submits the upsert
+    await snapshot(); // the reload applies its answer and drops what the write cached
+    await reload;
+    await t.run('findOne', 'p@s.whatsapp.net'); // the fold reads its own chat: no row
+    const twinRead = await t.start('findOne', 'l@lid'); // then its twin: still no row
+    await t.run('upsert', 'l@lid'); // the write lands
+    await twinRead(); // the old no-row answer arrives
+    await t.drain();
+    await Promise.all([fold, write]);
+    expect(t.rows.get(KEY('s', 'l@lid'))?.pinned).toBe(true);
+    svc.get('s', 'l@lid'); // a chat list read must warm from the table, not trust an absent mark
+    await t.drain();
+    expect(svc.get('s', 'l@lid')?.pinned).toBe(true);
   });
 
   it('does not index an older read-through answer once cache pressure evicted the written chat', async () => {

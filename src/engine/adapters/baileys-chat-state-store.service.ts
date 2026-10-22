@@ -371,9 +371,11 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private async peek(k: string, sessionId: string, chatId: string): Promise<ChatStateValue | undefined> {
     const cached = this.states.get(k);
     if (cached || this.completeSessions.has(sessionId) || this.absent.has(k)) return cached;
+    const since = this.touchSeq;
     const row = await this.repo.findOne({ where: { sessionId, chatId } });
-    // Recorded like a listing's miss, or every fold of a lid-addressed chat queries its twin again.
-    if (!row && !this.states.has(k)) this.markAbsent(k);
+    // Recorded like a listing's miss, or every fold of a lid-addressed chat queries its twin again; not when a
+    // write or forget of the chat came after the read began, which the answer cannot tell.
+    if (!row && !this.states.has(k) && !this.changedSince(k, since)) this.markAbsent(k);
     return row ? fromRow(row) : undefined;
   }
 
