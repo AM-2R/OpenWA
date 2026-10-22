@@ -288,9 +288,13 @@ worker yet. A route declaring a `response` contract is refused with `503` and `R
 and the provider's retry is accepted once the plugin is up. Any other route is accepted and persisted
 as usual. A queued job goes back to the delayed set, without spending a retry attempt, until the plugin
 is up. It is held until the next multiple of `INGRESS_RETRY_DELAY_MS` (a period of at least a second), so every
-held job wakes at the same instants and the jobs come back in the order they were held; a delivery accepted
-within a few milliseconds of a wake can still pass an earlier one that is being held again at that
-moment. With the queue off the delivery is acked and not dispatched: its row stays `pending`, and the
+held job wakes at the same instants and the jobs of one wake come back in the order they were held. That
+order has two limits. Once the restore ends, the jobs of a wake are handled one after another, so those
+already held again come back a period later than those the worker reaches afterwards: earlier deliveries
+of a conversation can follow later ones for as long as the worker needs to go through the whole held
+backlog (milliseconds for a short one, seconds for thousands), and that backlog is handled ahead of newer
+jobs of other plugins. And BullMQ keeps insertion order for at most 4096 held jobs per millisecond: past
+that, the jobs of a wake come back ordered by their id. With the queue off the delivery is acked and not dispatched: its row stays `pending`, and the
 reconciler dispatches it on the first pass after the restore is over and the row is older than
 `INGRESS_RECONCILE_GRACE_MS`. With the defaults that is within a minute after the plugin is up for a row
 accepted at least a minute before it came up, and one to two minutes after the delivery for a later one.

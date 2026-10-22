@@ -106,7 +106,9 @@ export class IngressProcessor extends WorkerHost {
       // "now" is promoted straight back and would spin), so they all wake together and BullMQ promotes them in the
       // order they were delayed. A fixed delay from "now" would give two deliveries of one conversation, a fraction of
       // a period apart, polls a fraction of a period apart, and a restore ending between them lets the later through
-      // first. The delay carries no jitter for the same reason.
+      // first. The delay carries no jitter for the same reason. Jobs of one wake that the worker reaches after
+      // the restore ends still pass those it held again before, and BullMQ's delayed score has 4096 insertion
+      // ranks per millisecond: past them the jobs of one wake come back ordered by id.
       const delay = Math.max(1000, resolveIngressJobOptions().backoff.delay);
       await job.moveToDelayed((Math.floor(Date.now() / delay) + 1) * delay, token);
       throw new DelayedError();
