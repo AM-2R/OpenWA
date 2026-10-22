@@ -2695,6 +2695,46 @@ test('a message that reaches the open chat while the tab is hidden is marked rea
   assert.ok(!screen.queryByLabelText(/unread message/), 'the open chat was badged');
 });
 
+test('a tab that comes back a second time with nothing new owes no second read', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+  fetchCalls.length = 0;
+  const visibilityChanged = () =>
+    rtl.act(() => {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+
+  try {
+    setTabHidden(true);
+    receiveFromAlice('wamid.hidden.twice', 'are you there?');
+    await screen.findAllByText('are you there?');
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.deepEqual(readsOf(CHAT.id), [], 'a hidden tab sent a read receipt');
+    setTabHidden(false);
+    visibilityChanged();
+    await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'the withheld read did not follow'), {
+      timeout: 3_000,
+    });
+    // Let anything the first return queued go out before counting the second.
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    fetchCalls.length = 0;
+    setTabHidden(true);
+    visibilityChanged();
+    setTabHidden(false);
+    visibilityChanged();
+    await new Promise(resolve => setTimeout(resolve, 1_800));
+    assert.deepEqual(readsOf(CHAT.id), [], 'a tab that saw nothing new sent a read when it came back');
+  } finally {
+    setTabHidden(false);
+  }
+});
+
 test('a list reload while the tab is hidden badges nothing on the open chat once the tab is visible and the read went out', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderPage();
