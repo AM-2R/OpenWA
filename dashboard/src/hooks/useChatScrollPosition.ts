@@ -362,6 +362,16 @@ export function useChatScrollPosition(
     if (decideScroll(follow.direction, { ...follow.geometry, scrollTop: el.scrollTop }) === 'bottom') followBottom(el);
   });
 
+  // A commit that shrinks a thread pinned to its bottom (a sent message's placeholder dropped after its echo added a
+  // row) has the browser clamp scrollTop to the new bottom and report that as a scroll. The clamp is the thread's own
+  // move: an image that decodes in the same frame grows the thread before the event is handled, and the listener would
+  // take the clamped position for the reader leaving the bottom, dropping the pin the decode was to follow.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || !pinnedRef.current || el.scrollTop === programmaticTopRef.current) return;
+    if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) programmaticTopRef.current = el.scrollTop;
+  });
+
   const onOlderMessagesRequested = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;

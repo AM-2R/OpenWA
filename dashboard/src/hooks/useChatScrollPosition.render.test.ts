@@ -740,6 +740,78 @@ test('a thread pinned to the bottom stays there as media decodes, until the read
   }
 });
 
+// The echo of a send can add its row before the answer replaces the placeholder, and the thread then shrinks under a
+// reader pinned to its bottom: the browser clamps scrollTop and reports the clamp as a scroll. An image that decodes in
+// that frame grows the thread before the event is handled, so the clamp reads as a position above the bottom.
+for (const scenario of [
+  { name: 'in the frame of the echo', frameAfterEcho: false },
+  { name: 'a frame after the echo', frameAfterEcho: true },
+]) {
+  test(`a send whose placeholder is dropped ${scenario.name} keeps the reader pinned through a decode`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const g: Geometry = { height: 4600, top: 0 };
+    const restore = installGeometry(g);
+    try {
+      const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+
+      await liveMessage(g, rerender, 'outgoing', 300); // the placeholder
+      fireEvent.scroll(el);
+      hook().onMessageAppended('incoming'); // the echo, under the id the answer will bring
+      g.height += 300;
+      rerender(createElement(Probe, { chatId: 'A' }));
+      if (scenario.frameAfterEcho) {
+        fireEvent.scroll(el);
+        await nextFrame();
+      }
+      g.height -= 300; // the answer drops the placeholder, and the browser clamps
+      g.top = Math.min(g.top, g.height - CLIENT_HEIGHT);
+      rerender(createElement(Probe, { chatId: 'A' }));
+      g.height += 500; // an image near the bottom decodes in the same frame
+      hook().onMediaLoad();
+      fireEvent.scroll(el); // the frame: its one scroll event, then the decode's re-pin
+      await nextFrame();
+      assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the reader who sent was left above the bottom');
+    } finally {
+      restore();
+    }
+  });
+}
+
+// Only a clamp is the thread's own: a commit can also land between the reader moving the thread and the event that
+// reports it, and that event is still the reader's.
+for (const scenario of [
+  { name: 'up from the bottom', from: 'bottom', to: 3000 },
+  { name: 'down to the bottom', from: 3000, to: 'bottom' },
+] as const) {
+  test(`a scroll ${scenario.name} that a commit overtakes is still the reader's`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const g: Geometry = { height: 4600, top: 0 };
+    const restore = installGeometry(g);
+    try {
+      const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+      readerScrollsTo(el, scenario.from === 'bottom' ? g.height - CLIENT_HEIGHT : scenario.from);
+
+      el.scrollTop = scenario.to === 'bottom' ? g.height - CLIENT_HEIGHT : scenario.to; // the reader moves
+      rerender(createElement(Probe, { chatId: 'A' })); // something else commits before the frame
+      fireEvent.scroll(el); // the frame reports the move
+      const reader = el.scrollTop;
+      g.height += 400; // an image decodes below
+      hook().onMediaLoad();
+      await nextFrame();
+      const expected = scenario.to === 'bottom' ? g.height - CLIENT_HEIGHT : reader;
+      assert.equal(el.scrollTop, expected, `the reader ended at ${el.scrollTop}`);
+    } finally {
+      restore();
+    }
+  });
+}
+
 // The container is reused across chats, so a decode's frame that runs after a switch must not act on the chat entered.
 test('a decode in the chat being left does not put the chat entered in the same frame at the spot of the one left', async () => {
   const { render, screen, fireEvent, cleanup } = rtl;
