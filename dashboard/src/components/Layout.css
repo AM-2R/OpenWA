@@ -353,7 +353,8 @@
     padding: 0 1rem;
     background: var(--bg-white);
     border-bottom: 1px solid var(--border);
-    z-index: 90;
+    /* Above the overlay (95) so the menu button, the close control while the drawer is open, is not dimmed. */
+    z-index: 96;
   }
 
   .mobile-menu-btn {
@@ -390,9 +391,20 @@
     font-size: 1rem;
   }
 
+  /* The drawer starts under the header (56px, as the header and the page scroller's padding) so it never covers the
+     menu button. */
   .sidebar.mobile {
     transform: translateX(-100%);
     width: 280px;
+    top: 56px;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
+  }
+
+  /* The menu grows upward from the footer, so it gives up the header strip the drawer no longer spans. */
+  .sidebar.mobile .language-menu-list {
+    max-height: calc(100vh - 13rem - 56px);
+    max-height: calc(100dvh - 13rem - 56px);
   }
 
   /* The shadow belongs to the open drawer: on the closed one it would reach past the screen edge. */

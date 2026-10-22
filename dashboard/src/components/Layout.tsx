@@ -82,6 +82,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [update, setUpdate] = useState<{ latest: string; url: string } | null>(null);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const languageMenuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -137,6 +138,21 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     };
   }, [isMobileOpen]);
 
+  // Escape dismisses the innermost overlay: while the language menu is open it takes the key, then the drawer does.
+  useEffect(() => {
+    if (!isMobileOpen || isLanguageMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsMobileOpen(false);
+      // The focused link is about to slide off screen, so hand focus back to the control that opened the drawer.
+      mobileMenuButtonRef.current?.focus();
+    };
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [isMobileOpen, isLanguageMenuOpen]);
+
   useEffect(() => {
     if (!isLanguageMenuOpen) return;
 
@@ -172,7 +188,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     <div className="layout">
       {isMobile && (
         <header className="mobile-header">
-          <button className="mobile-menu-btn" onClick={toggleMobile} aria-label={t('common.expand')}>
+          <button
+            ref={mobileMenuButtonRef}
+            className="mobile-menu-btn"
+            onClick={toggleMobile}
+            aria-label={isMobileOpen ? t('common.close') : t('common.expand')}
+            aria-expanded={isMobileOpen}
+          >
             {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="mobile-brand">

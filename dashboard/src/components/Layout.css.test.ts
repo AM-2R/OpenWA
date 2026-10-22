@@ -113,6 +113,41 @@ test('the full-height sidebar and mobile scroller follow the dynamic viewport', 
   assert.deepEqual(valuesOf(scroller.body, 'min-height'), ['0']);
 });
 
+// The header menu button turns into the close control while the drawer is open. A drawer that started at the top edge
+// sat over it (sidebar 100, header 90) and the tap landed on the drawer's logo. The drawer starts under the header, and
+// the header rises above the dimming overlay so the button stays visible and tappable.
+test('the phone drawer starts below the mobile header and the header stays above the overlay', () => {
+  const header = find('.mobile-header').find(r => r.media);
+  assert.ok(header, 'no mobile .mobile-header rule');
+  const headerHeight = decl(header.body, 'height');
+  assert.match(headerHeight ?? '', /^\d+px$/);
+
+  const drawer = find('.sidebar.mobile').find(r => r.media);
+  assert.ok(drawer, 'no mobile .sidebar.mobile rule');
+  assert.equal(decl(drawer.body, 'top'), headerHeight, 'the drawer starts above the bottom of the header');
+  assert.deepEqual(valuesOf(drawer.body, 'height'), [
+    `calc(100vh - ${headerHeight})`,
+    `calc(100dvh - ${headerHeight})`,
+  ]);
+  // The page scroller keeps the same strip clear.
+  const scroller = find('.main-content.mobile').find(r => r.media);
+  assert.equal(decl(scroller?.body ?? '', 'padding-top'), headerHeight);
+
+  // The language menu grows upward from the footer, and the drawer is a header shorter than the window: unbounded by
+  // that strip it rose over the header and the menu button (Arabic, whose footer is the tallest).
+  const menu = find('.sidebar.mobile .language-menu-list').find(r => r.media);
+  assert.deepEqual(valuesOf(menu?.body ?? '', 'max-height'), [
+    `calc(100vh - 13rem - ${headerHeight})`,
+    `calc(100dvh - 13rem - ${headerHeight})`,
+  ]);
+
+  const overlay = find('.sidebar-overlay').find(r => r.media);
+  assert.ok(
+    Number(decl(header.body, 'z-index')) > Number(decl(overlay?.body ?? '', 'z-index')),
+    'the overlay dims the button',
+  );
+});
+
 test('the language menu is bounded by the dynamic viewport too, since it hangs off the sidebar bottom', () => {
   const menu = find('.language-menu-list').find(r => !r.media);
   assert.deepEqual(valuesOf(menu?.body ?? '', 'max-height'), ['calc(100vh - 13rem)', 'calc(100dvh - 13rem)']);

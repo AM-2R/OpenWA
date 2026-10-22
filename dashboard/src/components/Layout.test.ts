@@ -113,6 +113,69 @@ test('a collapsed sidebar shows its labels in the phone drawer and collapses aga
   }
 });
 
+// The phone drawer is opened and closed with the header menu button. The button said "Expand" in both states and did
+// not expose whether the drawer was open, and Escape (the one way a keyboard or switch user dismisses an overlay) did
+// nothing.
+test('the phone menu button names its state and Escape closes the drawer and returns focus to it', () => {
+  const width = window.innerWidth;
+  try {
+    window.innerWidth = 390;
+    const { container } = renderLayout();
+    const sidebar = container.querySelector('aside.sidebar')!;
+    const button = container.querySelector<HTMLButtonElement>('.mobile-menu-btn')!;
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(button.getAttribute('aria-label'), 'Expand');
+
+    rtl.fireEvent.click(button);
+    assert.ok(sidebar.classList.contains('open'));
+    assert.equal(button.getAttribute('aria-expanded'), 'true');
+    assert.equal(button.getAttribute('aria-label'), 'Close');
+    assert.ok(rtl.screen.getByRole('button', { name: 'Close' }) === button);
+
+    rtl.fireEvent.click(button);
+    assert.ok(!sidebar.classList.contains('open'));
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(button.getAttribute('aria-label'), 'Expand');
+
+    // Escape from inside the drawer: it closes, and focus lands on the button rather than on a link now off screen.
+    rtl.fireEvent.click(button);
+    rtl.screen.getByRole('link', { name: 'Sessions' }).focus();
+    rtl.fireEvent.keyDown(document, { key: 'Escape' });
+    assert.ok(!sidebar.classList.contains('open'), 'Escape left the drawer open');
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.ok(document.activeElement === button, `focus is on ${document.activeElement?.className}`);
+
+    // Closed, Escape is not listened for: it must not pull focus to the button.
+    rtl.screen.getByRole('link', { name: 'Sessions' }).focus();
+    rtl.fireEvent.keyDown(document, { key: 'Escape' });
+    assert.ok(document.activeElement !== button, 'Escape moved focus while the drawer was closed');
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
+// The language menu lives in the drawer footer; Escape dismisses the innermost overlay first.
+test('Escape closes the open language menu before the phone drawer', () => {
+  const width = window.innerWidth;
+  try {
+    window.innerWidth = 390;
+    const { container } = renderLayout();
+    const sidebar = container.querySelector('aside.sidebar')!;
+    rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+    rtl.fireEvent.click(container.querySelector('.language-menu .theme-toggle-btn')!);
+    assert.ok(container.querySelector('.language-menu-list'));
+
+    rtl.fireEvent.keyDown(document, { key: 'Escape' });
+    assert.equal(container.querySelector('.language-menu-list'), null, 'Escape left the language menu open');
+    assert.ok(sidebar.classList.contains('open'), 'the same Escape also closed the drawer');
+
+    rtl.fireEvent.keyDown(document, { key: 'Escape' });
+    assert.ok(!sidebar.classList.contains('open'), 'a second Escape left the drawer open');
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
 // The key management, infrastructure and plugin routes refuse a key restricted to selected sessions, whatever
 // its role, and every refusal lands in the audit log as a failed attempt.
 test('an admin key scoped to sessions is not offered the pages that refuse it', async () => {
