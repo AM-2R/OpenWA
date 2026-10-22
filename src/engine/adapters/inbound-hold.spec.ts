@@ -1448,6 +1448,31 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.announcedAs('message.reaction')).toHaveLength(64);
     });
 
+    it('keeps a change waiting for its message while 64 others wait for the answer of the session', async () => {
+      const OTHER = '628222@s.whatsapp.net';
+      const h = heldProjector({ unique: true, sqlite: true });
+      h.rows.push({ waMessageId: 'X', chatId: CHAT, direction: 'incoming', body: 'the real one' });
+      const answer = h.stall('X'); // the row of the delivery of X waits, so the session has not answered yet
+      const { events } = build(4, h.callbacks, memoryStore());
+      const release = download();
+      upsert(events, media('M', CHAT), text('X', OTHER));
+      await flush();
+      // The real edits of X read as foreign to the copy the delivery stored, and wait for the answer.
+      upsert(events, ...Array.from({ length: 64 }, (_, i) => edit(`E${i}`, 'X', `v${i}`)));
+      await flush();
+      expect(h.announcedAs('message.edited')).toEqual([]);
+
+      upsert(events, reaction('R', 'M', 'late'));
+      await flush();
+      expect(h.announcedAs('message.reaction')).toEqual([]);
+      answer();
+      release();
+      await flush();
+
+      expect(h.rows.map(r => (r.metadata as Row | null)?.reactions)).toContainEqual({ [CHAT]: 'late' });
+      expect(h.announcedAs('message.reaction')).toHaveLength(1);
+    });
+
     it('announces the other changes, and does not process the message again, when a consumer throws', async () => {
       jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const h = heldProjector({ unique: true, sqlite: true });
