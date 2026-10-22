@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import ts from 'typescript';
 
 // The brand green (#25d366) and the amber warning fill are light colours: white on them is 1.98:1 and 2.15:1,
 // far under the 4.5:1 AA needs, and the green as text on white is the same 1.98:1. Text and icons on those fills are
@@ -47,6 +48,44 @@ test('no rule sets white text on the brand green or amber fill', () => {
     )
     .map(r => `${r.at}: ${r.selectors}`);
   assert.deepEqual(offenders, []);
+});
+
+// The same pair written as an inline style object, e.g. { backgroundColor: 'var(--primary)', color: 'white' }: the
+// stylesheet scan above cannot see it. Returns the line of every object literal that pairs them.
+function inlineWhiteOnFill(source: string): number[] {
+  const file = ts.createSourceFile('inline.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const found: number[] = [];
+  const walk = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const values: Record<string, string> = {};
+      for (const p of node.properties) {
+        if (ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer))
+          values[p.name.getText(file)] = p.initializer.text;
+      }
+      if (WHITE.test(values.color ?? '') && LIGHT_FILL.test(values.backgroundColor ?? values.background ?? ''))
+        found.push(file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1);
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(file);
+  return found;
+}
+
+test('no inline style sets white text on the brand green or amber fill', () => {
+  const offenders = filesUnder(SRC, ['.tsx']).flatMap(full =>
+    inlineWhiteOnFill(readFileSync(full, 'utf8')).map(line => `${full.slice(SRC.length + 1)}:${line}`),
+  );
+  assert.deepEqual(offenders, []);
+});
+
+test('the inline scan sees white on a light fill and leaves dark text alone', () => {
+  assert.deepEqual(
+    inlineWhiteOnFill(`const a = <b style={{ backgroundColor: 'var(--primary)', color: 'white' }} />;`),
+    [1],
+  );
+  assert.deepEqual(inlineWhiteOnFill(`const a = { background: '#f59e0b', color: '#FFF' };`), [1]);
+  assert.deepEqual(inlineWhiteOnFill(`const a = { backgroundColor: 'var(--primary)', color: '#0f172a' };`), []);
+  assert.deepEqual(inlineWhiteOnFill(`const a = { backgroundColor: 'var(--error)', color: 'white' };`), []);
 });
 
 test('the brand green is never used as a text colour', () => {
