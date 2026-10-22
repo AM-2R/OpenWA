@@ -1357,7 +1357,7 @@ export function unexposedResources(readme) {
   const end = readme.indexOf('Everything else the gateway publishes', start);
   if (start < 0 || end < 0) {
     throw new Error(
-      'sdk/README.md: could not find the "Deliberately not exposed" paragraph, so the schema coverage check cannot derive its scope.',
+      'sdk/README.md: could not find the "Deliberately not exposed" paragraph, so the gates that derive their scope from it cannot run.',
     );
   }
   const paragraph = readme.slice(start, end).replace(/\([^)]*\)/g, '');
@@ -1366,6 +1366,19 @@ export function unexposedResources(readme) {
     throw new Error(`sdk/README.md: parsed only ${names.length} unexposed resources, expected the full list.`);
   }
   return new Set(names);
+}
+
+/**
+ * Whether the README leaves a contract path unexposed: its resource is listed, or it lies under a listed
+ * path such as `auth/api-keys` (and `/api/auth/api-keys-other` does not). Shared with check-sdk-coverage.mjs.
+ */
+export function isUnexposedPath(path, unexposed) {
+  const shape = path.replace(/\{[^}]*\}/g, '*');
+  const resource = /^\/api\/sessions\/\*\/([^/]+)/.exec(shape)?.[1] ?? /^\/api\/([^/*]+)/.exec(shape)?.[1] ?? '';
+  if (unexposed.has(resource) || unexposed.has(resource.replace(/-rules$/, ''))) return true;
+  return [...unexposed].some(
+    entry => entry.includes('/') && (shape === `/api/${entry}` || shape.startsWith(`/api/${entry}/`)),
+  );
 }
 
 /**
@@ -1386,12 +1399,8 @@ export function exposedSchemas(openapi, unexposed) {
     }
     Object.values(node).forEach(visit);
   };
-  const prefixes = [...unexposed].filter(entry => entry.includes('/')).map(entry => `/api/${entry}`);
   for (const [path, item] of Object.entries(openapi.paths)) {
-    const shape = path.replace(/\{[^}]*\}/g, '*');
-    const resource = /^\/api\/sessions\/\*\/([^/]+)/.exec(shape)?.[1] ?? /^\/api\/([^/*]+)/.exec(shape)?.[1] ?? '';
-    if (unexposed.has(resource) || unexposed.has(resource.replace(/-rules$/, ''))) continue;
-    if (prefixes.some(prefix => shape === prefix || shape.startsWith(`${prefix}/`))) continue;
+    if (isUnexposedPath(path, unexposed)) continue;
     for (const operation of Object.values(item)) {
       if (!operation || typeof operation !== 'object') continue;
       visit(operation.requestBody);
