@@ -1,13 +1,17 @@
 /**
- * Counts the values JSON.stringify would write for a worker's log metadata, and stops once the count passes `limit`.
+ * Counts what JSON.stringify would write for a worker's log metadata, and stops once the count passes `limit`: one
+ * for every value, one per character of a string, a String wrapper or a typed array element, and one per character
+ * of a property name.
  *
  * JSON.stringify cannot be stopped part way: it lists every key of an object or typed array before it calls a
  * replacer for the first one, and it writes a shared reference out again at every use. So the size of the text has
- * to be bounded before it runs. A shared reference is counted at every use, a string, a typed array and a String
- * wrapper by their length, and a property name by its length (it is written at every use of its object too). The
- * count errs toward more: a property that JSON.stringify skips (undefined, a function, a symbol) and the entries of
- * a Map or Set (written as {}) are counted too. Every value that is written costs at least one character, so a
- * count past `limit` means a text longer than `limit`.
+ * to be bounded before it runs. A shared reference is counted at every use, and so is a property name, which is
+ * written at every use of its object.
+ *
+ * The count can be higher than the length of the text. A property that JSON.stringify skips (undefined, a function,
+ * a symbol) and the entries of a Map or Set (written as {}) are counted as if they were written. A metadata whose
+ * count passes `limit` is replaced by the size marker whatever its text would measure; for data that is plain JSON
+ * the count never exceeds the length of the text, so a count past `limit` means a longer text.
  */
 export function countMetaValues(meta: unknown, limit: number): number {
   let count = 0;

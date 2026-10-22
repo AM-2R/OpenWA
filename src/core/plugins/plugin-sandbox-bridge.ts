@@ -590,9 +590,10 @@ export class PluginSandboxBridge {
       let boundedMeta = meta;
       if (meta !== undefined) {
         const reason = typeof meta?.error === 'string' ? { error: truncate(meta.error) } : undefined;
-        // More values than the size limit write a longer text, so the text is only built, to learn its length, for a
-        // meta with fewer: building it for any other could take seconds (a shared reference is written out at every
-        // use) or exhaust the heap (a typed array lists a key per element).
+        // A count past the size limit (values, string characters and property name characters) marks a meta that is
+        // replaced without being written out. The text is only built, to learn its length, for a meta under the
+        // limit: building it for any other could take seconds (a shared reference is written out at every use) or
+        // exhaust the heap (a typed array lists a key per element).
         if (countMetaValues(meta, SANDBOX_LOG_MAX_MESSAGE_LENGTH) > SANDBOX_LOG_MAX_MESSAGE_LENGTH) {
           boundedMeta = { ...reason, metaTruncated: true };
         } else {
