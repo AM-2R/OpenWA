@@ -610,15 +610,23 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // COUNT, or delete()'s own requireSession — would let the mark land after that window. A mark
     // left behind when the fence refuses (409) is harmless and is cleared by the next start().
     this.markStopping(id);
+    // Running from here, before the claim: a claim with nothing running behind it would read as idle to the
+    // heartbeat, and a stop or a failed start here would hand it back while the rows are removed. It ends
+    // before the claim is handed back.
+    const endDelete = this.engineLifecycle.holdDelete(id);
     let claimed = false;
     try {
-      if (this.ownership) {
-        await this.assertNotHeldElsewhere(id);
-        await this.claimForDelete(id, this.ownership);
-        claimed = true;
+      try {
+        if (this.ownership) {
+          await this.assertNotHeldElsewhere(id);
+          await this.claimForDelete(id, this.ownership);
+          claimed = true;
+        }
+        // A failed row read deleted nothing: the lifecycle drops the mark, and the count goes with it.
+        await this.engineLifecycle.delete(id, { onReadFailed: () => this.uncountStopRequest(id) });
+      } finally {
+        endDelete();
       }
-      // A failed row read deleted nothing: the lifecycle drops the mark, and the count goes with it.
-      await this.engineLifecycle.delete(id, { onReadFailed: () => this.uncountStopRequest(id) });
       await this.releaseClaimBestEffort(id);
       this.stopRequests.delete(id);
     } catch (error) {

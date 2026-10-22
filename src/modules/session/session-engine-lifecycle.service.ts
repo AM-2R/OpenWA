@@ -481,6 +481,11 @@ export class SessionEngineLifecycle {
     return this.controls.delete(id, hooks);
   }
 
+  /** Delegate: SessionEngineControls.holdDelete. */
+  holdDelete(id: string): () => void {
+    return this.controls.holdDelete(id);
+  }
+
   /** Delegate: SessionEngineControls.shutdown. */
   shutdown(): Promise<void> {
     this.closed = true;

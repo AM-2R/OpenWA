@@ -292,6 +292,47 @@ describe('A session deleted on one node while a peer shares the database', () =>
     expect(b.ownership.ownedIds()).toEqual([]);
   });
 
+  it('keeps its claim when a stop on the same node ends while the delete reads the session', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const findOne = sessions.findOne.bind(sessions);
+    const reading = deferred();
+    const read = deferred();
+    // The delete's first row read, which comes after its claim.
+    jest.spyOn(sessions, 'findOne').mockImplementationOnce(async (...args: Parameters<typeof findOne>) => {
+      reading.resolve();
+      await read.promise;
+      return findOne(...args);
+    });
+    const reached = deferred();
+    const release = deferred();
+    a.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        reached.resolve();
+        await release.promise;
+      }
+      return { continue: true, data };
+    });
+    finish = release.resolve;
+    deletion = a.service.delete(id);
+    await reading.promise;
+
+    await a.service.stop(id);
+    expect((await findOne({ where: { id } }))?.nodeId).toBe('node-a');
+    read.resolve();
+    await reached.promise;
+    await expect(b.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+    expect(b.engines).toHaveLength(0);
+
+    release.resolve();
+    await deletion;
+    await peerReceivesAMessage();
+
+    expect(await rowsOf(id)).toEqual(gone);
+    expect(a.ownership.ownedIds()).toEqual([]);
+    expect(b.ownership.ownedIds()).toEqual([]);
+  });
+
   it('leaves a lapsed session to the deleting node when a peer looks for sessions to adopt', async () => {
     const id = await seed({ status: SessionStatus.READY, nodeId: 'node-c', leaseExpiresAt: lapsed() });
     await startHeldDelete(id);

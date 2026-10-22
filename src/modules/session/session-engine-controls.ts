@@ -251,11 +251,21 @@ export class SessionEngineControls {
   }
 
   /**
-   * True while a delete of the session runs: from just before its engine teardown until it returns or
-   * throws, credential purge included.
+   * True while a delete of the session runs: from before SessionService.delete claims the session until it
+   * returns or throws, credential purge included.
    */
   isDeleting(id: string): boolean {
     return this.deleting.has(id);
+  }
+
+  /** Count a delete of the session as running until the returned call; see isDeleting. */
+  holdDelete(id: string): () => void {
+    this.deleting.set(id, (this.deleting.get(id) ?? 0) + 1);
+    return () => {
+      const running = (this.deleting.get(id) ?? 1) - 1;
+      if (running > 0) this.deleting.set(id, running);
+      else this.deleting.delete(id);
+    };
   }
 
   /** findOne-or-404 with the runtime-state projection, mirroring SessionService.findOne. */
@@ -800,7 +810,7 @@ export class SessionEngineControls {
     // rejected 409 from fence #2 leaves them intact (the session still exists).
     let parentDeleted = false;
     const writes = closeSessionWrites(this.host.dataSource(), id);
-    this.deleting.set(id, (this.deleting.get(id) ?? 0) + 1);
+    const endDelete = this.holdDelete(id);
 
     try {
       // Stop engine if running — time-bounded + isolated so a stuck Chromium can't wedge the delete;
@@ -921,9 +931,7 @@ export class SessionEngineControls {
       throw error;
     } finally {
       writes.release();
-      const running = (this.deleting.get(id) ?? 1) - 1;
-      if (running > 0) this.deleting.set(id, running);
-      else this.deleting.delete(id);
+      endDelete();
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
       // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS
       // delete added — it does NOT touch reconnect timer / engine / last status / error / recovery
