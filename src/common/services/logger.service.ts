@@ -33,9 +33,9 @@ const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorizati
 // [Truncated], never raw, so a densely linked object graph cannot make it walk that part for long.
 const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
-// Array.prototype.map visits every index, holes included, so a sparse array costs its length however little it
-// holds (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is
-// left of the node budget, is written as [Truncated] before any index is visited. The same goes for a typed array (a
+// The copy of an array tests every index for a hole, so a sparse array costs its length however little it holds
+// (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is left of
+// the node budget, is written as [Truncated] before any index is visited. The same goes for a typed array (a
 // Buffer included), which lists one entry per element. Below the whole levels an object is listed, then truncated if
 // its keys do not fit in what is left of the budget, which they are then charged to.
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
@@ -84,8 +84,10 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
       // Read once: the same number gates the copy and sizes it, whatever the object answers the next time.
       const length = node.length;
       if (length > room) return '[Truncated]';
-      // A plain Array read by index: map would build the copy through the constructor of an Array subclass.
-      return Array.from({ length }, (_, index) => copy(node[index]));
+      // A plain Array filled by index, holes skipped: map would build it through the constructor of an Array subclass.
+      const plain = new Array<unknown>(length);
+      for (let index = 0; index < length; index++) if (index in node) plain[index] = copy(node[index]);
+      return plain;
     }
     if (ArrayBuffer.isView(node) && elementCount(node) > room) return '[Truncated]';
     const props = node as Record<string, unknown>;

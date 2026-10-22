@@ -919,6 +919,29 @@ describe('redactSecrets', () => {
       expect(redactSecrets(deep(zeros(1000)))).toEqual(deep('[Truncated]'));
     });
 
+    // A sparse array costs its length however little it holds, so the copy visits the entries that exist and not the holes.
+    it('copies a sparse array without reading its holes, and writes them as null', () => {
+      const sparse: unknown[] = [];
+      sparse.length = 1000;
+      sparse[2] = { id: 1 };
+      sparse[500] = { id: 2, token: 't' };
+      const indexReads: string[] = [];
+      const watched = new Proxy(sparse, {
+        get: (target, key, receiver): unknown => {
+          if (typeof key === 'string' && /^\d+$/.test(key)) indexReads.push(key);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+
+      const copy = redactSecrets({ list: watched }) as { list: unknown[] };
+
+      expect(indexReads).toEqual(['2', '500']);
+      expect(copy.list).toHaveLength(1000);
+      expect(Object.keys(copy.list)).toEqual(['2', '500']);
+      expect(JSON.stringify(copy.list).startsWith('[null,null,{"id":1},null,null,')).toBe(true);
+      expect(copy.list[500]).toEqual({ id: 2, token: '[REDACTED]' });
+    });
+
     // The caps are applied to the length an array or a typed array has, not to the length an object claims.
     it('reads the length of an array once, for the cap and for the copy', () => {
       let reads = 0;
