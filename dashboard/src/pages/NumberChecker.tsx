@@ -27,6 +27,7 @@ import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
 import { escapeCsvCell } from '../utils/csv';
 import { isGatewayRefusal } from '../utils/groupSelection';
+import { normalizePhoneText } from '../utils/phone';
 import './NumberChecker.css';
 
 export type CheckStatus = 'registered' | 'unregistered' | 'failed';
@@ -70,29 +71,6 @@ export interface CheckResultItem extends CheckNumberResponse {
 }
 
 const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
-
-// Unicode keeps every script's decimal digits in an unbroken run that starts at its zero.
-function asciiDigit(digit: string): string {
-  const code = digit.codePointAt(0)!;
-  let zero = code;
-  while (/\p{Nd}/u.test(String.fromCodePoint(zero - 1))) zero--;
-  return String((code - zero) % 10);
-}
-
-// The text as typed or pasted: the full-width forms of ASCII characters (a plus or a digit from a CJK input method)
-// folded to ASCII, invisible format marks such as the direction marks of a right-to-left chat dropped, and every
-// script's decimal digits as ASCII ones. Only that block is folded: a general compatibility fold would also turn
-// circled and superscript numbers and fractions, which are list bullets and footnote marks, into digits.
-function normalizePhoneText(text: string): string {
-  return [...text]
-    .map(ch => {
-      const code = ch.codePointAt(0)!;
-      return code >= 0xff01 && code <= 0xff5e ? String.fromCharCode(code - 0xfee0) : ch;
-    })
-    .join('')
-    .replace(/\p{Cf}/gu, '')
-    .replace(/\p{Nd}/gu, asciiDigit);
-}
 
 export function NumberChecker() {
   const { t } = useTranslation();
