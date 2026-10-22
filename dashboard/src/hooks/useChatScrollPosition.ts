@@ -205,7 +205,10 @@ export function useChatScrollPosition(
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
   const wasFetchingOlderRef = useRef<boolean>(false);
-  // The element the reader was on when the older page was requested; see the landing effect.
+  // The row the landing holds the reader by, with its offset: taken when the older page is requested, and again on each
+  // genuine scroll (the last one kept when none is in view), on a return to the chat with the page still out, and
+  // after a pending restore's write while it is out; a correction for an image above it moves the offset by as much.
+  // See the landing effect.
   const olderAnchorRef = useRef<{ node: Element; top: number } | null>(null);
   // The chat whose thread was still loading when the reader sent a message in it, until its restore decision.
   const sentWhileLoadingRef = useRef<string | null>(null);
@@ -362,13 +365,14 @@ export function useChatScrollPosition(
   // was reading is pushed down by however much taller it just got. Left alone the view jumps
   // backwards at the exact moment they asked for more.
   //
-  // The reader's element and its offset are read when the page is REQUESTED and the delta applied on
-  // the commit where the in-flight flag falls, not on the first commit whose height changed, which
-  // may be a live message or a preview decoding while the page is out. The older-page indicator is not
-  // one of those: it takes no room in the thread (Chats.css), so it moves nothing when it appears and
-  // the request-time position is still the reader's when the page lands. `scrollTop` is read live at
-  // apply time, so a deliberate reposition made during the fetch survives. The pin/restore machinery
-  // above is not reused: it writes an ABSOLUTE target, which is unknowable here.
+  // The reader's row and its offset are read when the page is REQUESTED and read again while it is out (each
+  // genuine scroll of the reader, a return to the chat, a restore write), so the row is the one the reader is on
+  // when the page lands, or the last one in view when none is. The delta is how far that row moved down, applied
+  // on the commit where the in-flight flag falls, not on the first commit whose height changed, which may be a
+  // live message or a preview decoding while the page is out. The older-page indicator is not one of those: it
+  // takes no room in the thread (Chats.css), so it moves nothing when it appears. `scrollTop` is read live at
+  // apply time, so a deliberate reposition made during the fetch survives. The pin/restore machinery above is
+  // not reused: it writes an ABSOLUTE target, which is unknowable here.
   useLayoutEffect(() => {
     const el = containerRef.current;
     const wasFetching = wasFetchingOlderRef.current;
@@ -475,8 +479,9 @@ export function useChatScrollPosition(
   // pending. A decode above the viewport still grows the thread with no reserved box (there is no
   // width/height in the media metadata to size one from up front), pushing what the user is
   // reading down exactly like an unabsorbed older-page prepend, and it is held the same way. The
-  // decode has no request event to hang a snapshot on, so the baseline is taken here, from the
-  // load event itself, and the element that fired it says whether the reader moved at all.
+  // decode has no request event to hang a snapshot on, so its load event only names the element and
+  // queues it; the next frame reads the element against the height `measureMedia` seeded at insertion
+  // (applyMediaGrowth), and that says whether the reader moved at all.
   /** Attach to every inline media element: seeds its pre-decode height for onMediaLoad. */
   const measureMedia = useCallback((el: Element | null) => {
     if (el) mediaHeights.current.set(el, el.getBoundingClientRect().height);
