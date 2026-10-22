@@ -2393,6 +2393,38 @@ test('switching session after a menu opened reads no address book for the new se
   assert.equal(readsOn(SECOND_SESSION.id), 1);
 });
 
+test('coming back to a session whose menu opened on an earlier visit reads no address book', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  fireEvent.keyDown(document, { key: 'Escape' });
+  const readsOn = (id: string) =>
+    fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${id}/contacts?`)).length;
+  assert.equal(readsOn(SESSION.id), 1);
+  const selectedSession = () => (container.querySelector('select.session-selector') as HTMLSelectElement).value;
+
+  switchSession(container, SECOND_SESSION.id);
+  await waitFor(() => assert.equal(selectedSession(), SECOND_SESSION.id));
+  await screen.findByText('Alice');
+  // Past the cache's hold on the session left (these tests keep a query one second once nothing watches it).
+  await new Promise(resolve => setTimeout(resolve, 1_500));
+
+  switchSession(container, SESSION.id);
+  await waitFor(() => assert.equal(selectedSession(), SESSION.id));
+  await screen.findByText('Alice');
+  await settle();
+  await settle();
+  assert.equal(readsOn(SESSION.id), 1, 'coming back read an address book no menu asked for');
+
+  // A menu on this visit asks again.
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  await screen.findByRole('button', { name: 'Rename contact' });
+  assert.equal(readsOn(SESSION.id), 2);
+});
+
 test("a group's menu has no use for the address book and does not read it", async () => {
   const { screen, fireEvent } = rtl;
   listGroup = true;

@@ -230,9 +230,10 @@ export function Chats() {
   const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
   const [dialogRunning, setDialogRunning] = useState<Chat | null>(null);
   // The session a menu has opened on, which is when its entries need that session's address book (see contactsQuery).
-  // Keyed by session, so it needs no reset at a switch: a reset lands a render after the new session is selected,
-  // when its address book has already been asked for.
+  // Keyed by session, and cleared while rendering the switch: an effect would land a render after the new session is
+  // selected, when its address book has already been asked for.
   const [menuOpenedFor, setMenuOpenedFor] = useState<string>('');
+  if (menuOpenedFor !== '' && menuOpenedFor !== selectedSessionId) setMenuOpenedFor('');
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
