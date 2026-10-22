@@ -114,6 +114,10 @@ let failLidPhones = false;
 const failingLidIds = new Set<string>();
 // When true, it answers a phone that is no string, which nothing in the page expects.
 let garbleLidPhones = false;
+// When true, the lookups answer 429 once more than ten arrive within a second, as the gateway's short throttle tier
+// does for one route and client; `phoneLookupTimes` is when each arrived.
+let throttlePhoneLookups = false;
+const phoneLookupTimes: number[] = [];
 // When true, the number check answers that the number is not on WhatsApp.
 let numberNotRegistered = false;
 // How many more privacy-id chats the list holds, none of which resolves to a phone.
@@ -290,6 +294,12 @@ function installFetchStub(): void {
     }
     if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
       const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
+      if (throttlePhoneLookups) {
+        const now = Date.now();
+        while (phoneLookupTimes.length > 0 && now - phoneLookupTimes[0] >= 1000) phoneLookupTimes.shift();
+        phoneLookupTimes.push(now);
+        if (phoneLookupTimes.length > 10) return Promise.resolve(jsonResponse({ message: 'Too Many Requests' }, 429));
+      }
       if (failLidPhones || failingLidIds.has(id)) return Promise.resolve(jsonResponse({ message: 'busy' }, 503));
       if (garbleLidPhones) return Promise.resolve(jsonResponse({ contactId: id, phone: 15550009999 }));
       return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
@@ -367,6 +377,8 @@ afterEach(async () => {
   failingLidIds.clear();
   garbleLidPhones = false;
   numberNotRegistered = false;
+  throttlePhoneLookups = false;
+  phoneLookupTimes.length = 0;
   extraLidChats = 0;
   for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   for (const key of Object.keys(aliceNow)) delete aliceNow[key as keyof Chat];
@@ -629,9 +641,45 @@ test('only the newest privacy-id chats are asked about, not every one the list h
   await screen.findByText('Lid 0');
   await startChatWithTypedNumber();
 
-  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  assert.ok(phoneRequests().length > 0, 'no privacy id was asked about');
-  assert.ok(phoneRequests().length < extraLidChats, `all ${extraLidChats} privacy ids were asked about`);
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'), { timeout: 8000 });
+  assert.equal(phoneRequests().length, 30, 'the newest 30 privacy ids, no more and no fewer, were asked about');
+});
+
+test('privacy ids are asked about at a pace the gateway accepts, and the search ends at the match', async () => {
+  const { screen, waitFor } = rtl;
+  extraLidChats = 40;
+  throttlePhoneLookups = true;
+  // The thirteenth newest holds the number: it is asked about in the third group of five, after ten requests.
+  lidPhones[extraLidChat(12).id] = '15550009999';
+  const { container } = renderPage();
+  await screen.findByText('Lid 0');
+  const before = listedChatCards(container);
+  await startChatWithTypedNumber();
+
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'), { timeout: 8000 });
+  assert.equal(container.querySelector('.room-header .room-contact-info h3')?.textContent, 'Lid 12');
+  assert.equal(listedChatCards(container), before, 'a second chat was added beside the one the list holds');
+  assert.equal(phoneRequests().length, 15, 'ids after the match were asked about, or a group was asked twice');
+});
+
+test('privacy ids the page already holds answers for are kept for a day and neither asked again nor waited for', async () => {
+  const { screen, waitFor } = rtl;
+  extraLidChats = 10;
+  const { container } = renderPage();
+  await screen.findByText('Lid 0');
+  const { resolvedPhoneQuery } = await import('../hooks/useResolvedPhone.ts');
+  const client = queryClients[0];
+  for (let n = 0; n < extraLidChats; n++) await client.fetchQuery(resolvedPhoneQuery(SESSION.id, extraLidChat(n).id));
+  const held = client.getQueryCache().find({ queryKey: ['resolvedPhone', SESSION.id, extraLidChat(0).id] });
+  assert.equal(held?.gcTime, 24 * 60 * 60 * 1000, 'an answer nothing observes would be collected after minutes');
+  fetchCalls.length = 0;
+  await startChatWithTypedNumber();
+
+  // Two groups of five that reached the gateway would be a second apart.
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open in time'), {
+    timeout: 800,
+  });
+  assert.equal(phoneRequests().length, 0, 'an answer the page holds was asked for again');
 });
 
 for (const reactStrictMode of [false, true]) {

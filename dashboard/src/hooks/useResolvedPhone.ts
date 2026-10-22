@@ -1,4 +1,4 @@
-import { useQuery, type Query } from '@tanstack/react-query';
+import { useQuery, type Query, type QueryClient } from '@tanstack/react-query';
 import { contactApi } from '../services/api';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -19,7 +19,6 @@ export function useResolvedPhone(sessionId: string | undefined, contactId: strin
   return useQuery<string | null, Error>({
     ...resolvedPhoneQuery(sessionId!, contactId!),
     enabled: Boolean(sessionId && contactId),
-    gcTime: 60 * 60 * 1000,
     retry: false,
   });
 }
@@ -31,5 +30,15 @@ export function resolvedPhoneQuery(sessionId: string, contactId: string) {
     queryFn: () => contactApi.resolvePhone(sessionId, contactId).then(r => r.phone),
     // lid→phone mappings don't churn, so a phone is held for the day; a null is not (see NULL_STALE_MS).
     staleTime: (query: Query<string | null, Error>) => (query.state.data === null ? NULL_STALE_MS : DAY_MS),
+    // Without an observer a query is collected after five minutes, which would drop the answers of an id that is
+    // only ever asked about through fetchQuery.
+    gcTime: DAY_MS,
   };
+}
+
+/** True when the page holds a current answer for the id, so asking again costs the gateway nothing. */
+export function isResolvedPhoneHeld(queryClient: QueryClient, sessionId: string, contactId: string): boolean {
+  const { queryKey, staleTime } = resolvedPhoneQuery(sessionId, contactId);
+  const query = queryClient.getQueryCache().find<string | null, Error>({ queryKey });
+  return query?.state.status === 'success' && !query.isStaleByTime(staleTime(query));
 }

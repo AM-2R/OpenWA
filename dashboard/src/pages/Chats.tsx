@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
-import { useResolvedPhone, resolvedPhoneQuery } from '../hooks/useResolvedPhone';
+import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
 import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -97,12 +97,15 @@ const MARK_READ_DEBOUNCE_MS = 750;
 const MARK_READ_MESSAGE_IDS_MAX = 100;
 const readKey = (sessionId: string, chatId: string) => `${sessionId}\u0000${chatId}`;
 
-// How many privacy-id chats a typed number is looked for among, and how many are asked about at once. The engine
-// answers one id per request, so searching the whole list would cost a request for every chat in it. Only the
-// newest chats are searched: an older conversation opens as a new chat, as it does for a number the list has no
-// row for. Raise the cap, or have the gateway name the privacy id of a phone, if that proves too few.
+// How many privacy-id chats a typed number is looked for among, how many are asked about at once, and the least
+// time between two such groups. The engine answers one id per request, so searching the whole list would cost a
+// request for every chat in it. Only the newest chats are searched: an older conversation opens as a new chat, as
+// it does for a number the list has no row for. Raise the cap, or have the gateway name the privacy id of a phone,
+// if that proves too few. The gateway lets one client ask this route ten times a second, and a request it refuses
+// reads as no phone, so a group of five follows the one before it by a second: half the rate it allows.
 const LID_CHATS_SEARCHED = 30;
 const LID_LOOKUPS_AT_ONCE = 5;
+const LID_LOOKUP_GAP_MS = 1000;
 
 // Longest one background chat-list walk may take before it is abandoned. A walk is a dozen small requests, and
 // the gateway answers a stalled engine at 180 s, so this is far above a healthy walk and below that.
@@ -1271,8 +1274,16 @@ export function Chats() {
     const privacyChats = chatsRef.current
       .filter(c => c.kind === 'individual' && c.id.endsWith('@lid'))
       .slice(0, LID_CHATS_SEARCHED);
+    let lastAskedAt = 0;
     for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
       const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
+      // A group the page already holds answers for goes ahead at once; only one that reaches the gateway waits.
+      if (batch.some(c => !isResolvedPhoneHeld(queryClient, sessionId, c.id))) {
+        const wait = lastAskedAt + LID_LOOKUP_GAP_MS - Date.now();
+        if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+        if (selectedSessionRef.current !== sessionId) return null;
+        lastAskedAt = Date.now();
+      }
       const phones = await Promise.all(
         batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
       );
