@@ -131,6 +131,8 @@ interface IncomingWsMessage {
   /** Business prompt choices (Baileys); top-level on the live event, folded into metadata for the UI. */
   buttons?: Array<{ id: string; text: string }>;
   poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
+  /** Edited before the gateway stored it; its `message.edited` came first, while no thread held it. */
+  edited?: boolean;
   metadata?: ChatMessageView['metadata'];
   kind?: ChatKind;
   /** Group poster: `from` is the group JID, so `contact`/`author` identify who actually sent it. */

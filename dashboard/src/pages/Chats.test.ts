@@ -3089,6 +3089,40 @@ test('a live edit labels the message it changed, and not one whose text it repea
   await within(room).findByText('hello from alice, edited');
 });
 
+// The gateway announces the edit of a message it had not stored yet before the message, which then arrives with
+// the edited text and, where its row is marked, the mark.
+test('a live message announced as edited is labelled, though its edit arrived first', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('hello from alice');
+  const labelOf = (text: string) =>
+    within(room).getByText(text).closest('.message-bubble')?.querySelector('.message-edited');
+  const arrive = (id: string, body: string, edited?: true) => {
+    receiveEvent('message.edited', { messageId: id, chatId: CHAT.id, body, timestamp: 1_700_003_001 });
+    receiveEvent('message.received', {
+      id,
+      chatId: CHAT.id,
+      from: CHAT.id,
+      to: 'me',
+      body,
+      type: 'text',
+      fromMe: false,
+      timestamp: 1_700_003_000,
+      ...(edited ? { edited } : {}),
+    });
+  };
+
+  arrive('wamid.live.edited', 'corrected on arrival', true);
+  arrive('wamid.live.same', 'sent as it was');
+  await within(room).findByText('corrected on arrival');
+  await within(room).findByText('sent as it was');
+
+  await waitFor(() => assert.ok(labelOf('corrected on arrival'), 'the message announced as edited was not labelled'));
+  assert.equal(labelOf('sent as it was') ?? null, null, 'a message announced without the mark was labelled');
+});
+
 test('an edit arriving after the newest message was deleted for everyone does not refill the sidebar preview', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   const { container } = renderChats();

@@ -259,7 +259,8 @@ export interface ChatMessageView extends ChatMessage {
 /**
  * Metadata for a live `message.received` / `message.sent` WS payload. Prompt `buttons` arrive
  * top-level on that event (the history route never populates them) and are folded here so the
- * thread renders from `metadata.buttons`, matching persisted DB rows.
+ * thread renders from `metadata.buttons`, matching persisted DB rows. So is `edited`, set on a
+ * message edited before the gateway stored it, whose `message.edited` came while no thread held it.
  */
 export function liveMessageMetadata(msg: {
   media?: MessageMedia;
@@ -267,10 +268,12 @@ export function liveMessageMetadata(msg: {
   call?: { video: boolean; missed: boolean };
   buttons?: Array<{ id: string; text: string }>;
   poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
+  edited?: boolean;
   metadata?: ChatMessageView['metadata'];
 }): ChatMessageView['metadata'] {
-  if (msg.metadata) return msg.metadata;
+  if (msg.metadata) return msg.edited ? { ...msg.metadata, edited: true } : msg.metadata;
   const metadata: NonNullable<ChatMessageView['metadata']> = {};
+  if (msg.edited) metadata.edited = true;
   if (msg.media) metadata.media = msg.media;
   if (msg.quotedMessage) metadata.quotedMessage = msg.quotedMessage;
   if (msg.call) metadata.call = msg.call;

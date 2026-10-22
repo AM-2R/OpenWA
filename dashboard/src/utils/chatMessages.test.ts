@@ -390,6 +390,29 @@ test('applyMessageEdit does not label a message whose text the event repeats', (
   assert.deepEqual(after[0].metadata?.reactions, { me: 'x' });
 });
 
+test('liveMessageMetadata: carries the edited mark of a message announced as edited', () => {
+  const media = { mimetype: 'image/png', data: 'QUJD' };
+  assert.deepEqual(liveMessageMetadata({ edited: true }), { edited: true });
+  assert.deepEqual(liveMessageMetadata({ media, edited: true }), { media, edited: true });
+  assert.deepEqual(liveMessageMetadata({ metadata: { reactions: { me: 'x' } }, edited: true }), {
+    reactions: { me: 'x' },
+    edited: true,
+  });
+  assert.equal(liveMessageMetadata({}), undefined);
+});
+
+// The gateway announces the edit of a message it had not stored yet before the message itself, which then carries
+// the edited text and the mark.
+test('a message announced as edited after its edit missed the thread is labelled edited', () => {
+  const missed = applyMessageEdit([], { messageId: 'WA_EDIT_3', body: 'fixed' });
+  const live = { body: 'fixed', edited: true as const };
+  const after = mergeOrAppend(missed, msg({ id: 'WA_EDIT_3', body: live.body, metadata: liveMessageMetadata(live) }));
+
+  assert.equal(after[0].metadata?.edited, true);
+  const echo = mergeOrAppend(after, msg({ id: 'WA_EDIT_3', body: 'fixed', metadata: liveMessageMetadata({}) }));
+  assert.equal(echo[0].metadata?.edited, true, 'a later copy without the mark took it away');
+});
+
 test('applyMessageEdit is a referential no-op for an empty or unknown target id', () => {
   const before = [msg({ id: 'm-1', body: 'old' })];
   assert.equal(applyMessageEdit(before, { messageId: '', body: 'new' }), before);
