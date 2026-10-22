@@ -156,9 +156,13 @@
 > publishes on, and what was written to it may be lost with it. The events that node raises while it is
 > disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are dropped for the clients
 > connected to the other replicas: they are not delivered late and not twice. Clients connected to the node
-> that raised an event are served directly, and webhooks do not use this path, so neither is affected. The
-> node holds at most 10 s of unanswered events, which bounds what a stalled Redis can cost in memory. A
-> replica whose own Redis connection is reconnecting also misses what the others publish meanwhile.
+> that raised an event are served directly, and webhooks do not use this path, so neither is affected. Memory
+> is bounded in two ways. A Redis that sends nothing for 10 s has the connection destroyed, which releases
+> what the node held for it: at most 10 s of events. A Redis that keeps answering, but slower than events are
+> raised, is never silent for 10 s, so the node holds at most 12,000 unanswered events (10 s at 1,000 events a
+> second, with a fifth to spare) and drops further frames for the other replicas, with one warning per burst,
+> until Redis catches up. A replica whose own Redis connection is reconnecting also misses what the others
+> publish meanwhile.
 >
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The
 > node that processes a revoke, delete, or narrowing tears down that key's sockets synchronously, in

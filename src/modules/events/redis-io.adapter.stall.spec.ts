@@ -3,7 +3,12 @@ import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { Server } from 'socket.io';
-import { RedisIoAdapter, WS_REDIS_COMMAND_TIMEOUT_MS, WS_REDIS_SOCKET_TIMEOUT_MS } from './redis-io.adapter';
+import {
+  RedisIoAdapter,
+  WS_REDIS_COMMAND_TIMEOUT_MS,
+  WS_REDIS_MAX_UNANSWERED,
+  WS_REDIS_SOCKET_TIMEOUT_MS,
+} from './redis-io.adapter';
 
 /**
  * A Redis that keeps the connection open and stops answering never errors the socket, so the publish
@@ -16,10 +21,23 @@ class FakeRedis {
   /** Connections accepted so far: a client that destroys its socket and reconnects raises it. */
   connections = 0;
   readonly sockets = new Set<net.Socket>();
+  /** When set, a PUBLISH is answered one at a time through answerOne(): a Redis that is slow, not silent. */
+  trickle = false;
   private stalled = false;
+  private readonly slowReplies: Array<() => void> = [];
   /** What a stalled peer owes its clients. Sent when it comes back, as a Redis that was paused does. */
   private readonly owed: Array<() => void> = [];
   private readonly server: net.Server;
+
+  /** Answer the oldest PUBLISH a slow peer still owes. */
+  answerOne(): void {
+    this.slowReplies.shift()?.();
+  }
+
+  /** Answer every PUBLISH a slow peer still owes. */
+  answerAll(): void {
+    for (const send of this.slowReplies.splice(0)) send();
+  }
 
   get silent(): boolean {
     return this.stalled;
@@ -46,7 +64,9 @@ class FakeRedis {
           // that no reply ever settles is rejected as an unhandled rejection when the client is closed, which ends
           // a Jest worker.
           const reply = FakeRedis.reply(command);
-          if (!this.silent || /^p?subscribe$/i.test(command[0])) socket.write(reply);
+          if (this.trickle && !this.silent && command[0].toUpperCase() === 'PUBLISH') {
+            this.slowReplies.push(() => !socket.destroyed && socket.write(reply));
+          } else if (!this.silent || /^p?subscribe$/i.test(command[0])) socket.write(reply);
           else this.owed.push(() => !socket.destroyed && socket.write(reply));
         }
       });
@@ -229,6 +249,38 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     expect(redis.connections).toBe(connections);
     expect(pub.status).toBe('ready');
   }, 15_000);
+
+  // A Redis that answers, but slower than events are raised, resets the socket timer with every reply, so the socket
+  // deadline never fires and the client would hold the whole backlog. Only the cap on unanswered commands bounds it.
+  it('holds no more unanswered events than the cap when the peer answers too slowly to ever look silent', async () => {
+    const connections = redis.connections;
+    redis.trickle = true;
+    const answering = setInterval(() => redis.answerOne(), 1000);
+    try {
+      broadcast(WS_REDIS_MAX_UNANSWERED + 3000);
+      await sleep(2500);
+
+      expect(held()).toBeLessThanOrEqual(WS_REDIS_MAX_UNANSWERED);
+      expect(held()).toBeGreaterThan(WS_REDIS_MAX_UNANSWERED - 10);
+      expect(redis.published.length).toBeLessThanOrEqual(WS_REDIS_MAX_UNANSWERED + 3);
+      expect(redis.connections).toBe(connections);
+      expect(pub.status).toBe('ready');
+      // Once per burst, not once per frame.
+      const capLines = warn.mock.calls.flat().filter(line => String(line).includes('fan-out frames are dropped'));
+      expect(capLines).toHaveLength(1);
+    } finally {
+      clearInterval(answering);
+    }
+
+    // The peer catches up: everything it owed is answered, and events are published again.
+    redis.trickle = false;
+    redis.answerAll();
+    expect(await waitUntil(() => held() === 0, 3000)).toBe(true);
+    const published = redis.published.length;
+    broadcast(1);
+    expect(await waitUntil(() => redis.published.length === published + 1, 3000)).toBe(true);
+    expect(warn.mock.calls.flat().some(line => String(line).includes('were dropped'))).toBe(true);
+  }, 30_000);
 
   it('settles a publish within its deadline, then drops the connection after the socket deadline, holds nothing more, and recovers', async () => {
     redis.silent = true;

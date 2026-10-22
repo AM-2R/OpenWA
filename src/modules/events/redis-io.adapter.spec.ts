@@ -39,6 +39,7 @@ import {
   isWsRedisEnabled,
   wsRedisOptions,
   WS_REDIS_COMMAND_TIMEOUT_MS,
+  WS_REDIS_MAX_UNANSWERED,
   WS_REDIS_QUIT_TIMEOUT_MS,
   WS_REDIS_SOCKET_TIMEOUT_MS,
 } from './redis-io.adapter';
@@ -243,6 +244,46 @@ describe('RedisIoAdapter', () => {
       } finally {
         spy.mockRestore();
       }
+    });
+
+    // The cap reads the length of the client's command queue, which ioredis keeps on an internal property.
+    describe('the cap on unanswered commands', () => {
+      const withPublisher = async (
+        queue: { length: number } | undefined,
+        check: (pub: FakeRedis) => Promise<void>,
+      ): Promise<void> => {
+        process.env.REDIS_ENABLED = 'true';
+        const spy = withBaseServer(fakeServer().server);
+        try {
+          new RedisIoAdapter({} as never).createIOServer(2785);
+          const [pub] = redisInstances;
+          if (queue) (pub as unknown as { commandQueue: { length: number } }).commandQueue = queue;
+          await check(pub);
+        } finally {
+          spy.mockRestore();
+        }
+      };
+
+      it('does not publish a frame while the queue is at the cap, and publishes again below it', async () => {
+        // The figure docs/13 quotes. A 10 s silence at 1000 events a second must still fit, with room to spare.
+        expect(WS_REDIS_MAX_UNANSWERED).toBe(12_000);
+        expect(WS_REDIS_MAX_UNANSWERED).toBeGreaterThanOrEqual((WS_REDIS_SOCKET_TIMEOUT_MS / 1000) * 1000 * 1.2);
+        const queue = { length: WS_REDIS_MAX_UNANSWERED };
+        await withPublisher(queue, async pub => {
+          await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
+          expect(pub.sent).not.toHaveBeenCalled();
+          queue.length = WS_REDIS_MAX_UNANSWERED - 1;
+          await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(1);
+          expect(pub.sent).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it('applies no cap, and does not fail, when the client exposes no command queue', async () => {
+        await withPublisher(undefined, async pub => {
+          await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(1);
+          expect(pub.sent).toHaveBeenCalledTimes(1);
+        });
+      });
     });
 
     it('falls back to the base server (no crash) if wiring the adapter throws', () => {
