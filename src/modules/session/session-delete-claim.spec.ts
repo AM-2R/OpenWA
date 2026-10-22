@@ -269,6 +269,15 @@ describe('A session deleted on one node while a peer shares the database', () =>
     };
   }
 
+  /** What a settled delete or stop must not leave behind: its share of a stop record, a stop write counted. */
+  function bookkeeping(id: string): { deletes: boolean; stopWrites: boolean } {
+    const service = a.service as unknown as {
+      deleteStops: Map<string, unknown>;
+      stopWritesInFlight: Map<string, number>;
+    };
+    return { deletes: service.deleteStops.has(id), stopWrites: service.stopWritesInFlight.has(id) };
+  }
+
   const gone = { sessions: 0, messages: 0, outbox: 0, deliveryFailures: 0 };
 
   it.each([
@@ -520,6 +529,280 @@ describe('A session deleted on one node while a peer shares the database', () =>
     await expect(deleting).rejects.toThrow('connection reset');
 
     expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
+  it('keeps a stop whose record has landed but not yet returned when its delete fails', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const update = sessions.update.bind(sessions);
+    const reading = deferred();
+    const read = deferred();
+    jest.spyOn(sessions, 'findOne').mockImplementationOnce(async () => {
+      reading.resolve();
+      await read.promise;
+      throw new Error('connection reset');
+    });
+    const deleting = a.service.delete(id);
+    await reading.promise;
+    const landed = deferred();
+    const answer = deferred();
+    // The stop's record is on the row; its answer is held until the delete has failed.
+    jest.spyOn(sessions, 'update').mockImplementationOnce(async (...args: Parameters<typeof update>) => {
+      const result = await update(...args);
+      landed.resolve();
+      await answer.promise;
+      return result;
+    });
+    const stopping = a.service.stop(id);
+    await landed.promise;
+    read.resolve();
+
+    await expect(deleting).rejects.toThrow('connection reset');
+    answer.resolve();
+    await stopping;
+
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
+  it('takes its stop back when another delete of it is refused at the first fence too', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await a.service.start(id, { explicit: true });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'))
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+
+    const outcomes = await Promise.allSettled([a.service.delete(id), a.service.delete(id)]);
+
+    expect(outcomes.map(outcome => outcome.status)).toEqual(['rejected', 'rejected']);
+    expect(a.service.getEngine(id)).toBe(a.engines[0]);
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBeNull();
+    expect(bookkeeping(id)).toEqual({ deletes: false, stopWrites: false });
+  });
+
+  // Each of these begins before the delete and ends, having recorded no stop, before the delete fails.
+  it.each([
+    ['a force-kill with no engine to kill', 'kill-refused', 'BadRequestException'],
+    ['a force-kill that cannot record its stop', 'kill-write', 'ok'],
+    ['a stop whose row read fails', 'stop-read', 'Error'],
+    ['a stop that cannot record itself', 'stop-write', 'Error'],
+  ])('takes its stop back when %s overlaps it', async (_case, other, answer) => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    if (other === 'kill-write') await a.service.start(id, { explicit: true });
+    const sessions = a.db.getRepository(Session);
+    const findOne = sessions.findOne.bind(sessions);
+    const reached = deferred();
+    const go = deferred();
+    // The other request is held at its row read or at its stop record until the delete has begun.
+    const hold = async (): Promise<void> => {
+      reached.resolve();
+      await go.promise;
+    };
+    if (other === 'kill-refused') {
+      jest.spyOn(sessions, 'findOne').mockImplementationOnce(async (...args: Parameters<typeof findOne>) => {
+        await hold();
+        return findOne(...args);
+      });
+    } else if (other === 'stop-read') {
+      jest.spyOn(sessions, 'findOne').mockImplementationOnce(async () => {
+        await hold();
+        throw new Error('connection reset');
+      });
+    } else {
+      jest.spyOn(sessions, 'update').mockImplementationOnce(async () => {
+        await hold();
+        throw new Error('connection reset');
+      });
+    }
+    // The delete waits at its first fence until the other request has answered, and is refused there.
+    const fenced = deferred();
+    const refuse = deferred();
+    jest.spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown').mockImplementationOnce(async () => {
+      fenced.resolve();
+      await refuse.promise;
+      throw new ConflictException('a logout teardown is running');
+    });
+    const request = other.startsWith('kill') ? a.service.forceKill(id) : a.service.stop(id);
+    const answered = request.then(
+      () => 'ok',
+      (error: unknown) => (error as Error).constructor.name,
+    );
+    await reached.promise;
+    const deleting = a.service.delete(id);
+    await fenced.promise;
+    go.resolve();
+    expect(await answered).toBe(answer);
+    refuse.resolve();
+
+    await expect(deleting).rejects.toBeInstanceOf(ConflictException);
+
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBeNull();
+    expect(bookkeeping(id)).toEqual({ deletes: false, stopWrites: false });
+  });
+
+  it.each([
+    ['records it', 'stopped'],
+    ['fails to read the session', null],
+  ])('leaves the session to a stop still reading it when its delete fails, which then %s', async (_case, after) => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const findOne = sessions.findOne.bind(sessions);
+    const reading = deferred();
+    const read = deferred();
+    jest.spyOn(sessions, 'findOne').mockImplementationOnce(async (...args: Parameters<typeof findOne>) => {
+      reading.resolve();
+      await read.promise;
+      if (after === null) throw new Error('connection reset');
+      return findOne(...args);
+    });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+    const stopping = a.service.stop(id).catch((error: unknown) => error);
+    await reading.promise;
+
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+    read.resolve();
+    await stopping;
+
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe(after);
+  });
+
+  // Two deletes of one session share the stop the first of them recorded; the last one out decides.
+  it('keeps the session down for a delete still running when another delete of it is refused', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const findOne = sessions.findOne.bind(sessions);
+    const reading = deferred();
+    const read = deferred();
+    // The first delete's row read, which comes after its stop record, is held.
+    jest.spyOn(sessions, 'findOne').mockImplementationOnce(async (...args: Parameters<typeof findOne>) => {
+      reading.resolve();
+      await read.promise;
+      return findOne(...args);
+    });
+    const reached = deferred();
+    const release = deferred();
+    a.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        reached.resolve();
+        await release.promise;
+      }
+      return { continue: true, data };
+    });
+    finish = release.resolve;
+    deletion = a.service.delete(id);
+    await reading.promise;
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+
+    read.resolve();
+    await reached.promise;
+    // The rows are being removed: a process that died here would leave the session down.
+    expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('stopped');
+    release.resolve();
+    await deletion;
+
+    expect(await rowsOf(id)).toEqual(gone);
+  });
+
+  /**
+   * A failed delete's take-back is held while `next` runs: until `next` has written a stop record or 200 ms
+   * have passed, then let go.
+   */
+  async function duringTakeBack(
+    next: (id: string) => Promise<unknown>,
+    { takeBackFails = false, refusals = 1 } = {},
+  ): Promise<string> {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const update = sessions.update.bind(sessions);
+    const clearing = deferred();
+    const cleared = deferred();
+    let held = false;
+    let stopsWritten = 0;
+    // Only the first take-back is held, and fails with `takeBackFails`; any later one runs at once.
+    jest.spyOn(sessions, 'update').mockImplementation(async (...args: Parameters<typeof update>) => {
+      if (args[1].desiredState === null && !held) {
+        held = true;
+        clearing.resolve();
+        await cleared.promise;
+        if (takeBackFails) throw new Error('connection reset');
+      }
+      const result = await update(...args);
+      if (args[1].desiredState === 'stopped') stopsWritten++;
+      return result;
+    });
+    // The failed delete is refused at its first fence, and so are the next `refusals - 1` deletes.
+    const fence = jest.spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown');
+    for (let refused = 0; refused < refusals; refused++) {
+      fence.mockRejectedValueOnce(new ConflictException('a logout teardown is running'));
+    }
+    const failing = a.service.delete(id).catch((error: unknown) => error);
+    await clearing.promise;
+    const written = stopsWritten;
+    const running = next(id);
+    for (let waited = 0; waited < 200 && stopsWritten === written; waited += 5) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    cleared.resolve();
+    expect(await failing).toBeInstanceOf(ConflictException);
+    await running;
+    return id;
+  }
+
+  it('records its own stop when it begins while a failed delete takes its stop back', async () => {
+    const reached = deferred();
+    const release = deferred();
+    a.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        reached.resolve();
+        await release.promise;
+      }
+      return { continue: true, data };
+    });
+    finish = release.resolve;
+    const id = await duringTakeBack(async next => {
+      deletion = a.service.delete(next);
+      await reached.promise;
+    });
+
+    // The rows are being removed: a process that died here would leave the session down.
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBe('stopped');
+    release.resolve();
+    await deletion;
+    expect(await rowsOf(id)).toEqual(gone);
+  });
+
+  it('keeps a stop sent while a failed delete takes its stop back', async () => {
+    const id = await duringTakeBack(next => a.service.stop(next));
+
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBe('stopped');
+    expect(bookkeeping(id)).toEqual({ deletes: false, stopWrites: false });
+  });
+
+  it('leaves the take-back to the failed delete when one begun during it ends before recording its own', async () => {
+    const id = await duringTakeBack(async next => {
+      jest.spyOn(a.ownership, 'claim').mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+      await expect(a.service.delete(next)).rejects.toBeInstanceOf(ServiceUnavailableException);
+      await a.service.stop(next);
+    });
+
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBe('stopped');
+  });
+
+  it('takes the stop back after a failed take-back when a delete begun during it fails too', async () => {
+    const id = await duringTakeBack(next => expect(a.service.delete(next)).rejects.toBeInstanceOf(ConflictException), {
+      takeBackFails: true,
+      refusals: 2,
+    });
+
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).toBeNull();
+    expect(bookkeeping(id)).toEqual({ deletes: false, stopWrites: false });
   });
 
   it('refuses the delete and removes nothing when the claim cannot be written', async () => {
