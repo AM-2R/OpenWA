@@ -11,6 +11,11 @@ let NumberChecker: typeof import('./NumberChecker.tsx').NumberChecker;
 let NUMBER_CHECK_BATCH_MAX: typeof import('./NumberChecker.tsx').NUMBER_CHECK_BATCH_MAX;
 let ToastProvider: typeof import('../components/Toast.tsx').ToastProvider;
 let MemoryRouter: typeof import('react-router-dom').MemoryRouter;
+let Routes: typeof import('react-router-dom').Routes;
+let Route: typeof import('react-router-dom').Route;
+let Link: typeof import('react-router-dom').Link;
+let NumberCheckProvider: typeof import('../components/NumberCheckProvider.tsx').NumberCheckProvider;
+let useNumberCheck: typeof import('../hooks/useNumberCheck.ts').useNumberCheck;
 let RoleProvider: typeof import('../components/RoleProvider.tsx').RoleProvider;
 let defaultFetch: typeof fetch;
 
@@ -40,7 +45,46 @@ function renderComponent(role = 'operator', queryClient = createTestQueryClient(
       createElement(
         RoleProvider,
         null,
-        createElement(ToastProvider, null, createElement(MemoryRouter, null, createElement(NumberChecker))),
+        createElement(
+          ToastProvider,
+          null,
+          createElement(NumberCheckProvider, null, createElement(MemoryRouter, null, createElement(NumberChecker))),
+        ),
+      ),
+    ),
+  );
+}
+
+// The page and a second route under the providers App mounts above its routes, with links to move between them.
+function renderRoutes() {
+  sessionStorage.setItem('openwa_user_role', 'operator');
+  return rtl.render(
+    createElement(
+      QueryClientProvider,
+      { client: createTestQueryClient() },
+      createElement(
+        RoleProvider,
+        null,
+        createElement(
+          ToastProvider,
+          null,
+          createElement(
+            NumberCheckProvider,
+            null,
+            createElement(
+              MemoryRouter,
+              { initialEntries: ['/number-checker'] },
+              createElement(Link, { to: '/elsewhere' }, 'Leave'),
+              createElement(Link, { to: '/number-checker' }, 'Return'),
+              createElement(
+                Routes,
+                null,
+                createElement(Route, { path: '/number-checker', element: createElement(NumberChecker) }),
+                createElement(Route, { path: '/elsewhere', element: createElement('p', null, 'Elsewhere') }),
+              ),
+            ),
+          ),
+        ),
       ),
     ),
   );
@@ -88,7 +132,9 @@ before(async () => {
   const { i18nReady } = await import('../i18n/index.ts');
   await i18nReady;
   rtl = await import('@testing-library/react');
-  ({ MemoryRouter } = await import('react-router-dom'));
+  ({ MemoryRouter, Routes, Route, Link } = await import('react-router-dom'));
+  ({ NumberCheckProvider } = await import('../components/NumberCheckProvider.tsx'));
+  ({ useNumberCheck } = await import('../hooks/useNumberCheck.ts'));
   ({ ToastProvider } = await import('../components/Toast.tsx'));
   ({ RoleProvider } = await import('../components/RoleProvider.tsx'));
   ({ NumberChecker, NUMBER_CHECK_BATCH_MAX } = await import('./NumberChecker.tsx'));
@@ -786,14 +832,94 @@ const startBatch = () => rtl.fireEvent.click(rtl.screen.getByRole('button', { na
 // Past the one-second pacing delay, which is when a run that went on would send its next lookup.
 const pastPacing = () => new Promise(resolve => setTimeout(resolve, 1_200));
 
-test('NumberChecker: leaving the page ends a running batch', async () => {
+test('NumberChecker: signing out ends a running batch', async () => {
   const lookups = stubLookups(registered);
+  // The providers are unmounted with the signed-in tree on a logout.
   const { unmount } = renderComponent();
   rtl.fireEvent.change(await openBulkTab(), { target: { value: THREE_NUMBERS } });
   startBatch();
   await rtl.waitFor(() => assert.equal(lookups.length, 1));
 
   unmount();
+  await pastPacing();
+  assert.deepEqual(lookups, ['911111111111']);
+});
+
+test('NumberChecker: leaving the page keeps the run going and the rows are there on return', async () => {
+  let finishThird!: (res: Response) => void;
+  const third = new Promise<Response>(resolve => {
+    finishThird = resolve;
+  });
+  const lookups: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.includes('/contacts/check/')) return defaultFetch(input);
+    const number = url.split('/contacts/check/')[1];
+    lookups.push(number);
+    return number === '913333333333' ? third : Promise.resolve(registered(number));
+  }) as typeof fetch;
+  renderRoutes();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.waitFor(() => assert.equal(lookups.length, 1));
+
+  rtl.fireEvent.click(rtl.screen.getByText('Leave'));
+  assert.ok(rtl.screen.getByText('Elsewhere'));
+  assert.equal(document.querySelector('.number-checker') === null, true);
+  // The run goes on without the page: the second lookup is sent after the pacing delay, the third waits on its answer.
+  await rtl.waitFor(() => assert.equal(lookups.length, 3), { timeout: 5_000 });
+
+  rtl.fireEvent.click(rtl.screen.getByText('Return'));
+  // The Bulk tab is the one open, with the run in it: progress, the two rows so far, and Stop.
+  assert.equal(rtl.screen.getByRole('tab', { name: /Bulk/i }).getAttribute('aria-selected'), 'true');
+  assert.equal(rtl.screen.getByRole('progressbar').getAttribute('aria-valuenow'), '2');
+  assert.equal(statValue('Checked'), '2');
+  assert.ok(rtl.screen.getByText('+911111111111'));
+  assert.ok(rtl.screen.getByText('+912222222222'));
+  assert.ok(rtl.screen.getByRole('button', { name: /Stop Checking/i }));
+  // What the run was started with is in the form, which is locked meanwhile.
+  const textarea = rtl.screen.getByRole('textbox', { name: /Numbers/i }) as HTMLTextAreaElement;
+  assert.equal(textarea.value, THREE_NUMBERS);
+  assert.equal(textarea.disabled, true);
+
+  // It ends while the page is away: the toast comes from the provider, and the rows are there to export on return.
+  rtl.fireEvent.click(rtl.screen.getByText('Leave'));
+  finishThird(registered('913333333333'));
+  await rtl.screen.findByText('Completed checking 3 numbers.');
+  rtl.fireEvent.click(rtl.screen.getByText('Return'));
+  assert.equal(statValue('Checked'), '3');
+  assert.ok(rtl.screen.getByText('+913333333333'));
+  assert.ok(rtl.screen.getByRole('button', { name: /Export Results/i }));
+  assert.equal(rtl.screen.queryByRole('button', { name: /Stop Checking/i }), null);
+});
+
+test('NumberChecker: Stop from a page opened again ends the run that was started on the page before', async () => {
+  const lookups = stubLookups(registered);
+  renderRoutes();
+  rtl.fireEvent.change(await openBulkTab(), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.waitFor(() => assert.equal(lookups.length, 1));
+  rtl.fireEvent.click(rtl.screen.getByText('Leave'));
+  rtl.fireEvent.click(rtl.screen.getByText('Return'));
+
+  rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: /Stop Checking/i }));
+  await pastPacing();
+  assert.deepEqual(lookups, ['911111111111']);
+  assert.equal(statValue('Checked'), '1');
+});
+
+test('NumberChecker: a second Start while a run is going is refused', async () => {
+  const lookups = stubLookups(registered);
+  function StartTwice() {
+    const run = useNumberCheck();
+    const twice = () => {
+      void run.start(['911111111111'], 'test-session-1', 0);
+      void run.start(['912222222222'], 'test-session-1', 0);
+    };
+    return createElement('button', { onClick: twice }, 'Start twice');
+  }
+  rtl.render(createElement(ToastProvider, null, createElement(NumberCheckProvider, null, createElement(StartTwice))));
+  rtl.fireEvent.click(rtl.screen.getByText('Start twice'));
   await pastPacing();
   assert.deepEqual(lookups, ['911111111111']);
 });

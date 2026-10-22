@@ -36,8 +36,8 @@ Every page — and most shared components — ships its own stylesheet colocated
 component (see §17.4 for the handful that carry no stylesheet of their own). Icons come from
 `lucide-react`; charts from `recharts`; i18n from `react-i18next`.
 Client state is **TanStack Query** for most server data (see `src/hooks/queries.ts`; §17.5 names the
-pages that keep their own copy) plus two small React
-Context providers (`RoleProvider`, `ToastProvider`); theme mode is a provider-less `useTheme` hook
+pages that keep their own copy) plus three small React
+Context providers (`RoleProvider`, `ToastProvider`, `NumberCheckProvider`); theme mode is a provider-less `useTheme` hook
 backed by `localStorage` — there is no Zustand store.
 
 ### Design Principles
@@ -475,9 +475,10 @@ library — those visuals are composed directly with `div`s and the page's own C
 ## 17.5 State Management
 
 There is **no Zustand store** (and no global client-state library). Most server data is owned by
-**TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the two React
+**TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the three React
 Context providers in the app — `RoleProvider` (the authenticated key's role, read through the
-`useRole` hook) and `ToastProvider` (transient notifications). Theme mode is deliberately _not_ a
+`useRole` hook), `ToastProvider` (transient notifications) and `NumberCheckProvider` (the Number
+Checker's bulk run and its rows, which outlive the page). Theme mode is deliberately _not_ a
 context: `useTheme` is a plain hook that persists to `localStorage` and writes one attribute on
 `<html>` (see §17.7).
 

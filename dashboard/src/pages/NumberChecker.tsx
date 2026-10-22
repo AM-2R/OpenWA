@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   UserCheck,
@@ -17,58 +17,21 @@ import {
   Search,
 } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { PageHeader } from '../components/PageHeader';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { copyToClipboard } from '../utils/clipboard';
 import { useSessionsQuery } from '../hooks/queries';
-import { contactApi, type CheckNumberResponse } from '../services/api';
+import { contactApi } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
+import { batchStopMessage, useNumberCheck, type CheckResultItem } from '../hooks/useNumberCheck';
 import { escapeCsvCell } from '../utils/csv';
-import { isGatewayRefusal } from '../utils/groupSelection';
 import { normalizePhoneText } from '../utils/phone';
 import './NumberChecker.css';
-
-export type CheckStatus = 'registered' | 'unregistered' | 'failed';
 
 // Every lookup is an outbound WhatsApp query that counts against the gateway's per-IP limit on this route
 // (100 a minute by default) and against the linked account's standing, so one run is capped.
 export const NUMBER_CHECK_BATCH_MAX = 100;
-
-interface BatchStop {
-  // 0 when the lookup got no HTTP answer at all.
-  status: number;
-  attempted: number;
-  total: number;
-}
-
-// What each stopping status means, so a single unanswered lookup is not reported as the gateway refusing.
-// The check route answers 400 only for a session that is not started, the same condition as a 409.
-const STOP_REASON_KEYS: Record<number, string> = {
-  400: 'numberChecker.stopped.reason409',
-  409: 'numberChecker.stopped.reason409',
-  429: 'numberChecker.stopped.reason429',
-  503: 'numberChecker.stopped.reason503',
-};
-
-// `attempted` counts the lookup that stopped the run, which is the last one sent; only the rest were never sent.
-function batchStopMessage(t: TFunction, { status, attempted, total }: BatchStop): string {
-  if (status === 0) return t('numberChecker.stopped.noAnswer', { attempted, total });
-  const reason = t(STOP_REASON_KEYS[status] ?? 'numberChecker.stopped.reasonOther');
-  const unsent = total - attempted;
-  return unsent > 0
-    ? t('numberChecker.stopped.partial', { reason, status, attempted, total, count: unsent })
-    : t('numberChecker.stopped.last', { reason, status });
-}
-
-export interface CheckResultItem extends CheckNumberResponse {
-  status: CheckStatus;
-  error?: string | null;
-  avatarUrl?: string | null;
-  // ISO instant of the check: the CSV carries it as is, the tables show the time of day.
-  timestamp: string;
-}
 
 const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
 
@@ -78,12 +41,20 @@ export function NumberChecker() {
   const navigate = useNavigate();
   const toast = useToast();
   const { canWrite } = useRole();
+  // The bulk run lives above the routes, so it is still going (or its rows are still here) when this page opens again.
+  const run = useNumberCheck();
+  const isCheckingBatch = run.running;
+  const batchResults = run.results;
+  const batchProgress = run.progress;
+  const batchStop = run.stopped;
 
   const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
   const readySessions = useMemo(() => sessions.filter(s => s.status === 'ready'), [sessions]);
 
   const [selectedSession, setSelectedSession] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
+  const [activeTab, setActiveTab] = useState<'single' | 'batch'>(
+    isCheckingBatch || batchResults.length > 0 ? 'batch' : 'single',
+  );
 
   // The chosen session, else the first ready one (API requires session UUID). A chosen session that leaves
   // the ready list on a refetch would otherwise stay in use while the select shows the first option.
@@ -99,25 +70,12 @@ export function NumberChecker() {
   const [recentChecks, setRecentChecks] = useState<CheckResultItem[]>([]);
 
   // Batch Check State
-  const [batchInput, setBatchInput] = useState('');
-  const [batchDelay, setBatchDelay] = useState<number>(1000);
-  const [isCheckingBatch, setIsCheckingBatch] = useState(false);
+  const [batchInput, setBatchInput] = useState(() => run.numbers.join('\n'));
+  const [batchDelay, setBatchDelay] = useState<number>(run.delay);
   // The session a running bulk run is bound to. Both selects are locked meanwhile, so they keep showing it even if
   // the chosen session leaves the ready list and returns during the run, and a single check goes to it too.
-  const [runSession, setRunSession] = useState('');
-  const shownSession = isCheckingBatch ? runSession : currentSession;
-  const [batchResults, setBatchResults] = useState<CheckResultItem[]>([]);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const shownSession = isCheckingBatch ? run.session : currentSession;
   const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
-  const [batchStop, setBatchStop] = useState<BatchStop | null>(null);
-  const batchRunIdRef = useRef<number>(0);
-
-  useEffect(() => {
-    const runRef = batchRunIdRef;
-    return () => {
-      runRef.current++;
-    };
-  }, []);
 
   // Opt-in: the +91 rewrite would turn any other country's 10-digit or 0-prefixed number into an Indian one.
   const [autoPrefix91, setAutoPrefix91] = useState(false);
@@ -256,7 +214,7 @@ export function NumberChecker() {
   };
 
   // Perform batch check
-  const handleStartBatch = async () => {
+  const handleStartBatch = () => {
     if (!canWrite || isCheckingBatch) return;
     const numbers = batchParsedStats.list;
 
@@ -269,87 +227,8 @@ export function NumberChecker() {
       return;
     }
 
-    const runId = ++batchRunIdRef.current;
-    setRunSession(currentSession);
-    setIsCheckingBatch(true);
-    setBatchResults([]);
     setBatchFilter('all');
-    setBatchStop(null);
-    setBatchProgress({ current: 0, total: numbers.length });
-
-    const results: CheckResultItem[] = [];
-    let refusedWith: number | undefined;
-
-    for (let i = 0; i < numbers.length; i++) {
-      if (batchRunIdRef.current !== runId) return;
-
-      const num = numbers[i];
-      try {
-        const res = await contactApi.checkNumber(currentSession, num);
-        if (batchRunIdRef.current !== runId) return;
-
-        const item: CheckResultItem = {
-          ...res,
-          status: res.exists ? 'registered' : 'unregistered',
-          error: null,
-          timestamp: new Date().toISOString(),
-        };
-        results.push(item);
-        setBatchResults([...results]);
-      } catch (err) {
-        if (batchRunIdRef.current !== runId) return;
-
-        const errorMsg = err instanceof Error ? err.message : t('numberChecker.toast.lookupFailed');
-        results.push({
-          number: num,
-          exists: false,
-          whatsappId: null,
-          status: 'failed',
-          error: errorMsg,
-          timestamp: new Date().toISOString(),
-        });
-        setBatchResults([...results]);
-
-        // The gateway keeps refusing this route for the rest of its window, a stopped session or an unreachable
-        // gateway fails every later number too, so each would only become a false "Failed" row (and spend more
-        // of the limit).
-        if (isGatewayRefusal(err)) {
-          // A rejected fetch carries no status: the gateway never answered.
-          refusedWith = (err as { status?: number }).status ?? 0;
-          setBatchProgress({ current: i + 1, total: numbers.length });
-          break;
-        }
-      }
-
-      if (batchRunIdRef.current !== runId) return;
-      setBatchProgress({ current: i + 1, total: numbers.length });
-
-      if (i < numbers.length - 1 && batchDelay > 0) {
-        await new Promise(resolve => setTimeout(resolve, batchDelay));
-        if (batchRunIdRef.current !== runId) return;
-      }
-    }
-
-    if (batchRunIdRef.current !== runId) return;
-    setIsCheckingBatch(false);
-    setRunSession('');
-    if (refusedWith !== undefined) {
-      const stop = { status: refusedWith, attempted: results.length, total: numbers.length };
-      setBatchStop(stop);
-      toast.error(t('numberChecker.bulk.stoppedTitle'), batchStopMessage(t, stop));
-      return;
-    }
-    if (results.every(r => r.status === 'failed')) {
-      toast.error(t('numberChecker.toast.checkFailed'), results[results.length - 1].error ?? undefined);
-      return;
-    }
-    toast.success(t('numberChecker.toast.completed', { count: results.length }));
-  };
-
-  const handleStopBatch = () => {
-    batchRunIdRef.current++;
-    setIsCheckingBatch(false);
-    setRunSession('');
+    void run.start(numbers, currentSession, batchDelay);
   };
 
   // Filter batch results
@@ -843,7 +722,7 @@ export function NumberChecker() {
                 <UserCheck size={18} /> {t('numberChecker.bulk.start')}
               </button>
             ) : (
-              <button className="nc-btn nc-btn-danger" onClick={handleStopBatch}>
+              <button className="nc-btn nc-btn-danger" onClick={run.stop}>
                 <Trash2 size={18} /> {t('numberChecker.bulk.stop')}
               </button>
             )}
