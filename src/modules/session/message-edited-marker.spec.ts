@@ -480,4 +480,36 @@ describe('edited marker for a message whose row is not written yet', () => {
 
     expect(await stored('A')).toEqual(expect.objectContaining({ body: '', type: 'revoked', metadata: null }));
   });
+
+  // An engine that applied an edit before the hand-over names the text the message arrived with, only when the edit
+  // changed it. The edit itself may have reached the session before the message, which then held nothing to mark.
+  it('marks a message and a send the engine handed over edited, though no edit reached them here', async () => {
+    projector.handleInboundMessage('s1', engine, incoming('A', { body: 'fixed', originalBody: 'original' }));
+    projector.handleOwnSendEcho('s1', engine, incoming('S', { fromMe: true, body: 'fixed', originalBody: 'original' }));
+    await flush();
+
+    for (const id of ['A', 'S']) {
+      expect(await stored(id)).toEqual(expect.objectContaining({ body: 'fixed', metadata: { edited: true } }));
+    }
+    const sent = announced.filter(a => /^(message\.(received|sent)|socket emitMessage(Sent)?)$/.test(a.event));
+    // The webhook and the socket, for each.
+    expect(sent).toHaveLength(4);
+    for (const { payload } of sent) expect(payload).toEqual(expect.objectContaining({ body: 'fixed', edited: true }));
+  });
+
+  it('does not mark a message the engine handed over edited and that was deleted before it was written', async () => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A', { body: 'fixed', originalBody: 'original' }));
+    await flush();
+
+    await projector.recordRevoke('s1', 'A');
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: '', type: 'revoked', metadata: null }));
+    const received = announced.filter(a => a.event === 'message.received').map(a => a.payload);
+    expect(received).toEqual([expect.objectContaining({ body: '', type: 'revoked' })]);
+    expect(received[0]).not.toHaveProperty('edited');
+  });
 });

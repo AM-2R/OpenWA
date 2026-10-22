@@ -126,7 +126,8 @@ interface InFlightEntry {
   // The text the message arrived with, which an edit is compared with: one that repeats the text so far changes
   // nothing. Unset while the message is admitted but not yet emitted.
   body?: string;
-  // An edit held for the message changed its text, or was asked for: the row it lands on is marked edited.
+  // An edit held for the message or applied by the engine changed its text, or was asked for: the row it lands on is
+  // marked edited.
   edited?: boolean;
   ackStatus?: MessageStatus;
   // Latest reaction per sender; '' means the sender withdrew theirs.
@@ -417,7 +418,7 @@ export class MessageProjector {
     const inFlight = turn
       ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
-    this.arrive(inFlight, message.originalBody ?? message.body);
+    this.arrive(inFlight, message);
 
     const onFailure = (err: unknown): null => {
       this.logger.error(`onMessage handler failed for ${id}`, String(err));
@@ -509,10 +510,15 @@ export class MessageProjector {
     return inFlight;
   }
 
-  /** The engine handed the message over: an edit held until now is compared with the text it arrived with. */
-  private arrive(entry: InFlightEntry, arrivedWith: string): void {
-    entry.body = arrivedWith;
-    if (entry.editedBody !== undefined && entry.editedBody !== arrivedWith) entry.edited = true;
+  /**
+   * The engine handed the message over: an edit held until now is compared with the text it arrived with. One the
+   * engine applied itself changed that text (it names the arrival text only then), and marks the row the same way.
+   */
+  private arrive(entry: InFlightEntry, message: IncomingMessage): void {
+    entry.body = message.originalBody ?? message.body;
+    if (message.originalBody !== undefined || (entry.editedBody !== undefined && entry.editedBody !== entry.body)) {
+      entry.edited = true;
+    }
   }
 
   /** Keep an edit for the row of a message not written yet. One that repeats the text so far changes nothing. */
@@ -768,9 +774,9 @@ export class MessageProjector {
     if (!this.holdsInbound) return false;
     const entry = dbMessage.waMessageId ? this.inboundInFlight.get(`${id}:${dbMessage.waMessageId}`) : undefined;
     if (entry?.revoked) Object.assign(dbMessage, REVOKED_ROW_PATCH);
-    else if (entry?.editedBody !== undefined) {
-      dbMessage.body = entry.editedBody;
-      if (entry.edited) dbMessage.metadata = { ...dbMessage.metadata, edited: true };
+    else {
+      if (entry?.editedBody !== undefined) dbMessage.body = entry.editedBody;
+      if (entry?.edited) dbMessage.metadata = { ...dbMessage.metadata, edited: true };
     }
     return entry?.revoked === true;
   }
@@ -847,7 +853,9 @@ export class MessageProjector {
     const pending = waMessageId ? this.inboundInFlight.get(`${id}:${waMessageId}`) : undefined;
     if (!pending) return;
     const { ackStatus } = pending;
-    const rowChanges = Boolean(pending.revoked || pending.editedBody !== undefined || pending.reactions);
+    const rowChanges = Boolean(
+      pending.revoked || pending.editedBody !== undefined || pending.edited || pending.reactions,
+    );
     if (!ackStatus && !rowChanges) return;
     const advance = (): void => {
       if (!ackStatus) return;
@@ -1034,7 +1042,8 @@ export class MessageProjector {
         message;
       return { ...kept, body: '', type: 'revoked' };
     }
-    if (pending?.editedBody === undefined) return message;
+    // An edit the engine applied before the hand-over is in the body already.
+    if (pending?.editedBody === undefined) return pending?.edited ? { ...message, edited: true as const } : message;
     return { ...message, body: pending.editedBody, ...(pending.edited ? { edited: true as const } : {}) };
   }
 
@@ -1086,7 +1095,7 @@ export class MessageProjector {
     const inFlight = turn
       ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
-    this.arrive(inFlight, message.originalBody ?? message.body);
+    this.arrive(inFlight, message);
     // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
     // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
     const prepared = this.startHookChain(id, engine, turn, messageData, () =>

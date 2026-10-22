@@ -512,6 +512,20 @@ describe.each([
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
   });
 
+  // Past the changes kept for one message they are delivered at once, before the message is handed over.
+  it('marks a message edited more times during its contact lookup than are kept for it', async () => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    await flush();
+    for (let i = 1; i <= 65; i++) editEvent(client, 'A', `v${i}`);
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'v65', metadata: { edited: true } })]);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'v65', edited: true })]);
+  });
+
   // whatsapp-web.js builds a repeat delivery from the message as it is now, so one raised after an edit carries the
   // edited text, and its lookups can end before those of the first delivery.
   it.each([

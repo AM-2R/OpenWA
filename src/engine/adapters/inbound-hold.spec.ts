@@ -1557,6 +1557,61 @@ describe('Baileys inbound messages held for storage', () => {
       expect(internals(events)).toEqual({ waiting: 0, queued: 0 });
     });
 
+    // An edit that cannot wait for its message is announced while the session holds nothing to mark. The message is
+    // handed on with the edit applied and the text it arrived with, so its row and announcement carry the mark.
+    it('marks a message whose edit was announced at once, past the 64 changes that wait', async () => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const { events } = build(4, h.callbacks);
+      const releaseOther = download();
+      const release = download();
+      upsert(events, media('O', CHAT), media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, ...Array.from({ length: 64 }, (_, i) => reaction(`R${i}`, 'O', `r${i}`)));
+      await flush();
+      upsert(events, edit('E', 'M', 'fixed caption'));
+      await flush();
+      expect(h.announcedAs('message.edited')).toHaveLength(1);
+      releaseOther();
+      release();
+      await flush();
+
+      const row = h.rows.find(r => r.waMessageId === 'M');
+      expect(row).toEqual(expect.objectContaining({ body: 'fixed caption' }));
+      expect((row?.metadata as Row).edited).toBe(true);
+      expect(h.announcedAs('message.received').filter(m => m.id === 'M')).toEqual([
+        expect.objectContaining({ body: 'fixed caption', edited: true }),
+      ]);
+    });
+
+    it('marks a message whose edit was announced three media deadlines after it began to wait', async () => {
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '30';
+      const h = heldProjector({ unique: true, sqlite: true });
+      const store = memoryStore();
+      const read = store.getStoredMessage;
+      const answer = deferred<void>();
+      let checked = false;
+      // The message's own check for a repeat delivery answers late, as behind a long queue.
+      store.getStoredMessage = (id: string) => {
+        if (id !== 'M' || checked) return read(id);
+        checked = true;
+        return answer.promise.then(() => read(id));
+      };
+      const { events } = build(4, h.callbacks, store);
+      upsert(events, text('M', CHAT));
+      await flush();
+      upsert(events, edit('E', 'M', 'fixed'));
+      await sleep(120);
+      expect(h.announcedAs('message.edited')).toHaveLength(1);
+      answer.resolve();
+      await flush();
+
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: 'fixed' })]);
+      expect((h.rows[0].metadata as Row).edited).toBe(true);
+      expect(h.announcedAs('message.received')).toEqual([
+        expect.objectContaining({ id: 'M', body: 'fixed', edited: true }),
+      ]);
+    });
+
     /** How many changes wait, and for how many messages. */
     const internals = (events: BaileysEvents) => {
       const state = events as unknown as { changesAwaiting: number; changesAwaitingEmit: Map<string, unknown> };

@@ -330,6 +330,18 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(emitted.map(([, payload]) => payload)).toEqual(received);
   });
 
+  // An engine names the text the message arrived with only when the edit it applied changed it.
+  it('stores a message the engine handed over edited as marked, though no edit was held for it', async () => {
+    const t = admit(arrival('A', 'chat1'));
+    projector.handleInboundMessage('s1', engine, message('A', 'chat1', { body: 'fixed', originalBody: 'original' }), t);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
+    expect(persistedHooks()[0]).toEqual(expect.objectContaining({ body: 'fixed', metadata: { edited: true } }));
+    const [[, announced]] = eventsGateway.emitMessage.mock.calls as Array<[string, Record<string, unknown>]>;
+    expect(announced).toEqual(expect.objectContaining({ body: 'fixed', edited: true }));
+  });
+
   it('marks a message edited while its insert is out, where nothing holds the arrival (SQLite)', async () => {
     build('better-sqlite3');
     const stall = deferred<void>();
