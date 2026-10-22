@@ -1743,6 +1743,58 @@ for (const race of RELOAD_RACES) {
   });
 }
 
+test('a chat list asked for before Mark as unread does not mark a chat that was opened and read since', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const release = hold('chats');
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.unread',
+    chatId: CHAT.id,
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+
+  pickRowAction('Alice', 'Mark as unread');
+  await screen.findByLabelText('Marked as unread');
+  // Opening the chat is what reads it again, and clears the mark.
+  fireEvent.click(screen.getByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.ok(!screen.queryByLabelText('Marked as unread'), 'opening the chat kept its mark'));
+
+  release();
+  await settle();
+  await settle();
+  assert.ok(!screen.queryByLabelText('Marked as unread'), 'the earlier list put the unread mark back on the open chat');
+  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  const menu = container.querySelector('.room-menu-popover') as HTMLElement;
+  assert.ok(within(menu).getByRole('button', { name: 'Mark as unread' }), 'the room menu lost Mark as unread');
+});
+
+test('a chat list asked for before a chat was opened does not bring its old unread count back', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceNow.unreadCount = 2;
+  const { container } = renderPage();
+  await screen.findByLabelText('2 unread messages');
+  const release = hold('chats');
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.count',
+    chatId: '15550002222@c.us',
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+
+  fireEvent.click(screen.getByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.ok(!screen.queryByLabelText('2 unread messages'), 'opening the chat kept its badge'));
+  release();
+  await settle();
+  await settle();
+  assert.ok(!screen.queryByLabelText('2 unread messages'), 'the earlier list put the old unread count back');
+});
+
 test('a chat list asked for after a change is taken as it comes, so a later change elsewhere shows', async () => {
   const { screen, waitFor } = rtl;
   renderPage();

@@ -428,6 +428,17 @@ export function Chats() {
     const held = patchedRowsRef.current.get(chatId);
     patchedRowsRef.current.set(chatId, { request: chatsRequestRef.current, patch: { ...held?.patch, ...patch } });
   }, []);
+  // A chat this page has read shows nothing unread, and a reload asked for before the read keeps it so. That also
+  // replaces a Mark as unread still remembered for the chat, which the read has undone. A session switch leaves the
+  // open chat the previous account's for one render, and that account's row must not be remembered for this one.
+  const markRowRead = useCallback(
+    (chatId: string) => {
+      if (listedSessionRef.current !== selectedSessionId) return;
+      rememberPatch(chatId, { unreadCount: 0 });
+      setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
+    },
+    [rememberPatch, selectedSessionId],
+  );
   const loadChats = useCallback(
     async (
       sessionId: string,
@@ -1070,7 +1081,7 @@ export function Chats() {
     markChatRead(activeChat.id);
     // A read-only key sends no mark-as-read, so the chat stays unread on the gateway; clearing the
     // badge here would only have the next chat-list load bring it back.
-    if (canWrite) setChats(prev => prev.map(c => (c.id === activeChat.id ? { ...c, unreadCount: 0 } : c)));
+    if (canWrite) markRowRead(activeChat.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat?.id, markChatRead, canWrite]);
 
