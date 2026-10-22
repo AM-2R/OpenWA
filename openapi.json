@@ -6249,7 +6249,7 @@
             }
           },
           "400": {
-            "description": "Session not active",
+            "description": "Session not active or invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -6839,7 +6839,7 @@
             }
           },
           "400": {
-            "description": "Session not active",
+            "description": "Session not active or invalid request",
             "content": {
               "application/json": {
                 "schema": {

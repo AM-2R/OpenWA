@@ -318,14 +318,16 @@ describe('MessageController OpenAPI error responses', () => {
   });
 
   // An unknown message answers 404 (MessageNotFoundError), which these routes declare on its own, so
-  // their 400 is only the missing live engine. A client reading the 400 as "message not found" would
-  // never handle the 404 the engine actually raises.
+  // their 400 is never "message not found": a client reading it that way would never handle the 404 the
+  // engine actually raises. The 400 is the missing live engine, or a body that fails validation (an unknown
+  // field, or a value of the wrong type), which is why it also says "invalid request", as send-text does.
   it.each(['react', 'deleteMessage'])('%s keeps "message not found" out of its 400', method => {
     const responses = Reflect.getMetadata(
       'swagger/apiResponse',
       Object.getOwnPropertyDescriptor(MessageController.prototype, method)!.value as object,
     ) as Record<string, { description: string }>;
-    expect(responses['400'].description).toBe('Session not active');
+    expect(responses['400'].description).toBe('Session not active or invalid request');
+    expect(responses['400'].description).not.toMatch(/not found/i);
     expect(Object.keys(responses)).toContain('404');
   });
 });
