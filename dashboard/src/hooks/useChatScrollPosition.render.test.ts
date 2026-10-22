@@ -254,8 +254,16 @@ const hookRef: MutableRefObject<ReturnType<typeof useChatScrollPosition> | null>
 const hook = (): ReturnType<typeof useChatScrollPosition> =>
   hookRef.current as ReturnType<typeof useChatScrollPosition>;
 
-function Probe({ chatId, loaded = chatId !== null }: { chatId: string | null; loaded?: boolean }) {
-  const result = useChatScrollPosition(chatId, loaded, false);
+function Probe({
+  chatId,
+  loaded = chatId !== null,
+  fetching = false,
+}: {
+  chatId: string | null;
+  loaded?: boolean;
+  fetching?: boolean;
+}) {
+  const result = useChatScrollPosition(chatId, loaded, fetching);
   useEffect(() => {
     hookRef.current = result;
   });
@@ -674,6 +682,37 @@ test('a thread pinned to the bottom stays there as media decodes, until the read
     hook().onMediaLoad();
     await nextFrame();
     assert.equal(el.scrollTop, 3000, 'a decode pulled a reader who scrolled up back to the bottom');
+  } finally {
+    restore();
+  }
+});
+
+// ── Older pages landing under a position the memory holds ────────────────────
+
+// The echo of a send from the page can reach it after the composer reconciled its placeholder: the cache write
+// merges into the existing row, the thread does not grow, and the follow the announcement armed has no commit to
+// meet. The page that lands next is not that message.
+test('a message announced without growing the thread does not pin the reader when an older page lands', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+
+    hook().onMessageAppended('incoming');
+    rerender(createElement(Probe, { chatId: 'A' })); // its commit: the thread did not grow
+    await nextFrame();
+
+    readerScrollsTo(el, 50); // the reader goes to the top to read back
+    hook().onOlderMessagesRequested();
+    rerender(createElement(Probe, { chatId: 'A', fetching: true }));
+    g.height += 4600; // the page lands above them
+    rerender(createElement(Probe, { chatId: 'A', fetching: false }));
+    await nextFrame();
+    assert.equal(el.scrollTop, 50 + 4600, 'the landing page took the reader to the bottom');
   } finally {
     restore();
   }

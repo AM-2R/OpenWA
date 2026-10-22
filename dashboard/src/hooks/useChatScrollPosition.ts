@@ -294,6 +294,10 @@ export function useChatScrollPosition(
     // a media decode, another query resolving — would otherwise consume the pending correction.
     if (!el || isFetchingOlderMessages || !wasFetching || !awaitingOlderPageRef.current) return;
     awaitingOlderPageRef.current = false;
+    // A follow still armed belongs to a message announced before the reader went back for history; the page that
+    // lands is not its row, and consuming it here would take the reader from the message they were held on to the
+    // bottom.
+    pendingFollowRef.current = null;
     // How far the element the reader was on moved down. Measured on the element, not as a change of the
     // whole thread's height: a preview that swapped in below the reader, or a live message at the
     // bottom, while the page was in flight is inside that height delta and moves nothing on screen, so
