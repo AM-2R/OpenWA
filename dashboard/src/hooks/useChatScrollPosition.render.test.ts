@@ -1041,9 +1041,10 @@ test('a decode after an older page landed does not apply the saved spot from bef
 
 // ── A thread of message rows ─────────────────────────────────────────────────
 // Rows laid out top to bottom in the container, each an anchor; a row may hold an image, which the test grows as it
-// decodes. Positions are what a browser would report for them at the current scrollTop.
+// decodes, under its text or (imgFirst) above it. Positions are what a browser would report for them at the current
+// scrollTop.
 
-type Row = { id: string; h: number; img?: number; anchor?: false };
+type Row = { id: string; h: number; img?: number; anchor?: false; imgFirst?: true };
 type Thread = { rows: Row[]; top: number };
 
 const rowsHeight = (t: Thread) => t.rows.reduce((sum, r) => sum + r.h + (r.img ?? 0), 0);
@@ -1072,7 +1073,8 @@ function installRows(t: Thread): () => void {
     const id = this.getAttribute('data-id') ?? this.getAttribute('data-img');
     let y = -Math.min(t.top, rowsMax(t));
     for (const r of t.rows) {
-      if (r.id === id) return this.hasAttribute('data-img') ? box(y + r.h, r.img ?? 0) : box(y, r.h + (r.img ?? 0));
+      if (r.id === id)
+        return this.hasAttribute('data-img') ? box(y + (r.imgFirst ? 0 : r.h), r.img ?? 0) : box(y, r.h + (r.img ?? 0));
       y += r.h + (r.img ?? 0);
     }
     return box(0, CLIENT_HEIGHT); // the container
@@ -1345,6 +1347,68 @@ test('an image that decodes above where the reader scrolled while an older page 
     restore();
   }
 });
+
+// An image above the reader that decodes while a page is out holds them in its frame, as it does with no page out, and
+// the landing then counts it once: whichever comes first of its load, the request, a scroll of the reader, the frame
+// and the landing. The reader is on a4, 50px under the top edge; the page is 1000px. The image grows by 30px, so the row
+// the reader is on stays below it however the thread is read.
+for (const scenario of [
+  { name: 'in its frame', order: ['request', 'decode', 'frame', 'land'] },
+  { name: 'when its load came just before the page was asked for', order: ['decode', 'request', 'frame', 'land'] },
+  { name: 'when the page lands before its frame', order: ['request', 'decode', 'land', 'frame'] },
+  { name: 'when the reader scrolls before its frame', order: ['request', 'decode', 'scroll', 'frame', 'land'] },
+  { name: 'when the image is in the row the reader is on', order: ['request', 'decode', 'frame', 'land'], inRow: true },
+  { name: 'when no message row is in view', order: ['request', 'decode', 'frame', 'land'], noAnchors: true },
+]) {
+  test(`an image that decodes above the reader while an older page is out holds them ${scenario.name}`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const t: Thread = { rows: textRows('a', 46), top: 0 };
+    // In the row the reader is on, the image is above its text and above the top edge: a4 is still the first row.
+    const imageRow = scenario.inRow ? 4 : 2;
+    t.rows[imageRow] = { id: `a${imageRow}`, h: 100, img: 0, ...(scenario.inRow ? { imgFirst: true as const } : {}) };
+    if (scenario.noAnchors) t.rows = t.rows.map(r => ({ ...r, anchor: false as const }));
+    const restore = installRows(t);
+    try {
+      const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+      const start = scenario.inRow ? 420 : 450;
+      readerScrollsTo(el, start);
+      let fetching = false;
+      let scrolled = 0;
+      for (const step of scenario.order) {
+        if (step === 'request') {
+          hook().onOlderMessagesRequested();
+          fetching = true;
+          rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching }));
+        } else if (step === 'decode') {
+          t.rows[imageRow] = { ...t.rows[imageRow], img: 30 };
+          hook().onMediaLoad({ currentTarget: container.querySelector(`img[data-img="a${imageRow}"]`) });
+        } else if (step === 'scroll') {
+          scrolled = 10; // the reader moves on by 10px from where they saw the thread
+          readerScrollsTo(el, start + scrolled);
+        } else if (step === 'frame') {
+          await nextFrame();
+          if (scenario.order.indexOf('land') > scenario.order.indexOf('frame'))
+            assert.equal(el.scrollTop, start + scrolled + 30, 'the image moved the reader while the page was out');
+        } else {
+          t.rows = [
+            ...(scenario.noAnchors
+              ? textRows('p', 10).map(r => ({ ...r, anchor: false as const }))
+              : textRows('p', 10)),
+            ...t.rows,
+          ];
+          fetching = false;
+          rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching }));
+        }
+      }
+      assert.equal(el.scrollTop, start + scrolled + 30 + 1000, 'the image was counted more or less than once');
+    } finally {
+      restore();
+    }
+  });
+}
 
 // A reader can stop where no row is in view (a tall element that is not a message): the landing then holds them by the
 // row they were on before, not by every pixel the thread grew, growth below them included.

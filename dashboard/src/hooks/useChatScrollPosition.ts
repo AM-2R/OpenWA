@@ -251,6 +251,39 @@ export function useChatScrollPosition(
     }
   }, []);
 
+  // Holds the reader through the media whose load arrived since this last ran (see onMediaLoad's third branch): sorted by
+  // document order, each element is read, re-seeded and corrected for before the next, so every one is classified
+  // against a layout in which the growth above it is already corrected. With an older page out, a correction for an
+  // element above the landing's anchor row moves that row's recorded offset by as much, so the landing does not count
+  // the same pixels again; this runs before the anchor is taken and before the landing measures it, so each growth is
+  // in either the recorded offset or a correction, never both.
+  const applyMediaGrowth = useCallback(() => {
+    const batch = decodedMediaRef.current
+      .splice(0)
+      .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    const cur = containerRef.current;
+    if (!cur || batch.length === 0) return;
+    const containerTop = cur.getBoundingClientRect().top;
+    let moved = false;
+    for (const grown of batch) {
+      const seeded = mediaHeights.current.get(grown);
+      if (seeded === undefined) continue;
+      const rect = grown.getBoundingClientRect();
+      // The element has finished growing, so its current box is the baseline for any later change (a re-decode
+      // on a src swap, a lazy dimension arriving).
+      mediaHeights.current.set(grown, rect.height);
+      const grew = correctionForMediaGrowth(seeded, rect.height, rect.bottom, containerTop);
+      if (grew === null) continue;
+      // Added to the LIVE scrollTop, so each correction stacks on the ones applied above it.
+      writeScrollTop(cur, cur.scrollTop + grew);
+      moved = true;
+      const anchor = olderAnchorRef.current;
+      if (anchor && anchor.node.compareDocumentPosition(grown) & Node.DOCUMENT_POSITION_PRECEDING) anchor.top += grew;
+      prevScrollHeightRef.current += grew;
+    }
+    if (moved && prevChatIdRef.current !== null) rememberPosition(prevChatIdRef.current, cur);
+  }, [rememberPosition, writeScrollTop]);
+
   // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
   // pins; any scroll away (only ever the user's) unpins. The SAME listener saves the visible
   // chat's scrollTop on every genuine user scroll, so the per-chat position map always holds the
@@ -272,9 +305,11 @@ export function useChatScrollPosition(
       pinnedRef.current = atBottom;
       const visibleChatId = prevChatIdRef.current;
       if (visibleChatId && loadedRef.current) rememberPosition(visibleChatId, el);
-      // With an older page out, media decoding above the reader is left to the landing (see onMediaLoad), and the
-      // landing can only count it against the row the reader is on now, not the one they asked for the page on.
-      if (awaitingOlderPageRef.current) olderAnchorRef.current = firstVisibleAnchor(el) ?? olderAnchorRef.current;
+      // With an older page out, the landing holds the row the reader is on now, not the one they asked for the page on.
+      if (awaitingOlderPageRef.current) {
+        applyMediaGrowth();
+        olderAnchorRef.current = firstVisibleAnchor(el) ?? olderAnchorRef.current;
+      }
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -317,10 +352,11 @@ export function useChatScrollPosition(
   const onOlderMessagesRequested = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
+    applyMediaGrowth();
     prevScrollHeightRef.current = el.scrollHeight;
     olderAnchorRef.current = firstVisibleAnchor(el);
     awaitingOlderPageRef.current = true;
-  }, []);
+  }, [applyMediaGrowth]);
 
   // Older messages are prepended ABOVE the viewport, so the thread grows upward and what the user
   // was reading is pushed down by however much taller it just got. Left alone the view jumps
@@ -344,6 +380,7 @@ export function useChatScrollPosition(
     // query only reports itself in flight a turn later, so any commit in between — a live message,
     // a media decode, another query resolving — would otherwise consume the pending correction.
     if (!el || isFetchingOlderMessages || !wasFetching || !awaitingOlderPageRef.current) return;
+    applyMediaGrowth(); // a decode whose frame has not run yet is counted there, not in the anchor's move
     awaitingOlderPageRef.current = false;
     // A follow still armed belongs to a message announced before the reader went back for history; the page that
     // lands is not its row, and consuming it here would take the reader from the message they were held on to the
@@ -466,12 +503,7 @@ export function useChatScrollPosition(
         });
         return;
       }
-      const el = containerRef.current;
-      if (!el) return;
-      // An older page in flight already owns this growth: the landing effect diffs against a
-      // request-time snapshot that spans every commit until the page lands, decodes included.
-      // Correcting here as well would count the same pixels twice and overshoot by the decode.
-      if (awaitingOlderPageRef.current) return;
+      if (!containerRef.current) return;
       // Which element grew, and by how much, decides whether the reader moved at all.
       const media = event?.currentTarget ?? null;
       if (!media || !mediaHeights.current.has(media)) return;
@@ -482,30 +514,11 @@ export function useChatScrollPosition(
       decoded.push(media);
       if (decoded.length > 1) return;
       requestAnimationFrame(() => {
-        const batch = decoded
-          .splice(0)
-          .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
-        const cur = containerRef.current;
-        if (!cur || !onScreen()) return;
-        const containerTop = cur.getBoundingClientRect().top;
-        let moved = false;
-        for (const grown of batch) {
-          const seeded = mediaHeights.current.get(grown);
-          if (seeded === undefined) continue;
-          const rect = grown.getBoundingClientRect();
-          // The element has finished growing, so its current box is the baseline for any later change (a re-decode
-          // on a src swap, a lazy dimension arriving).
-          mediaHeights.current.set(grown, rect.height);
-          const grew = correctionForMediaGrowth(seeded, rect.height, rect.bottom, containerTop);
-          if (grew === null) continue;
-          // Added to the LIVE scrollTop, so each correction stacks on the ones applied above it.
-          writeScrollTop(cur, cur.scrollTop + grew);
-          moved = true;
-        }
-        if (moved && activeChatId !== null) rememberPosition(activeChatId, cur);
+        if (onScreen()) applyMediaGrowth();
+        else decoded.length = 0;
       });
     },
-    [activeChatId, followBottom, rememberPosition, writeScrollTop],
+    [activeChatId, applyMediaGrowth, followBottom, writeScrollTop],
   );
 
   return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested };
