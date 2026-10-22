@@ -1609,6 +1609,80 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     });
   });
 
+  // The restart never stops a service the NEXT boot still dials, whatever the page asked for: the host the environment
+  // pins when it pins one, else the host the saved file holds (the save that precedes the restart is already on disk).
+  // The profile is the container to stop; PROFILE_OF maps the three managed services to it.
+  describe('a service whose next-boot host is the bundled one is never stopped', () => {
+    const PROFILE_OF: Record<ServiceName, string> = { database: 'postgres', redis: 'redis', storage: 'minio' };
+    const HOST_STATES = ['absent', 'bundled', 'external'] as const;
+    let pinnedKeys: string[] = [];
+
+    const stoppedFor = async (service: ServiceName, filePin: string | undefined, envPin: string | undefined) => {
+      const spec = SERVICES[service];
+      const lines = [`${spec.selection}=${spec.selected}`, `${spec.flag}=false`];
+      if (filePin !== undefined) lines.push(`${spec.host}=${filePin}`);
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(`${lines.join('\n')}\n`);
+      if (envPin !== undefined) {
+        process.env[spec.host] = envPin;
+        pinnedKeys.push(spec.host);
+        recordPinnedEnvKeys({ [spec.host]: envPin });
+      } else {
+        recordPinnedEnvKeys({});
+      }
+      const stopManagedService = jest.fn().mockResolvedValue(true);
+      const controller = buildController({
+        isDockerAvailable: () => true,
+        stopManagedService,
+        orchestrateProfiles: jest.fn().mockResolvedValue({}),
+      });
+
+      const result = await controller.requestRestart({ profilesToRemove: [PROFILE_OF[service]] });
+
+      return { stopped: stopManagedService.mock.calls.length > 0, kept: result.profilesToRemove.length === 0 };
+    };
+
+    afterEach(() => {
+      for (const key of pinnedKeys) delete process.env[key];
+      pinnedKeys = [];
+      recordPinnedEnvKeys({});
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      (fs.readFileSync as jest.Mock).mockReturnValue('');
+    });
+
+    describe.each(SERVICE_NAMES)('%s', service => {
+      const hostFor = (state: (typeof HOST_STATES)[number]) =>
+        state === 'absent'
+          ? undefined
+          : state === 'bundled'
+            ? SERVICES[service].bundledHost
+            : SERVICES[service].externalHost;
+      for (const fileHost of HOST_STATES) {
+        for (const envHost of HOST_STATES) {
+          const file = hostFor(fileHost);
+          const env = hostFor(envHost);
+          // The next boot dials the environment's host when it pins one, else the file's.
+          const dialled = envHost !== 'absent' ? env : file;
+          const keeps = dialled === SERVICES[service].bundledHost;
+          it(`file host ${fileHost}, environment host ${envHost}: ${keeps ? 'kept running' : 'stopped'}`, async () => {
+            const { stopped, kept } = await stoppedFor(service, file, env);
+
+            expect(stopped).toBe(!keeps);
+            expect(kept).toBe(keeps);
+          });
+        }
+      }
+    });
+
+    it('keeps the container when the flag is pinned off over a stored bundled host', async () => {
+      process.env.REDIS_BUILTIN = 'false';
+      pinnedKeys.push('REDIS_BUILTIN');
+      const { stopped } = await stoppedFor('redis', 'redis', undefined);
+
+      expect(stopped).toBe(false);
+    });
+  });
+
   it('starts only allowlisted profiles, never an unknown entry (symmetry with teardown)', async () => {
     const orchestrateProfiles = jest.fn().mockResolvedValue({});
     const controller = buildController({

@@ -452,16 +452,24 @@ export class InfraConfigController {
     removal?: object;
   }> {
     const profiles = body?.profiles || [];
-    // Never stop a bundled service the environment pins the app to (e.g. the documented manual
-    // built-in Postgres with DATABASE_HOST=postgres in .env): that pin outranks the saved config, so
-    // the restarted app would still point at the container and fail to boot.
-    const pinnedToBundled = Object.entries(BUNDLED_SERVICE_ENV)
-      .filter(([, [key, value]]) => isEnvPinned(key) && process.env[key] === value)
-      .map(([profile]) => profile);
+    // Never stop a bundled service the NEXT boot still dials, whatever the page asked for: the restarted
+    // app would point at a stopped container and fail to boot, with the dashboard that could undo it. The
+    // host it dials is the one the environment pins (e.g. the documented manual built-in Postgres with
+    // DATABASE_HOST=postgres in .env, which outranks the saved config), else the one in the saved file,
+    // which already holds the save that precedes this restart. A host moved away from the bundled name
+    // still stops its container.
+    let saved: Record<string, string> | undefined;
+    const dialsBundled = (profile: string): boolean => {
+      const bundled = BUNDLED_SERVICE_ENV[profile];
+      if (!bundled) return false;
+      const [key, value] = bundled;
+      return (isEnvPinned(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key]) === value;
+    };
     const requestedRemoval = body?.profilesToRemove || [];
-    const profilesToRemove = requestedRemoval.filter(p => !pinnedToBundled.includes(p));
-    if (profilesToRemove.length < requestedRemoval.length) {
-      this.logger.warn('Keeping profiles the environment pins the app to', { pinnedToBundled });
+    const keptRunning = requestedRemoval.filter(dialsBundled);
+    const profilesToRemove = requestedRemoval.filter(p => !keptRunning.includes(p));
+    if (keptRunning.length > 0) {
+      this.logger.warn('Keeping profiles the next boot still dials', { keptRunning });
     }
     let orchestrationResult: object | undefined;
     // Teardown is stop-only (see DockerService.stopManagedService): containers are stopped and
