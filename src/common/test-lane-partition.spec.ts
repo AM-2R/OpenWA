@@ -150,7 +150,10 @@ describe('Test lane partition', () => {
    * leaves release-gate-parity green (the two still agree) and the scenarios silently SQLite-only.
    * Listed by hand for that reason, and a plain spec this job gains must be listed too.
    */
-  const dialectSwitchedSpecs = ['src/modules/session/session-content-lifetime.spec.ts'];
+  const dialectSwitchedSpecs = [
+    'src/modules/session/session-content-lifetime.spec.ts',
+    'src/modules/session/session-delete-claim.spec.ts',
+  ];
 
   it.each(['ci.yml', 'release.yml'])('runs the dialect-switched specs in the %s test-postgres job', file => {
     const named = postgresJobSpecs(file).filter(path => !path.endsWith('.pg.spec.ts'));
