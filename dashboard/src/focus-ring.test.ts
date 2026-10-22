@@ -81,3 +81,70 @@ test('the meta line of a keyboard-focused search hit takes the secondary text co
   assert.ok(rule, 'a focused hit leaves its meta line muted on the brand tint');
   assert.match(rule.body, /(?:^|;)\s*color:\s*var\(--text-secondary\)/);
 });
+
+// A field that switches its outline off shows focus as a border instead. In the brand fill (#25d366) that border is
+// 1.98:1 on white, under the 3:1 of SC 1.4.11, which is what the rings were before they took the token.
+const focusState = (s: string): boolean => /:focus(?:-visible|-within)?\b/.test(s.replace(/:not\([^)]*\)/g, ''));
+
+test('every border a focus state paints is drawn in the --focus-ring token', () => {
+  const painted = all
+    .filter(r => r.selectors.some(focusState))
+    .flatMap(r =>
+      [...r.body.matchAll(/(?:^|;)\s*(border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:\s*([^;]+)/g)].map(m => ({
+        at: `${r.file}: ${r.selectors.join(', ')}`,
+        prop: m[1],
+        value: m[2].trim(),
+      })),
+    )
+    .filter(({ prop, value }) => prop.endsWith('-color') || /var\(|#|rgb|hsl/.test(value));
+  assert.ok(painted.length >= 20, `only ${painted.length} focus borders seen`);
+  assert.deepEqual(
+    painted.filter(({ value }) => !/\bvar\(--focus-ring\)/.test(value)).map(({ at, value }) => `${at} => ${value}`),
+    [],
+  );
+});
+
+// The element a selector styles, its focus state and attribute filters aside: `input[type='text']:focus` and
+// `input:focus` style the same field.
+const element = (s: string): string =>
+  s
+    .replace(/:not\([^)]*\)/g, '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/:focus(?:-visible|-within)?/g, '')
+    .trim();
+
+// `outline: none` takes away the indicator the browser would draw, so something has to draw one in its place: the
+// same element in a focus state, or the box around it in :focus-within (a search box around its input).
+test('every outline switched off leaves a keyboard focus cue in the --focus-ring token', () => {
+  const cues = all.filter(r => /\bvar\(--focus-ring\)/.test(r.body)).flatMap(r => r.selectors.filter(focusState));
+  const offenders = all
+    .filter(r => /(?:^|;)\s*outline\s*:\s*(?:none|0)\b/.test(r.body))
+    .flatMap(r =>
+      r.selectors.filter(s => !/:not\(:focus-visible\)/.test(s)).map(s => ({ at: `${r.file}: ${s}`, el: element(s) })),
+    )
+    .filter(
+      ({ el }) =>
+        !cues.some(cue => element(cue) === el || (/:focus-within/.test(cue) && el.startsWith(`${element(cue)} `))),
+    );
+  assert.deepEqual(
+    offenders.map(({ at }) => at),
+    [],
+  );
+});
+
+// These fields repaint their own border after the shared `select:focus` and `.modal-body input:focus` rules, which
+// switch the outline off, so without a focus rule of their own a focused one looked like any other. A native checkbox
+// or radio shows no border at all, so the text field rules that reach it leave it only the ring.
+test('filter builder fields and native checkboxes draw their own focus cue', () => {
+  for (const [selector, cue] of [
+    ['.filter-row select:focus', /border-color:\s*var\(--focus-ring\)/],
+    [".filter-text input[type='text']:focus", /border-color:\s*var\(--focus-ring\)/],
+    ['.chips-row .chips-text:focus', /border-color:\s*var\(--focus-ring\)/],
+    ["input[type='checkbox']:not(.toggle-switch input):focus-visible", /outline:\s*2px solid var\(--focus-ring\)/],
+    ["input[type='radio']:not(.toggle-switch input):focus-visible", /outline:\s*2px solid var\(--focus-ring\)/],
+  ] as const) {
+    const rule = all.find(r => r.selectors.includes(selector));
+    assert.ok(rule, `no rule for ${selector}`);
+    assert.match(rule.body, cue, selector);
+  }
+});

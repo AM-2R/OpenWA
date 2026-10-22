@@ -45,7 +45,7 @@
 }
 
 .logs-page .search-input:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 

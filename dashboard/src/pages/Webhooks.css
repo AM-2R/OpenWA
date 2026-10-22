@@ -313,9 +313,14 @@
   outline: none;
 }
 
-.webhooks-page .filter-badge-interactive:hover,
-.webhooks-page .filter-badge-interactive:focus-visible {
+.webhooks-page .filter-badge-interactive:hover {
   border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+/* The badge takes no ring, so its border is the focus cue and has to be the contrast token, not the brand fill. */
+.webhooks-page .filter-badge-interactive:focus-visible {
+  border-color: var(--focus-ring);
   color: var(--text-primary);
 }
 

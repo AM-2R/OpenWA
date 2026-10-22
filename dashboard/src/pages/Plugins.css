@@ -375,7 +375,7 @@
 .plugins-page .config-form .form-group select:focus,
 .plugins-page .config-form .form-group textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
@@ -1064,7 +1064,7 @@
 }
 
 .plugins-page .catalog-search:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 

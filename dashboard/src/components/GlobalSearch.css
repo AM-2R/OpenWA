@@ -21,7 +21,7 @@
 
 .global-search-input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 2px var(--primary-soft);
 }
 

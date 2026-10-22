@@ -118,7 +118,7 @@
 }
 
 .templates-page .templates-search:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -280,7 +280,7 @@
 .templates-page .template-form textarea:focus,
 .templates-page .placeholder-list input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }

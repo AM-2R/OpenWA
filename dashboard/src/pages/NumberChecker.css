@@ -179,7 +179,7 @@
 
 .number-checker .nc-input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -199,7 +199,7 @@
 
 .number-checker .nc-textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 

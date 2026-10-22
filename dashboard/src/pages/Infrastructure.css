@@ -200,7 +200,7 @@
 .infrastructure-page .form-group input:focus,
 .infrastructure-page .form-group select:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
 }
 
 .infrastructure-page .form-group small {

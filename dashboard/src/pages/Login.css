@@ -73,7 +73,7 @@
 }
 
 .login-container .login-language:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
@@ -112,7 +112,7 @@
 
 .login-container .input-wrapper input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 

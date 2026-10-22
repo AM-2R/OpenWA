@@ -142,7 +142,7 @@ select:hover {
 
 select:focus {
   outline: none;
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
@@ -257,7 +257,7 @@ select:disabled {
 
 .modal-body input:focus {
   outline: none;
-  border-color: var(--primary, #25d366);
+  border-color: var(--focus-ring);
   background: var(--bg-white, #fff);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
@@ -275,6 +275,15 @@ select:disabled {
   background: none;
   box-shadow: none;
   flex: none;
+}
+
+/* The text field focus rules here and on the pages are written for `input` and also reach a native checkbox or radio:
+   they switch its outline off and draw a border it does not show, so a focused one showed nothing (in a dialog, on
+   the Message Tester). The ring comes back for keyboard focus. A switch draws its ring on the slider instead. */
+input[type='checkbox']:not(.toggle-switch input):focus-visible,
+input[type='radio']:not(.toggle-switch input):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .modal-footer {
