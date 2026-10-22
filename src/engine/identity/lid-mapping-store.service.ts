@@ -300,6 +300,8 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       if (phone === null) await this.clear(lid, sessionId ?? null);
       else await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
     } catch (err) {
+      // The table does not have this report, so the session's next one writes again.
+      if (sessionId) this.seenBy.get(lid)?.delete(sessionId);
       this.logger.warn(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
       );

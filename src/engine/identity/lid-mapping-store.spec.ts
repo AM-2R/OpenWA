@@ -1051,6 +1051,21 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(upsert).toHaveBeenCalledTimes(1);
   });
 
+  it('takes the row on the next report when taking it failed to write', async () => {
+    await store.remember('111', '628111', s1);
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await expect(store.remember('111', '628111', s2)).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockClear();
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+
+    await store.remember('111', '628111', s2);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+    await store.remember('111', null, s1);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+  });
+
   it('keeps a phone stored while the negative of another session is being written', async () => {
     const update = hold('update');
     const negative = store.remember('111', null, s2);
