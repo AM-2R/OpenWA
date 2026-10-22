@@ -286,12 +286,16 @@ empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DA
 [19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no
 worker yet. A route declaring a `response` contract is refused with `503` and `Retry-After: 5` (§25.4),
 and the provider's retry is accepted once the plugin is up. Any other route is accepted and persisted
-as usual. A queued job goes back to the delayed set after `INGRESS_RETRY_DELAY_MS` (at least a second),
-without spending a retry attempt, until the plugin is up, and jobs held together come back in the order they
-were held. With the queue off the delivery is acked and not dispatched: its row stays `pending`, and the
-reconciler dispatches it after the restore, on its first pass past `INGRESS_RECONCILE_GRACE_MS`, so up to
-about two minutes after the delivery with the defaults. The reconciler leaves the rows of a restoring plugin
-out of its batch, so they do not hold back another plugin's. With the reconciler disabled
+as usual. A queued job goes back to the delayed set, without spending a retry attempt, until the plugin
+is up. It is held until the next multiple of `INGRESS_RETRY_DELAY_MS` (a period of at least a second), so every
+held job wakes at the same instants and the jobs come back in the order they were held; a delivery accepted
+within a few milliseconds of a wake can still pass an earlier one that is being held again at that
+moment. With the queue off the delivery is acked and not dispatched: its row stays `pending`, and the
+reconciler dispatches it on the first pass after the restore is over and the row is older than
+`INGRESS_RECONCILE_GRACE_MS`. With the defaults that is within a minute after the plugin is up for a row
+accepted at least a minute before it came up, and one to two minutes after the delivery for a later one.
+The reconciler leaves the rows of a restoring plugin out of its batch, so they do not hold back another
+plugin's. With the reconciler disabled
 (`INGRESS_RECONCILE_INTERVAL_MS=0`) nothing would replay a held row, so the delivery is dispatched at once
 and, with no worker to run it, files a dead letter that an operator can redrive.
 
