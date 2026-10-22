@@ -803,6 +803,9 @@ export function handToken(text, types, depth = 0) {
     const nullable = parts.includes('null');
     const rest = parts.filter(p => p !== 'null');
     if (nullable && rest.length === 1) return `${handToken(rest[0], types, depth)}|null`;
+    // A nullable literal union ('a' | 'b' | null) is the enum of its literals with a null arm.
+    const inner = nullable && rest.length > 1 ? handToken(rest.join(' | '), types, depth) : '';
+    if (inner.startsWith('enum(')) return `${inner}|null`;
     return `union(${rest
       .map(p => handToken(p, types, depth))
       .sort()
@@ -831,7 +834,11 @@ function baseSchemaToken(node, schemas, depth = 0) {
     const target = schemas[node.$ref.split('/').pop()];
     return depth < MAX_DEPTH ? schemaToken(target, schemas, depth + 1) : 'object';
   }
-  if (node.enum) return `enum(${sortEnumMembers(node.enum.map(String)).join(',')})`;
+  if (node.enum) {
+    // OpenAPI 3.0 lists null among the members of a nullable enum; schemaToken adds the null arm back.
+    const members = node.nullable === true ? node.enum.filter(m => m !== null) : node.enum;
+    return `enum(${sortEnumMembers(members.map(String)).join(',')})`;
+  }
   if (node.type === 'array') return `array<${schemaToken(node.items, schemas, depth)}>`;
   if (node.anyOf || node.oneOf) {
     const parts = (node.anyOf ?? node.oneOf).map(n => schemaToken(n, schemas, depth + 1));
@@ -890,9 +897,10 @@ export function parseObjectToken(token) {
 /** Fields whose both sides reduce to a primitive/enum/array/null-union get token-level diffing.
  *  `array<enum(...)>` counts: an array of enum members is exactly as comparable as a bare one, and
  *  leaving it out silently ungated every vocabulary that travels as a list, the webhook event set
- *  above all, on every client at once. */
+ *  above all, on every client at once. So does a null arm after an enum or an array: a nullable
+ *  field was skipped, and with it the vocabulary of SessionProxy.proxyType. */
 function isSimpleToken(token) {
-  return /^(string|number|boolean|unknown|any)(\|null)?$|^enum\([^)]*\)$|^array<((string|number|boolean)(\|null)?|enum\([^)]*\))>$/.test(
+  return /^(string|number|boolean|unknown|any)(\|null)?$|^enum\([^)]*\)(\|null)?$|^array<((string|number|boolean)(\|null)?|enum\([^)]*\))>(\|null)?$/.test(
     token,
   );
 }
@@ -1100,13 +1108,16 @@ function pythonToken(text, resolve, depth = 0) {
   if (t.endsWith(',')) t = t.slice(0, -1).trim();
   if (depth >= 4) return 'object';
   let nullable = false;
-  if (/\|\s*None$/.test(t) || /^Optional\[/.test(t)) {
+  if (/^Optional\[/.test(t)) {
     nullable = true;
     t = t
       .replace(/^Optional\[/, '')
-      .replace(/\s*\|\s*None$/, '')
       .replace(/\]$/, '')
       .trim();
+  } else if (/\|\s*None$/.test(t)) {
+    // No bracket to strip here: the last one belongs to the type (`Literal["x"] | None`, `list[str] | None`).
+    nullable = true;
+    t = t.replace(/\s*\|\s*None$/, '').trim();
   }
   const base = (() => {
     if (t === 'str') return 'string';

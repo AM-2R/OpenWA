@@ -315,6 +315,57 @@ test('isSimpleToken-gated diffing reaches inside an array of enum members', () =
   assert.match(diffs[0], /events/);
 });
 
+test('a nullable enum is compared on both sides, the null member of the contract enum set aside', () => {
+  // OpenAPI 3.0 lists null among the members of a nullable enum; the vocabulary is the other members.
+  // The token used to end in `|null`, which no comparison accepted, so such a field was never compared.
+  const kind = { type: 'string', nullable: true, enum: ['a', 'b', null] };
+  const schema = { type: 'object', required: ['kind'], properties: { kind } };
+  assert.equal(schemaToken(kind, {}), 'enum(a,b)|null');
+  assert.equal(handToken("'b' | 'a' | null", {}), 'enum(a,b)|null');
+
+  const hand = { kind: { optional: false, token: "'a' | 'b' | null" } };
+  assert.deepEqual(comparePair('Hand', hand, 'Dto', schema, {}), []);
+  // A member the contract gained, and a null arm the hand lacks, are drift.
+  const gained = { ...schema, properties: { kind: { ...kind, enum: ['a', 'b', 'c', null] } } };
+  assert.deepEqual(comparePair('Hand', hand, 'Dto', gained, {}), [
+    '"kind": hand enum(a,b)|null, contract enum(a,b,c)|null',
+  ]);
+  const notNull = { kind: { optional: false, token: "'a' | 'b'" } };
+  assert.deepEqual(comparePair('Hand', notNull, 'Dto', schema, {}), [
+    '"kind": hand enum(a,b), contract enum(a,b)|null',
+  ]);
+});
+
+test('a nullable array is compared on both sides', () => {
+  const ids = { type: 'array', items: { type: 'string' }, nullable: true };
+  const schema = { type: 'object', required: ['ids'], properties: { ids } };
+  assert.deepEqual(comparePair('Hand', { ids: { optional: false, token: 'string[] | null' } }, 'Dto', schema, {}), []);
+  assert.deepEqual(comparePair('Hand', { ids: { optional: false, token: 'string[]' } }, 'Dto', schema, {}), [
+    '"ids": hand array<string>, contract array<string>|null',
+  ]);
+});
+
+test('parsePythonTypes: a nullable Literal or list keeps its closing bracket and gains a null arm', () => {
+  const src = [
+    'class Sample(TypedDict):',
+    '    a: Literal["x", "y"] | None',
+    '    b: Optional[Literal["x", "y"]]',
+    '    c: list[str] | None',
+    '    d: Optional[List[str]]',
+    '    e: str | None',
+  ].join('\n');
+  // The `| None` form lost its last bracket to the strip meant for Optional[...], so `Literal["x", "y"] | None`
+  // read as the unparseable `Literal["x", "y"` and the field was never compared.
+  const tokens = Object.values(parsePythonTypes(src).Sample).map(v => v.token);
+  assert.deepEqual(tokens, [
+    'enum(x,y)|null',
+    'enum(x,y)|null',
+    'array<string>|null',
+    'array<string>|null',
+    'string|null',
+  ]);
+});
+
 test('parseJavaTypes: a package-qualified generic is the same shape as the bare one', () => {
   // Two request records spell the mentions list `java.util.List<String>`; matching only `List<...>`
   // left it resolving to its raw text, so its type went uncompared while the field still counted
