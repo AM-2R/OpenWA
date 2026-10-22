@@ -438,6 +438,13 @@ describe('InfraStatusController.getStatus running bundled containers', () => {
     expect([status.storage.builtIn, status.storage.running]).toEqual([false, true]);
   });
 
+  it('reports none of the three running when Docker Compose created them', async () => {
+    const status = await build({ database: 'compose', cache: 'compose', storage: 'compose' }).getStatus();
+
+    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+    expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([false, true, false]);
+  });
+
   it('reports nothing running when no bundled container is up', async () => {
     const status = await build({ database: false, cache: false, storage: false }).getStatus();
 
