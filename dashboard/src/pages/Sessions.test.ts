@@ -525,6 +525,37 @@ test('an empty list shows the empty state, and a refused create does not take it
   assert.equal(screen.queryByText('No sessions found') === null, false, 'the refused create hid the empty state');
 });
 
+// The other half of the gate: a failed read hides the empty state only while no list is held. With rows on
+// screen the banner sits above them, and a search that matches none is still an empty result, not an unknown.
+test('a failed refetch keeps the rows, and a search that matches none still shows the empty state', async () => {
+  const { screen, fireEvent, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  holdConnect();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('connect'));
+
+  // Every later list read fails, the recovery retry included, so the failure outlasts the push that caused it.
+  sessionListFailures = 10;
+  act(() => {
+    socket.receive('message', {
+      type: 'event',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      payload: { event: 'session.restriction', sessionId: SESSION_QR.id, data: {} },
+    });
+  });
+  await screen.findByText('gateway unavailable');
+  screen.getByText('new-device');
+
+  fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'no-such-session' } });
+  await screen.findByText('No sessions found');
+  screen.getByText('gateway unavailable');
+});
+
 test('Enter in the name field follows the same gate as the Create button', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   resetFetchCalls();
