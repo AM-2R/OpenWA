@@ -529,7 +529,8 @@ export class MessageProjector {
 
   /**
    * The engine handed the message over: an edit held until now is compared with the text it arrived with. One the
-   * engine applied itself changed that text (it names the arrival text only then), and marks the row the same way.
+   * engine applied itself changed that text, though a later one may have restored it (it names the arrival text only
+   * then, so it can equal the body), and marks the row the same way.
    */
   private arrive(entry: InFlightEntry, message: IncomingMessage): void {
     entry.body = message.originalBody ?? message.body;

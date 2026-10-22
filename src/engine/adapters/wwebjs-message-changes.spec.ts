@@ -571,6 +571,25 @@ describe.each([
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'v65', edited: true })]);
   });
 
+  // Its edits went out as message.edited, so it was edited, though the last one restored the text it arrived with.
+  it.each([
+    ['within the changes kept for it', 1],
+    ['past the changes kept for it', 64],
+  ])('marks a message edited and then restored to its text during its contact lookup, %s', async (_, edits) => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    await flush();
+    for (let i = 1; i <= edits; i++) editEvent(client, 'A', `v${i}`);
+    editEvent(client, 'A', 'orig');
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'orig', metadata: { edited: true } })]);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'orig', edited: true })]);
+    expect(events('message.edited')).toHaveLength(edits + 1);
+  });
+
   // whatsapp-web.js builds a repeat delivery from the message as it is now, so one raised after an edit carries the
   // edited text, and its lookups can end before those of the first delivery.
   it.each([
@@ -823,20 +842,39 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     const { client, arrivals } = wire();
     const plain = deferred<null>();
     const reacted = deferred<null>();
-    const restored = deferred<null>();
+    const repeated = deferred<null>();
     client.emit('message', incoming('A', 'orig', { contact: plain.promise }));
     client.emit('message', incoming('B', 'orig', { contact: reacted.promise }));
-    client.emit('message', incoming('C', 'orig', { contact: restored.promise }));
+    client.emit('message', incoming('C', 'orig', { contact: repeated.promise }));
     reactionEvent(client, 'B', '👍');
-    editEvent(client, 'C', 'v1');
+    editEvent(client, 'C', 'orig');
     editEvent(client, 'C', 'orig');
 
     plain.resolve(null);
     reacted.resolve(null);
-    restored.resolve(null);
+    repeated.resolve(null);
     await flush();
 
     expect(arrivals).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('hands over the text a message arrived with when its edits restored it, past the changes kept too', async () => {
+    const { client, bodies, arrivals } = wire();
+    const kept = deferred<null>();
+    const past = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: kept.promise }));
+    client.emit('message', incoming('B', 'orig', { contact: past.promise }));
+    editEvent(client, 'A', 'v1');
+    editEvent(client, 'A', 'orig');
+    for (let i = 1; i <= PER_MESSAGE; i++) editEvent(client, 'B', `v${i}`);
+    editEvent(client, 'B', 'orig');
+
+    kept.resolve(null);
+    past.resolve(null);
+    await flush();
+
+    expect(bodies).toEqual(['orig', 'orig']);
+    expect(arrivals).toEqual(['orig', 'orig']);
   });
 
   it('hands a repeat delivery that carries an edit over with the text the first delivery arrived with', async () => {

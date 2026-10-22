@@ -336,10 +336,14 @@ export class BaileysEvents {
    * The latest edit of a message still being processed, by id, with the key it was sent under. The
    * edit is announced first and finds no row or preview to change, and a repeat delivery can be stored
    * after the edit was applied, so the original is stored and announced with this text instead, and
-   * a quote or forward meanwhile carries it too (see pendingEditOf). Dropped once the message's
-   * processing settles, and bounded like deletedForEveryone, which wins over it.
+   * a quote or forward meanwhile carries it too (see pendingEditOf). `afterOtherText` says an earlier
+   * edit had another text, so one of them changed the text even if this one restores it. Dropped once
+   * the message's processing settles, and bounded like deletedForEveryone, which wins over it.
    */
-  private readonly editedWhileInFlight = new Map<string, { envelope: WAMessageKey; body: string }>();
+  private readonly editedWhileInFlight = new Map<
+    string,
+    { envelope: WAMessageKey; body: string; afterOtherText: boolean }
+  >();
 
   /**
    * The deliveries of an id handed to onMessage that have no outcome yet, by id: how many, and a promise
@@ -773,8 +777,10 @@ export class BaileysEvents {
           this.host.recordMessageEdit(chatJid, edited.messageId, edited.body);
           const target = this.inboundInFlight.get(edited.messageId);
           if (target && this.mayChange(target.key, msg.key, false)) {
+            const earlier = this.editedWhileInFlight.get(edited.messageId);
+            const afterOtherText = !!earlier && (earlier.afterOtherText || earlier.body !== edited.body);
             this.editedWhileInFlight.delete(edited.messageId); // re-inserted as the newest
-            this.editedWhileInFlight.set(edited.messageId, { envelope: msg.key, body: edited.body });
+            this.editedWhileInFlight.set(edited.messageId, { envelope: msg.key, body: edited.body, afterOtherText });
             if (this.editedWhileInFlight.size > BaileysEvents.DELETED_FOR_EVERYONE_LIMIT) {
               const [oldest] = this.editedWhileInFlight.keys();
               this.editedWhileInFlight.delete(oldest);
@@ -888,8 +894,10 @@ export class BaileysEvents {
         const content = b.normalizeMessageContent(toStore.message ?? undefined);
         if (content) setBaileysText(content, editedBody);
         // The session is told of the edit too, with a ticket at once and without one right after the emit, and
-        // compares it with the text the message arrived with.
-        if (editedBody !== incoming.body) incoming.originalBody = incoming.body;
+        // compares it with the text the message arrived with. It is told even when the latest edit restored that
+        // text after another one: the message was edited all the same, and edits announced before the emit, past
+        // the changes that wait, left no mark.
+        if (editedBody !== incoming.body || edit?.afterOtherText) incoming.originalBody = incoming.body;
         incoming.body = editedBody;
       }
       if (opts.generation === this.storeGeneration) {

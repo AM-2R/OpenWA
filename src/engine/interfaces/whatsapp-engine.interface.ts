@@ -106,7 +106,9 @@ export interface IncomingMessage {
   /**
    * Set by an engine that applied an edit to `body` before it handed the message over: the text the message
    * arrived with. The edits that reached the message meanwhile reach the session too, and are compared with
-   * this text. The session removes the field before the message is hooked, stored or announced.
+   * this text. It equals `body` when a later edit restored that text, as the message was edited all the same,
+   * and is unset when every edit repeated the text. The session removes the field before the message is
+   * hooked, stored or announced.
    */
   originalBody?: string;
   /** User-facing chat kind of the conversation this message belongs to (derived from `chatId`). */

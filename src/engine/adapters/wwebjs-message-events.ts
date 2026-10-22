@@ -23,6 +23,8 @@ interface MessageInProcessing {
   text: string;
   /** The text the first delivery arrived with: a repeat is built from the message as it is now, edited. */
   arrived: string;
+  /** An edit changed its text, though a later one may have restored the text it arrived with. */
+  edited: boolean;
   /** A delete for everyone reached it. */
   deleted: boolean;
   changes: Array<() => void>;
@@ -111,15 +113,17 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     if (!kept) {
       // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
       if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return NOT_KEPT;
-      kept = { text: message.body, arrived: message.body, deleted: false, changes: [] };
+      kept = { text: message.body, arrived: message.body, edited: false, deleted: false, changes: [] };
       inProcessing.set(message.id, kept);
     }
     const mine = kept;
     return {
       handOver: handedOver => {
         if (mine.deleted) return false;
-        // The session is told of the edits too, and compares them with the text the message arrived with.
-        if (mine.arrived !== mine.text) handedOver.originalBody = mine.arrived;
+        // The session is told of the edits too, and compares them with the text the message arrived with. It is told
+        // even when a later edit restored that text: the message was edited all the same, and the edits delivered
+        // before it, past the bound, left no mark.
+        if (mine.edited) handedOver.originalBody = mine.arrived;
         handedOver.body = mine.text;
         return true;
       },
@@ -141,7 +145,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       deliver();
       return;
     }
-    if (change.editedText !== undefined) kept.text = change.editedText;
+    if (change.editedText !== undefined) {
+      kept.text = change.editedText;
+      kept.edited = true;
+    }
     if (change.deletes) kept.deleted = true;
     if (kept.changes.length < MAX_CHANGES_KEPT_PER_MESSAGE) {
       kept.changes.push(deliver);

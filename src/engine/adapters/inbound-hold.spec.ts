@@ -1266,6 +1266,36 @@ describe('Baileys inbound messages held for storage', () => {
     });
 
     it.each([
+      ['edits that restore it', ['fixed caption', 'caption'], 'caption'],
+      ['edits that restore it and then repeat it', ['fixed caption', 'caption', 'caption'], 'caption'],
+      ['edits that each repeat it', ['caption', 'caption'], undefined],
+    ])(
+      'hands the message over with the text it arrived with after %s only if one changed it',
+      async (_, bodies, originalBody) => {
+        const h = heldProjector({ unique: true, sqlite });
+        const handedOver: Array<Pick<IncomingMessage, 'body' | 'originalBody'>> = [];
+        const { events } = build(4, {
+          ...h.callbacks,
+          onMessage: (m, t) => (
+            handedOver.push({ body: m.body, originalBody: m.originalBody }),
+            h.callbacks.onMessage!(m, t)
+          ),
+        });
+        const release = download();
+        upsert(events, media('M', CHAT, { caption: 'caption' }));
+        await flush();
+        for (const [i, body] of bodies.entries()) {
+          upsert(events, edit(`E${i}`, 'M', body));
+          await flush();
+        }
+        release();
+        await flush();
+
+        expect(handedOver).toEqual([{ body: 'caption', originalBody }]);
+      },
+    );
+
+    it.each([
       ['an edit', 'fixed caption', true],
       ['an edit that repeats the text', 'caption', undefined],
     ])('marks the row and the message edited for %s only if it changed the text', async (_, body, edited) => {
@@ -1635,6 +1665,94 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.announcedAs('message.received')).toEqual([
         expect.objectContaining({ id: 'M', body: 'fixed', edited: true }),
       ]);
+    });
+
+    // Its edits went out as message.edited, so it was edited, though the last one restored the text it arrived with.
+    it.each([
+      ['within the 64 changes that wait', false],
+      ['past the 64 changes that wait', true],
+    ])('marks a message edited and then restored to its text while it downloads, %s', async (_, pastBound) => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const { events } = build(4, h.callbacks);
+      const releaseOther = download();
+      const release = download();
+      upsert(events, media('O', CHAT), media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      if (pastBound) upsert(events, ...Array.from({ length: 64 }, (_x, i) => reaction(`R${i}`, 'O', `r${i}`)));
+      await flush();
+      upsert(events, edit('E1', 'M', 'fixed caption'));
+      await flush();
+      upsert(events, edit('E2', 'M', 'caption'));
+      await flush();
+      expect(h.announcedAs('message.edited')).toHaveLength(pastBound ? 2 : 0);
+      releaseOther();
+      release();
+      await flush();
+
+      const row = h.rows.find(r => r.waMessageId === 'M');
+      expect(row).toEqual(expect.objectContaining({ body: 'caption' }));
+      expect((row?.metadata as Row).edited).toBe(true);
+      expect(h.announcedAs('message.received').filter(m => m.id === 'M')).toEqual([
+        expect.objectContaining({ body: 'caption', edited: true }),
+      ]);
+    });
+
+    it.each([
+      ['within three media deadlines', false],
+      ['three media deadlines after they began to wait', true],
+    ])('marks a message edited and then restored to its text, its edits announced %s', async (_, late) => {
+      process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '30';
+      const h = heldProjector({ unique: true, sqlite: true });
+      const store = memoryStore();
+      const read = store.getStoredMessage;
+      const answer = deferred<void>();
+      let checked = false;
+      store.getStoredMessage = (id: string) => {
+        if (id !== 'M' || checked) return read(id);
+        checked = true;
+        return answer.promise.then(() => read(id));
+      };
+      const { events } = build(4, h.callbacks, store);
+      upsert(events, text('M', CHAT));
+      await flush();
+      upsert(events, edit('E1', 'M', 'fixed'));
+      await flush();
+      upsert(events, edit('E2', 'M', 'text M'));
+      await flush();
+      if (late) await sleep(120);
+      expect(h.announcedAs('message.edited')).toHaveLength(late ? 2 : 0);
+      answer.resolve();
+      await flush();
+
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: 'text M' })]);
+      expect((h.rows[0].metadata as Row).edited).toBe(true);
+      expect(h.announcedAs('message.received')).toEqual([
+        expect.objectContaining({ id: 'M', body: 'text M', edited: true }),
+      ]);
+    });
+
+    it('leaves a message unmarked whose edits announced at once each repeated its text', async () => {
+      const h = heldProjector({ unique: true, sqlite: true });
+      const { events } = build(4, h.callbacks);
+      const releaseOther = download();
+      const release = download();
+      upsert(events, media('O', CHAT), media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, ...Array.from({ length: 64 }, (_x, i) => reaction(`R${i}`, 'O', `r${i}`)));
+      await flush();
+      upsert(events, edit('E1', 'M', 'caption'));
+      await flush();
+      upsert(events, edit('E2', 'M', 'caption'));
+      await flush();
+      expect(h.announcedAs('message.edited')).toHaveLength(2);
+      releaseOther();
+      release();
+      await flush();
+
+      const row = h.rows.find(r => r.waMessageId === 'M');
+      expect(row).toEqual(expect.objectContaining({ body: 'caption' }));
+      expect(row?.metadata as Row).not.toHaveProperty('edited');
+      expect(h.announcedAs('message.received').filter(m => m.id === 'M')[0]).not.toHaveProperty('edited');
     });
 
     /** How many changes wait, and for how many messages. */
