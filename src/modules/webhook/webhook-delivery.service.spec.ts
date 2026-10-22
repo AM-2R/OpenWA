@@ -3170,6 +3170,52 @@ describe('WebhookDeliveryService', () => {
         await drain(receipts);
       });
 
+      it("reports a failure of a session's webhooks to the caller, whichever of them it comes from", async () => {
+        const original = (configService.get as jest.Mock).getMockImplementation() as (key: string) => unknown;
+        (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) => {
+          if (key === 'webhook.mediaInlineMaxBytes') throw new Error('config unavailable');
+          return original(key) ?? def;
+        });
+        hooksBySession['sess-m'] = [
+          createMockWebhook({ id: 'wh-m1', url: 'https://one.example/hook', events: ['message.receipt'] }),
+          createMockWebhook({ id: 'wh-m2', url: 'https://two.example/hook', events: ['message.receipt'] }),
+        ];
+        try {
+          const thrown = await Promise.allSettled(burst(4, 'sess-m'));
+
+          expect(thrown.map(result => result.status)).toEqual(Array(4).fill('rejected'));
+          expect(thrown.map(result => (result as PromiseRejectedResult).reason as Error)).toEqual(
+            Array(4).fill(expect.objectContaining({ message: 'config unavailable' })),
+          );
+        } finally {
+          (configService.get as jest.Mock).mockImplementation(original);
+        }
+      });
+
+      // fanOut waits on its own deliveries with Promise.allSettled; a session with several receipt webhooks waits
+      // on the deliveries of its stages with one more. A single webhook has nothing to collect: it is passed
+      // straight through, which keeps what waits in a stage to a closure instead of a closure and a suspended frame.
+      it('passes a single webhook straight through its stage, and collects only when there are several', async () => {
+        hooksBySession['sess-m'] = [
+          createMockWebhook({ id: 'wh-m1', url: 'https://one.example/hook', events: ['message.receipt'] }),
+          createMockWebhook({ id: 'wh-m2', url: 'https://two.example/hook', events: ['message.receipt'] }),
+        ];
+        const allSettled = jest.spyOn(Promise, 'allSettled');
+        try {
+          await service.dispatch('sess-q', 'message.receipt', receipt(1));
+          const forOne = allSettled.mock.calls.length;
+          allSettled.mockClear();
+          await service.dispatch('sess-m', 'message.receipt', receipt(1));
+          const forTwo = allSettled.mock.calls.length;
+
+          // One call per fanOut, plus the one that collects the stages of a session with several webhooks.
+          expect(forOne).toBe(1);
+          expect(forTwo).toBe(3);
+        } finally {
+          allSettled.mockRestore();
+        }
+      });
+
       it('never holds back an event that is not opt-in', async () => {
         await Promise.all(Array.from({ length: 6 }, () => service.dispatch('sess-o', 'message.received', {})));
 
