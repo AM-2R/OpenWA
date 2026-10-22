@@ -47,9 +47,11 @@ import {
  * Rows of the tables that grow with traffic (messages, webhook outbox events, webhook delivery failures)
  * removed per statement when a session is deleted. Small enough to stay under PostgreSQL's statement timeout,
  * far below either dialect's bind-parameter limit and short enough on SQLite (one writer, and each message
- * row also fires the full-text index trigger) that other sessions are not stalled behind it; no smaller than
- * that, because the cost per row falls as the batch grows (a 300k-message session on SQLite deletes about
- * 1.7 times faster at 2000 rows than at 500).
+ * row also fires the full-text index trigger) that other sessions are not stalled behind it. A larger batch
+ * costs a little less per row but stalls longer: a 300k-message session on SQLite deletes 1.2 to 1.7 times
+ * faster at 2000 rows than at 500 (it depends on the load of the host), with a longer worst statement. Most of
+ * the gain over the first batched delete comes from leaving the session out of the delete's condition, see
+ * deleteTrafficRowsInBatches.
  */
 export const SESSION_DELETE_BATCH_SIZE = 2000;
 
