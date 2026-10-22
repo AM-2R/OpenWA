@@ -394,3 +394,59 @@ describe('InfraStatusController.getStatus built-in fallback reads the flag only 
     expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([true, false, false]);
   });
 });
+
+// `running` reports a bundled container OpenWA created that is up, apart from whether the service uses it: the page
+// stops one whose host the environment pins elsewhere. One Docker Compose created belongs to the deployment.
+describe('InfraStatusController.getStatus running bundled containers', () => {
+  const build = (containers: Record<'database' | 'cache' | 'storage', false | 'compose' | 'openwa'> | null) => {
+    const values: Record<string, unknown> = {
+      'engine.type': 'baileys',
+      'dataDatabase.type': 'postgres',
+      'dataDatabase.host': 'db.ext.example',
+      'redis.host': 'redis',
+      'storage.type': 's3',
+      'storage.s3.endpoint': 'https://s3.ext.example',
+    };
+    const config = { get: (k: string, def?: unknown) => values[k] ?? def };
+    const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
+    return new InfraStatusController(
+      config as never,
+      ds as never,
+      ds as never,
+      { create: jest.fn() } as never,
+      {
+        isDockerAvailable: () => containers !== null,
+        getRunningBuiltinServices: jest.fn().mockResolvedValue(containers),
+      } as never,
+      { isAvailable: jest.fn().mockResolvedValue(false) } as never,
+      { refreshS3Availability: jest.fn().mockResolvedValue(true) } as never,
+      undefined as never,
+    );
+  };
+  const savedRedisHost = process.env.REDIS_HOST;
+
+  beforeEach(() => delete process.env.REDIS_HOST);
+  afterAll(() => {
+    if (savedRedisHost !== undefined) process.env.REDIS_HOST = savedRedisHost;
+  });
+
+  it('reports a container OpenWA created as running whether or not the service uses it', async () => {
+    const status = await build({ database: 'openwa', cache: 'compose', storage: 'openwa' }).getStatus();
+
+    expect([status.database.builtIn, status.database.running]).toEqual([false, true]);
+    expect([status.redis.builtIn, status.redis.running]).toEqual([true, false]);
+    expect([status.storage.builtIn, status.storage.running]).toEqual([false, true]);
+  });
+
+  it('reports nothing running when no bundled container is up', async () => {
+    const status = await build({ database: false, cache: false, storage: false }).getStatus();
+
+    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+  });
+
+  it('reports nothing running when Docker is unreachable', async () => {
+    const status = await build(null).getStatus();
+
+    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+  });
+});

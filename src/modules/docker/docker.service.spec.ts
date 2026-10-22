@@ -15,12 +15,12 @@ const imageNotCached = () => ({
 });
 
 describe('DockerService.getRunningBuiltinServices', () => {
-  const container = (name: string, service: string, state: string) => ({
+  const container = (name: string, service: string, state: string, labels: Record<string, string> = {}) => ({
     id: name,
     name,
     state,
     status: state,
-    labels: { 'com.openwa.service': service, 'com.openwa.builtin': 'true' },
+    labels: { 'com.openwa.service': service, 'com.openwa.builtin': 'true', ...labels },
   });
 
   it('reports a service built-in only when its labeled container is actually running', async () => {
@@ -32,7 +32,20 @@ describe('DockerService.getRunningBuiltinServices', () => {
         container('openwa-redis', 'cache', 'exited'),
       ]);
 
-    expect(await service.getRunningBuiltinServices()).toEqual({ database: true, cache: false, storage: false });
+    expect(await service.getRunningBuiltinServices()).toEqual({ database: 'openwa', cache: false, storage: false });
+  });
+
+  it('names a running container Docker Compose created, by its project label', async () => {
+    const service = new DockerService();
+    jest
+      .spyOn(service, 'listContainers')
+      .mockResolvedValue([
+        container('openwa-postgres', 'database', 'running', { 'com.docker.compose.project': 'openwa' }),
+        container('openwa-redis', 'cache', 'running'),
+        container('openwa-minio', 'storage', 'exited', { 'com.docker.compose.project': 'openwa' }),
+      ]);
+
+    expect(await service.getRunningBuiltinServices()).toEqual({ database: 'compose', cache: 'openwa', storage: false });
   });
 
   it('reports all false when no bundled containers are present (e.g. Docker unavailable)', async () => {

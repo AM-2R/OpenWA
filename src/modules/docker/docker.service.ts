@@ -232,17 +232,22 @@ export class DockerService implements OnModuleInit {
 
   /**
    * Which bundled (OpenWA-managed) service containers are currently RUNNING, keyed by the
-   * `com.openwa.service` label (`database` | `cache` | `storage`). Lets the dashboard show the real
-   * built-in state instead of the saved intent. All false when Docker is unavailable or none run.
+   * `com.openwa.service` label (`database` | `cache` | `storage`), and who created each: `'compose'` for one
+   * Docker Compose created (it carries Compose's project label and belongs to the deployment), `'openwa'` for
+   * one createService made. Lets the dashboard show the real built-in state instead of the saved intent. All
+   * false when Docker is unavailable or none run.
    */
-  async getRunningBuiltinServices(): Promise<{ database: boolean; cache: boolean; storage: boolean }> {
+  async getRunningBuiltinServices(): Promise<Record<'database' | 'cache' | 'storage', false | 'compose' | 'openwa'>> {
     const containers = await this.listContainers();
-    const isRunning = (svc: string): boolean =>
-      containers.some(
+    const creator = (svc: string): false | 'compose' | 'openwa' => {
+      const running = containers.find(
         c =>
           c.labels['com.openwa.service'] === svc && c.labels['com.openwa.builtin'] === 'true' && c.state === 'running',
       );
-    return { database: isRunning('database'), cache: isRunning('cache'), storage: isRunning('storage') };
+      if (!running) return false;
+      return running.labels['com.docker.compose.project'] ? 'compose' : 'openwa';
+    };
+    return { database: creator('database'), cache: creator('cache'), storage: creator('storage') };
   }
 
   /**

@@ -623,9 +623,10 @@ export interface UpdateCheck {
 export interface InfraStatus {
   // `builtIn` = OpenWA's own bundled container is actually running and backing this service (live),
   // not just the saved intent; falls back to the saved flag (the environment's first) when Docker is
-  // unavailable. (#488)
-  database: { connected: boolean; type: string; host: string; builtIn: boolean };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
+  // unavailable. (#488) `running` = a bundled container OpenWA created is up, whether or not the service uses it
+  // (false for one Docker Compose created); optional only because an older gateway does not send it.
+  database: { connected: boolean; type: string; host: string; builtIn: boolean; running?: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running?: boolean };
   queue: {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
@@ -637,6 +638,7 @@ export interface InfraStatus {
     // S3 only, when an endpoint is set: the one the server dials, which a stopped bundled MinIO still names.
     endpoint?: string;
     builtIn: boolean;
+    running?: boolean;
     s3Available?: boolean;
   };
   engine: {

@@ -21889,13 +21889,19 @@
             "type": "boolean",
             "description": "Whether OpenWA's own bundled container is actually running and backing this service, detected live from the labelled container rather than read from the saved intent. When Docker is unavailable it falls back to the saved flag (the environment's first), and a host name alone proves nothing.",
             "example": true
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "example": false
           }
         },
         "required": [
           "connected",
           "type",
           "host",
-          "builtIn"
+          "builtIn",
+          "running"
         ]
       },
       "InfraRedisStatusDto": {
@@ -21923,6 +21929,11 @@
             "type": "boolean",
             "description": "Whether OpenWA's bundled Redis container is backing this.",
             "example": true
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "example": false
           }
         },
         "required": [
@@ -21930,7 +21941,8 @@
           "connected",
           "host",
           "port",
-          "builtIn"
+          "builtIn",
+          "running"
         ]
       },
       "InfraQueueDepthDto": {
@@ -22011,6 +22023,11 @@
             "description": "Whether OpenWA's bundled MinIO container is backing this.",
             "example": false
           },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created and when Docker is unreachable.",
+            "example": false
+          },
           "s3Available": {
             "type": "boolean",
             "description": "Whether the S3 endpoint answered a probe. Present only for `s3`."
@@ -22018,7 +22035,8 @@
         },
         "required": [
           "type",
-          "builtIn"
+          "builtIn",
+          "running"
         ]
       },
       "InfraEngineStatusDto": {

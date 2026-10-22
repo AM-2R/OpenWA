@@ -5512,13 +5512,20 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
 
 ```json
 {
-  "database": { "connected": true, "type": "sqlite", "host": "localhost", "builtIn": false },
-  "redis": { "enabled": false, "connected": false, "host": "localhost", "port": 6379, "builtIn": false },
+  "database": { "connected": true, "type": "sqlite", "host": "localhost", "builtIn": false, "running": false },
+  "redis": {
+    "enabled": false,
+    "connected": false,
+    "host": "localhost",
+    "port": 6379,
+    "builtIn": false,
+    "running": false
+  },
   "queue": {
     "enabled": false,
     "webhooks": { "pending": 0, "completed": 0, "failed": 0 }
   },
-  "storage": { "type": "local", "path": "./data/media", "builtIn": false },
+  "storage": { "type": "local", "path": "./data/media", "builtIn": false, "running": false },
   "engine": {
     "type": "whatsapp-web.js",
     "headless": true,
@@ -5533,7 +5540,7 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
 
 The `queue.webhooks` counters are live BullMQ job counts (`pending` = waiting + active + delayed; plus `completed`/`failed`), degrading to zeros when the queue is disabled or Redis is unreachable. `redis.connected` is a live probe. `database.host` is the configured `DATABASE_HOST` (default `localhost`) and is reported on SQLite too, so read `type`, not `host`, to tell the database apart.
 
-`builtIn` (on `database`/`redis`/`storage`) reports whether OpenWA's own bundled container is actually running _and_ backing this service, detected live from the labelled container; when Docker is unreachable it falls back to the saved `*_BUILTIN` flag (one pinned by the environment first, else the one in `data/.env.generated`), and a host name alone counts for nothing there, since an external server may be called `postgres`. In S3 mode `storage` additionally carries `bucket` and `endpoint` (each when one is configured; a bundled MinIO that is stopped still reports `http://minio:9000` here, with `builtIn` false) and `s3Available` (re-probed, throttled, while false; once true it stays true until a restart, so a later outage does not clear it); in local mode neither key is present. `engine.webVersion`/`engine.webVersionSource` (`pinned` / `auto` / `native`) appear only on `whatsapp-web.js`; `webVersion` is `null` until the auto-resolve first succeeds. `engine.browserArgs` is the effective launch argument list: `PUPPETEER_ARGS` (or the four defaults shown) with `--lang=en-US` appended unless a `--lang` flag is already present.
+`builtIn` (on `database`/`redis`/`storage`) reports whether OpenWA's own bundled container is actually running _and_ backing this service, detected live from the labelled container; when Docker is unreachable it falls back to the saved `*_BUILTIN` flag (one pinned by the environment first, else the one in `data/.env.generated`), and a host name alone counts for nothing there, since an external server may be called `postgres`. `running` (on the same three) reports whether a bundled container OpenWA itself created is up, whether or not the service uses it: one Docker Compose created (it carries Compose's project label) and any container while Docker is unreachable read `false`. In S3 mode `storage` additionally carries `bucket` and `endpoint` (each when one is configured; a bundled MinIO that is stopped still reports `http://minio:9000` here, with `builtIn` false) and `s3Available` (re-probed, throttled, while false; once true it stays true until a restart, so a later outage does not clear it); in local mode neither key is present. `engine.webVersion`/`engine.webVersionSource` (`pinned` / `auto` / `native`) appear only on `whatsapp-web.js`; `webVersion` is `null` until the auto-resolve first succeeds. `engine.browserArgs` is the effective launch argument list: `PUPPETEER_ARGS` (or the four defaults shown) with `--lang=en-US` appended unless a `--lang` flag is already present.
 
 `envPinned` lists which of `DATABASE_TYPE`, `DATABASE_HOST`, `REDIS_ENABLED`, `REDIS_HOST`, `STORAGE_TYPE`, `S3_ENDPOINT`, `STORAGE_LOCAL_PATH`, `ENGINE_TYPE`, `PUPPETEER_HEADLESS`, `SESSION_DATA_PATH` and `PUPPETEER_ARGS` the host environment or the project `.env` sets. Those layers win over `data/.env.generated`, so a value saved for one of these keys through `PUT /api/infra/config` cannot take effect until that layer is changed. A pinned host also decides whether the bundled container backs its service, whatever `builtIn` is saved.
 

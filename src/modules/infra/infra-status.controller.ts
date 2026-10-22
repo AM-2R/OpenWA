@@ -32,8 +32,10 @@ interface InfraStatus {
   // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
   // service (detected live from the labeled container), not merely the saved intent. Falls back to the
   // saved flag, the environment's first, when Docker is unavailable. (#488)
-  database: { connected: boolean; type: string; host: string; builtIn: boolean };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
+  // `running` is whether a bundled container OpenWA created is up, whether or not the service uses it; false for
+  // one Docker Compose created and when Docker is unavailable.
+  database: { connected: boolean; type: string; host: string; builtIn: boolean; running: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running: boolean };
   queue: {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
@@ -44,6 +46,7 @@ interface InfraStatus {
     bucket?: string;
     endpoint?: string;
     builtIn: boolean;
+    running: boolean;
     s3Available?: boolean;
   };
   engine: {
@@ -200,9 +203,9 @@ export class InfraStatusController {
       ? await this.dockerService.getRunningBuiltinServices()
       : null;
     const savedBuiltin = this.readSavedBuiltinFlags();
-    const dbBuiltIn = running ? running.database && dbHost === 'postgres' : savedBuiltin.database;
-    const redisBuiltIn = running ? running.cache && redisHost === 'redis' : savedBuiltin.cache;
-    const storageBuiltIn = running ? running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
+    const dbBuiltIn = running ? !!running.database && dbHost === 'postgres' : savedBuiltin.database;
+    const redisBuiltIn = running ? !!running.cache && redisHost === 'redis' : savedBuiltin.cache;
+    const storageBuiltIn = running ? !!running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
     // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
     const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 
@@ -224,13 +227,20 @@ export class InfraStatusController {
     }
 
     return {
-      database: { connected: dbConnected, type: dbType, host: dbHost, builtIn: dbBuiltIn },
+      database: {
+        connected: dbConnected,
+        type: dbType,
+        host: dbHost,
+        builtIn: dbBuiltIn,
+        running: running?.database === 'openwa',
+      },
       redis: {
         enabled: redisEnabled,
         connected: redisConnected,
         host: redisHost,
         port: redisPort,
         builtIn: redisBuiltIn,
+        running: running?.cache === 'openwa',
       },
       queue: {
         enabled: queueEnabled,
@@ -243,6 +253,7 @@ export class InfraStatusController {
         // The endpoint this process dials: a bundled MinIO that is stopped still names it, an external store does not.
         ...(storageType === 's3' && s3Endpoint ? { endpoint: s3Endpoint } : {}),
         builtIn: storageBuiltIn,
+        running: running?.storage === 'openwa',
         ...(storageType === 's3' ? { s3Available } : {}),
       },
       engine: {
