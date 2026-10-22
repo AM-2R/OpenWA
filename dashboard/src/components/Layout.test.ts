@@ -154,6 +154,29 @@ test('the phone menu button names its state and Escape closes the drawer and ret
   }
 });
 
+// Closed, the phone drawer is only moved off screen: its links stayed in the tab order, so a keyboard user stepped
+// through a dozen invisible stops after the menu button. Inert takes them out until the drawer opens.
+test('the closed phone drawer is inert, the open one and the desktop sidebar are not', () => {
+  const width = window.innerWidth;
+  try {
+    window.innerWidth = 390;
+    const phone = renderLayout();
+    const drawer = phone.container.querySelector('aside.sidebar')!;
+    assert.ok(drawer.hasAttribute('inert'), 'the closed drawer is still focusable');
+    rtl.fireEvent.click(phone.container.querySelector('.mobile-menu-btn')!);
+    assert.ok(!drawer.hasAttribute('inert'), 'the open drawer is inert');
+    rtl.fireEvent.click(phone.container.querySelector('.mobile-menu-btn')!);
+    assert.ok(drawer.hasAttribute('inert'), 'the drawer is focusable again after closing');
+    phone.unmount();
+
+    window.innerWidth = 1024;
+    const desktop = renderLayout();
+    assert.ok(!desktop.container.querySelector('aside.sidebar')!.hasAttribute('inert'), 'the desktop sidebar is inert');
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
 // The language menu lives in the drawer footer; Escape dismisses the innermost overlay first.
 test('Escape closes the open language menu before the phone drawer', () => {
   const width = window.innerWidth;

@@ -209,6 +209,8 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
       <aside
         className={`sidebar ${collapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        // Off screen is not out of reach: keep the closed drawer's links out of the tab order and the reading order.
+        inert={isMobile && !isMobileOpen}
       >
         <div className="sidebar-header">
           <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
