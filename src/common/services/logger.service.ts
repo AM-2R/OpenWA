@@ -36,7 +36,8 @@ const REDACT_DEEP_NODES = 1000;
 // Array.prototype.map visits every index, holes included, so a sparse array costs its length however little it
 // holds (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is
 // left of the node budget, is written as [Truncated] before any index is visited. The same goes for a typed array (a
-// Buffer included), which lists one entry per element, and below the whole levels for an object, one per key.
+// Buffer included), which lists one entry per element. Below the whole levels an object is listed, then truncated if
+// its keys do not fit in what is left of the budget, which they are then charged to.
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 
 export interface RedactOptions {
@@ -78,7 +79,11 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
     const keys = Object.keys(source);
-    if (deep && keys.length > budget.nodes) return '[Truncated]';
+    if (deep && keys.length > budget.nodes) {
+      // Listed once, then charged: another reference to this object, or any other node, is refused without listing.
+      budget.nodes -= keys.length;
+      return '[Truncated]';
+    }
     const out: Record<string, unknown> = {};
     for (const key of keys) {
       const val = source[key];

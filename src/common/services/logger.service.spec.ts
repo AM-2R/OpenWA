@@ -938,6 +938,44 @@ describe('redactSecrets', () => {
         expect(redactSecrets(deep(wide(1000)))).toEqual(deep('[Truncated]'));
       });
 
+      // An object is listed (Object.keys) before its key count can be compared with the budget, so a too wide one is
+      // charged for its keys once it is truncated: a second reference to it is refused without listing it again.
+      it('lists a too wide object once, however many references to it lie below the fifth level', () => {
+        let listings = 0;
+        const counted = new Proxy(wide(10_000), {
+          ownKeys: target => {
+            listings++;
+            return Reflect.ownKeys(target);
+          },
+        });
+
+        const copy = redactSecrets(deep(Array.from({ length: 900 }, () => counted))) as {
+          a: { b: { c: { d: { list: unknown[] } } } };
+        };
+
+        expect(listings).toBe(1);
+        expect(copy.a.b.c.d.list).toHaveLength(900);
+        expect(new Set(copy.a.b.c.d.list)).toEqual(new Set(['[Truncated]']));
+      });
+
+      it('finishes a record of 900 references to one wide object in a bounded time', () => {
+        const shared = wide(20_000);
+        const started = Date.now();
+
+        redactSecrets(deep(Array.from({ length: 900 }, () => shared)));
+
+        expect(Date.now() - started).toBeLessThan(500);
+      });
+
+      it('spends the node budget on the keys of a too wide object, so what follows it is [Truncated]', () => {
+        expect(redactSecrets(deep({ wide: wide(1500), small: { id: 1 } }))).toEqual(
+          deep({ wide: '[Truncated]', small: '[Truncated]' }),
+        );
+        expect(redactSecrets(deep({ small: { id: 1 }, wide: wide(1500) }))).toEqual(
+          deep({ small: { id: 1 }, wide: '[Truncated]' }),
+        );
+      });
+
       it('copies a wide object whole in the first five levels', () => {
         const copy = redactSecrets({ list: wide(5000) }) as { list: object };
 

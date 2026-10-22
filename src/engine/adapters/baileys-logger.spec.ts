@@ -157,6 +157,23 @@ describe('createBaileysLogger writes any record the library hands it', () => {
       expect(Object.keys(fits)).toHaveLength(999);
       expect(wider).toBe('[Truncated]');
     });
+
+    it('writes 900 references to one wide object below the fifth level as [Truncated] in a bounded time', () => {
+      const shared = wide(20_000);
+
+      const started = Date.now();
+      const rows = at(
+        write({ a: { b: { c: { d: { rows: Array.from({ length: 900 }, () => shared) } } } } }, 'x'),
+        'a',
+        'b',
+        'c',
+        'd',
+        'rows',
+      ) as unknown[];
+
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(new Set(rows)).toEqual(new Set(['[Truncated]']));
+    });
   });
 
   it('replaces a credential nested deeper than five levels', () => {
