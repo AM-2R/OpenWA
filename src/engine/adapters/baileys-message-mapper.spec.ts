@@ -1216,6 +1216,27 @@ describe('native poll choice metadata', () => {
         expect(extractBaileysBody(content(question, options) as BaileysBodyContent)).toBe(question);
       });
 
+      // The numbers are written out here, not read from the constants, so moving either by one shows up.
+      it('keeps a poll of 32 options with 1024 characters in each text whole', () => {
+        const text = (i: number) => `${i}`.padEnd(1024, 'x');
+        const options = Array.from({ length: 32 }, (_, i) => text(i));
+        expect(extractBaileysPoll(content(text(99), options))).toEqual({
+          name: text(99),
+          options,
+          allowMultipleAnswers: false,
+        });
+        expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99));
+      });
+
+      it('cuts a poll at its 33rd option and at the 1025th character of a text', () => {
+        const text = (i: number) => `${i}`.padEnd(1025, 'x');
+        const options = Array.from({ length: 33 }, (_, i) => text(i));
+        const poll = extractBaileysPoll(content(text(99), options))!;
+        expect(poll.options).toEqual(options.slice(0, 32).map(option => option.slice(0, 1024)));
+        expect(poll.name).toBe(text(99).slice(0, 1024));
+        expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99).slice(0, 1024));
+      });
+
       it('truncates an oversized poll, in the poll and in the body, and keeps it a poll', () => {
         const long = 'x'.repeat(POLL_TEXT_MAX_LENGTH * 3);
         const optionNames = Array.from({ length: POLL_MAX_OPTIONS * 50 }, (_, i) => `${i}${long}`);
