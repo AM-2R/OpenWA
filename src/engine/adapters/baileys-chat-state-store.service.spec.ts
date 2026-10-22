@@ -767,6 +767,57 @@ describe('ChatStateStoreService', () => {
       expect(repo.rows.get(KEY('s', PHONE))).toMatchObject({ muteEndTime: NEW_END, archived: true });
       expect(store.listChats()[0]).toMatchObject({ muteExpiration: NEW_END, archived: true });
     });
+
+    describe('two writes in one millisecond', () => {
+      // Only Date stands still; the promises and setImmediate the store and the fake repo use still run.
+      beforeEach(() =>
+        jest.useFakeTimers({
+          now: 10_000,
+          doNotFake: [
+            'hrtime',
+            'nextTick',
+            'performance',
+            'queueMicrotask',
+            'requestAnimationFrame',
+            'cancelAnimationFrame',
+            'requestIdleCallback',
+            'cancelIdleCallback',
+            'setImmediate',
+            'clearImmediate',
+            'setInterval',
+            'clearInterval',
+            'setTimeout',
+            'clearTimeout',
+          ],
+        }),
+      );
+      afterEach(() => jest.useRealTimers());
+
+      it('ranks a pin of the twin written after a fold of the chat as the newer row', async () => {
+        const repo = makeRepo([
+          { sessionId: 's', chatId: PHONE, pinned: false, observed: 'pinned', updatedAt: new Date(1000) },
+        ]);
+        const svc = svcWith(repo);
+        await svc.fold('s', PHONE, [LID], { muteEndTime: 5000 });
+        await svc.remember('s', LID, { pinned: true });
+        expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({
+          muteEndTime: 5000,
+          pinned: true,
+        });
+        const at = (chatId: string) => repo.rows.get(KEY('s', chatId))!.updatedAt.getTime();
+        expect(at(LID)).toBeGreaterThan(at(PHONE));
+      });
+
+      it('ranks a write made after a failed read as newer than the write before it', async () => {
+        const repo = makeRepo();
+        const svc = svcWith(repo);
+        await svc.remember('s', PHONE, { pinned: false });
+        repo.findOne.mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+        await svc.remember('s', LID, { pinned: true });
+        await svc.reload();
+        expect(mergeTwinStates([svc.get('s', PHONE)!, svc.get('s', LID)!])).toMatchObject({ pinned: true });
+      });
+    });
   });
 
   it('swallows a repo error on reload and remember (table may not exist yet)', async () => {

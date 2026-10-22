@@ -176,6 +176,8 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private touchSeq = 0;
   private touchedFloor = 0;
   private readonly touched = new Map<string, number>();
+  /** The `updatedAt` of the last write, so the next one never shares it (see {@link stamp}). */
+  private lastStamp = 0;
 
   constructor(
     @InjectRepository(ChatState, 'data')
@@ -296,6 +298,17 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     const settle = () => pending.delete(done);
     done.then(settle, settle);
     return done;
+  }
+
+  /**
+   * The `updatedAt` of a write: the clock, or one millisecond past the previous write when the clock has
+   * not moved past it. Twin rows rank by it and a tie goes to the phone row, so a write of a twin made in
+   * the same millisecond as one of the phone row would rank older however late it came. A burst of
+   * writes runs it ahead of the clock by its writes beyond one per millisecond, until the clock catches up.
+   */
+  private stamp(): Date {
+    this.lastStamp = Math.max(Date.now(), this.lastStamp + 1);
+    return new Date(this.lastStamp);
   }
 
   private writesOf(sessionId: string): SessionWrites {
@@ -465,7 +478,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       this.index(k, next); // warm the cache even on a no-op so the next read is a hit
       return true; // nothing changed against the current state; skip the write that would just churn updatedAt
     }
-    const at = new Date();
+    const at = this.stamp();
     next.updatedAt = at.getTime();
     this.bumpWriteSeq(sessionId);
     this.index(k, next);
@@ -476,7 +489,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     sessionId: string,
     chatId: string,
     values: Partial<ChatStateValue>,
-    at = new Date(),
+    at: Date,
   ): Promise<boolean> {
     const columns: Record<string, unknown> = { ...values, observed: values.observed?.join(',') };
     delete columns.updatedAt;
@@ -504,7 +517,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   ): Promise<boolean> {
     const carried = FIELDS.filter(f => Object.hasOwn(patch, f));
     const columns = Object.fromEntries(carried.map(f => [f, patch[f]]));
-    const updatedAt = new Date();
+    const updatedAt = this.stamp();
     try {
       if (create) {
         await this.repo
