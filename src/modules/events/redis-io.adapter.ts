@@ -168,11 +168,13 @@ export class RedisIoAdapter extends IoAdapter {
       const publish = pubClient.publish.bind(pubClient);
       let dropping = false;
       let dropped = 0;
-      // When the queue was last seen below half the cap: the backlog is as old as the time since.
+      // When the queue was last seen below half the cap: the backlog is as old as the time since. Read from the
+      // monotonic clock: the wall clock can step back (an NTP correction, a resumed VM), and an age taken from it
+      // would be negative for as long as the step is large, leaving a slow Redis uncapped.
       let lastBelowResume = 0;
       pubClient.publish = (channel: string, message: string | Buffer) => {
         const unanswered = unansweredCommands(pubClient);
-        const now = Date.now();
+        const now = performance.now();
         if (unanswered < WS_REDIS_RESUME_UNANSWERED) {
           lastBelowResume = now;
           if (dropping) {

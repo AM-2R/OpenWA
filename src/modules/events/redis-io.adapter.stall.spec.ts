@@ -272,8 +272,8 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
   // deadline never fires and the client would hold the whole backlog. Only the cap on unanswered commands bounds it,
   // once the backlog has outlived a command's own deadline. The clock is moved by hand: the rule is about elapsed time.
   it('holds a slow peer to the cap, warning once when dropping starts and once when it ends, however often it answers', async () => {
-    let clock = 1_000_000;
-    jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    let clock = 5_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => clock);
     const connections = redis.connections;
     redis.trickle = true;
 

@@ -285,8 +285,8 @@ describe('RedisIoAdapter', () => {
       });
 
       it('drops frames once the queue is at the cap and has been above half of it for longer than a command is given', async () => {
-        let clock = 1_000_000;
-        const now = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+        let clock = 5_000;
+        const now = jest.spyOn(performance, 'now').mockImplementation(() => clock);
         const queue = { length: 0 };
         try {
           await withPublisher(queue, async pub => {
@@ -313,9 +313,34 @@ describe('RedisIoAdapter', () => {
         }
       });
 
+      // The age comes from a monotonic clock. The wall clock can step backwards (an NTP correction, a VM resumed), and
+      // an age taken from it would be negative for as long as the step is large, leaving a slow Redis uncapped.
+      it('is not blinded by the wall clock stepping back while the backlog ages', async () => {
+        let monotonic = 5_000;
+        let wall = 1_700_000_000_000;
+        const mono = jest.spyOn(performance, 'now').mockImplementation(() => monotonic);
+        const wallClock = jest.spyOn(Date, 'now').mockImplementation(() => wall);
+        const queue = { length: 0 };
+        try {
+          await withPublisher(queue, async pub => {
+            await pub.publish('socket.io#/events#', 'frame');
+            queue.length = WS_REDIS_MAX_UNANSWERED / 2;
+            monotonic += WS_REDIS_COMMAND_TIMEOUT_MS + 1;
+            wall -= 60_000;
+            queue.length = WS_REDIS_MAX_UNANSWERED;
+
+            await expect(pub.publish('socket.io#/events#', 'frame')).resolves.toBe(0);
+            expect(pub.sent).toHaveBeenCalledTimes(1);
+          });
+        } finally {
+          mono.mockRestore();
+          wallClock.mockRestore();
+        }
+      });
+
       it('warns once when an episode starts and once when it ends, each with its own count', async () => {
-        let clock = 1_000_000;
-        const now = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+        let clock = 5_000;
+        const now = jest.spyOn(performance, 'now').mockImplementation(() => clock);
         const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         const lines = (text: string): string[] =>
           warn.mock.calls.map(([line]) => String(line)).filter(line => line.includes(text));
