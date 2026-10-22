@@ -279,18 +279,36 @@ describe('GroupMetadataCache', () => {
       expect(fetch.mock.calls.map(([jid]) => jid)).toEqual([GROUP]);
     });
 
-    it('refreshes a cached group from a whole snapshot, restarting its TTL', async () => {
+    it('drops a cached group a whole snapshot names, so only the single-group query writes an entry', async () => {
       const cache = build();
-      const fetch = jest.fn().mockResolvedValue(group(GROUP, ['628111@s.whatsapp.net']));
+      const queried = {
+        ...group(GROUP, ['159442138038327@lid']),
+        addressingMode: 'lid',
+        ephemeralDuration: 86400,
+      } as unknown as GroupMetadata;
+      const fetch = jest.fn().mockResolvedValue(queried);
       await cache.read(GROUP, fetch);
-      clock += 900;
 
-      cache.applyUpdates([group(GROUP, ['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
-      clock += 900;
+      // A snapshot of the all-groups listing: phone-form ids, no addressing mode, no disappearing timer.
+      cache.applyUpdates([group(GROUP, ['628111@s.whatsapp.net']), group(OTHER)]);
 
-      const hit = await cache.read(GROUP, fetch);
-      expect(hit?.participants).toHaveLength(2);
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(cache.peek(GROUP)).toBeUndefined();
+      expect(cache.size).toBe(0);
+      expect(await cache.read(GROUP, fetch)).toBe(queried);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not keep a read that a snapshot overtook', async () => {
+      const cache = build();
+      let answer!: (metadata: GroupMetadata) => void;
+      const fetch = jest.fn(() => new Promise<GroupMetadata>(resolve => (answer = resolve)));
+      const read = cache.read(GROUP, fetch);
+
+      cache.applyUpdates([group(GROUP, ['628111@s.whatsapp.net'])]);
+      answer(group(GROUP));
+      await read;
+
+      expect(cache.size).toBe(0);
     });
 
     it('does not add a group nobody has sent to from a snapshot', () => {

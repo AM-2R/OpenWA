@@ -556,8 +556,8 @@ export class BaileysLifecycle {
       });
       this.host.removeChats(ids);
     });
-    // The same events keep the group metadata cache honest: a membership change or a (re)join drops that
-    // group, a whole-metadata snapshot refreshes it, and any other change makes it read again.
+    // The same events keep the group metadata cache honest: a membership change, a (re)join, a settings
+    // change or a whole-metadata snapshot drops that group, so the next send reads it again.
     sock.ev.on('group-participants.update', event => {
       this.groupMetadata.invalidate(event.id);
       this.host.handleGroupParticipantsUpdate(event);

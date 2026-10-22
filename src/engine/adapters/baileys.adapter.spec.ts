@@ -10537,16 +10537,24 @@ describe('BaileysAdapter group metadata cache', () => {
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes a cached group from a whole snapshot without another query', async () => {
+  it('builds the next send from the single-group query, not from a whole snapshot of the group list', async () => {
+    const queried = {
+      ...meta(['159442138038327@lid']),
+      addressingMode: 'lid',
+      ephemeralDuration: 86400,
+    };
+    fakeSock.groupMetadata.mockResolvedValue(queried);
     await ready();
     const { cachedGroupMetadata } = socketConfig();
     await cachedGroupMetadata(GROUP);
 
+    // The all-groups listing can name participants in another id form and leave out the addressing mode
+    // and the disappearing timer; it must not become what the next group send is built from.
     fakeSock.fire('groups.update', [meta(['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
-    const refreshed = (await cachedGroupMetadata(GROUP)) as { participants: unknown[] };
+    const next = await cachedGroupMetadata(GROUP);
 
-    expect(refreshed.participants).toHaveLength(2);
-    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+    expect(next).toBe(queried);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
   });
 
   it('still reports the group events to consumers while it keeps the cache', async () => {

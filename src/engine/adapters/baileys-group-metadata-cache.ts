@@ -96,14 +96,6 @@ export class GroupMetadataCache {
     return pending;
   }
 
-  /**
-   * Replace the copy of a group that is already cached with metadata that arrived whole. A group nobody
-   * has sent to is not added: the cache holds what sends use, not every group the account is in.
-   */
-  refresh(metadata: GroupMetadata): void {
-    if (this.enabled && metadata.id && this.entries.has(metadata.id)) this.store(metadata.id, metadata);
-  }
-
   /** Forget one group: its membership or settings changed, so the next send reads it again. */
   invalidate(jid: string | null | undefined): void {
     if (!jid) return;
@@ -120,16 +112,15 @@ export class GroupMetadataCache {
   }
 
   /**
-   * Apply a `groups.update` batch. A whole-metadata entry (the result of a full group fetch, which
-   * Baileys also emits through this event) refreshes the cached copy; a partial one is a real change to
-   * some field, so the group is read again on the next send.
+   * Apply a `groups.update` batch: every group it names is read again on the next send. A partial entry
+   * is a real change to some field. A whole-metadata entry (the result of the all-groups listing, which
+   * Baileys also emits through this event, on every dirty-groups notice as well as on GET /groups) comes
+   * from a different query than a send uses, and may name participants in another id form or leave out
+   * the addressing mode and the disappearing timer, so it never becomes the cached copy. The cost is one
+   * single-group query per cached group after such a listing.
    */
   applyUpdates(updates: ReadonlyArray<Partial<GroupMetadata>> | undefined): void {
-    for (const update of updates ?? []) {
-      if (!update?.id) continue;
-      if (Array.isArray(update.participants)) this.refresh(update as GroupMetadata);
-      else this.invalidate(update.id);
-    }
+    for (const update of updates ?? []) this.invalidate(update?.id);
   }
 
   private store(jid: string, metadata: GroupMetadata): void {
