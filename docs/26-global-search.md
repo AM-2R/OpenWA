@@ -137,7 +137,7 @@ GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<incoming|outgoing
   longer than 1000 characters or with more than 32 words, punctuation separating words as whitespace does and a symbol or emoji that stands apart counting as one; a whitespace-separated word said again counts once). Numeric params
   are coerced and validated; a non-numeric `limit`/`offset`/`dateFrom`/`dateTo` surfaces as `400`,
   never as a `NaN` SQL parameter, and so does a `dateFrom`/`dateTo` beyond 9007199254740991 in either direction
-  (no timestamp reaches it, and PostgreSQL would reject the bound as an overflow).
+  (no timestamp reaches it, and the cap keeps the value exactly representable, on both databases).
 - **Auth scoping is authoritative.** The caller's API-key `allowedSessions` is injected by
   `SearchService` — **never** accepted from the query — so a scoped key cannot broaden its reach. A
   key with a non-empty `allowedSessions` searches only those sessions, whatever its role, even if it
