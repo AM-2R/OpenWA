@@ -30,6 +30,23 @@ export const WS_REDIS_COMMAND_TIMEOUT_MS = 2000;
 export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
 
 /**
+ * How often the subscriber connection is pinged. It only receives, so a connection that stops answering without
+ * being closed (a NAT or a firewall that drops the flow, a proxy that keeps its own side open) would otherwise go
+ * unnoticed until TCP keepalive gives up, or for good behind such a proxy, and the node would miss what the other
+ * replicas publish meanwhile. A ping arms the subscriber's socket deadline, so a connection that does not answer is
+ * replaced, and its subscriptions restored, within this interval plus WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS.
+ */
+export const WS_REDIS_SUBSCRIBER_PING_MS = 15_000;
+
+/**
+ * How long the subscriber's socket may stay silent after a ping before it is destroyed. Above the publisher's
+ * deadline on purpose: a replaced subscriber misses what Redis delivers before it has subscribed again, so through
+ * a pause longer than WS_REDIS_SOCKET_TIMEOUT_MS this node still receives, late, what the others had written before
+ * their own deadline, rather than losing it. Up to this long a pause costs nothing more than it did without pings.
+ */
+export const WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS = 30_000;
+
+/**
  * Most commands the publisher keeps written and unanswered once the backlog has lasted. A Redis that answers slower
  * than events are raised never trips the socket deadline, so without a cap the backlog grows with the load for as
  * long as the slowness lasts. The rule: frames are dropped for the other replicas while the queue holds this many
@@ -107,18 +124,23 @@ export function rejectRootNamespace(server: Server): void {
  * Failure posture: if the pub/sub clients cannot be created the server falls back to the in-memory
  * adapter — the local node keeps working, only cross-node fan-out is lost — rather than refusing to
  * boot. A Redis outage, at boot or after it, is ioredis's problem to retry; the adapter recovers on reconnect.
+ * The subscriber only listens, so a connection that stops answering without being closed errors nothing until TCP
+ * keepalive gives up, and never when a proxy in the path keeps its side open: it is pinged every
+ * WS_REDIS_SUBSCRIBER_PING_MS and replaced, and subscribed again, when an answer takes longer than
+ * WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS.
  *
  * Delivery while Redis is away or slow: the fan-out to the other replicas is best effort and keeps no replay
  * queue. A Redis that pauses for less than WS_REDIS_SOCKET_TIMEOUT_MS answers afterwards, and every event raised
  * meanwhile reaches them late, at up to about 1,200 events a second; above that the cap below applies first, and
  * drops the frames beyond it. Silence for that long destroys the publisher's socket, and so does a restart, a
  * failover or an outage: what was written to the dropped connection may be lost with it, or may still reach the
- * other replicas late and after newer events. The events this node raises while it is disconnected, plus its
- * reconnect backoff of up to 5 s once Redis is back (wsRedisOptions), are dropped for the other replicas, never
- * delivered late and never twice. A Redis that keeps answering, but slower than events are raised, never looks
- * silent: it is bounded by WS_REDIS_MAX_UNANSWERED, which drops frames for the other replicas once the backlog has
- * outlived a command's deadline and until it is back below half of it (a burst raised in one tick is not cut
- * unless raising it past half the cap takes over 2 s).
+ * other replicas late and after newer events. A subscriber whose ping waits through a silence longer than
+ * WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS is replaced too, and this node then misses what the others had published
+ * into it. The events this node raises while it is disconnected, plus its reconnect backoff of up to 5 s once Redis
+ * is back (wsRedisOptions), are dropped for the other replicas, never delivered late and never twice. A Redis that
+ * keeps answering, but slower than events are raised, never looks silent: it is bounded by WS_REDIS_MAX_UNANSWERED,
+ * which drops frames for the other replicas once the backlog has outlived a command's deadline and until it is back
+ * below half of it (a burst raised in one tick is not cut unless raising it past half the cap takes over 2 s).
  * Clients on this node are served by the local broadcast and webhooks do not use this path, so neither is
  * affected. What the publisher holds is bounded by one socket deadline of traffic for a silent Redis and by that
  * cap, plus the traffic of one command deadline, for a slow one.
@@ -126,6 +148,7 @@ export function rejectRootNamespace(server: Server): void {
 export class RedisIoAdapter extends IoAdapter {
   private pubClient?: Redis;
   private subClient?: Redis;
+  private subPing?: NodeJS.Timeout;
 
   constructor(app: INestApplicationContext) {
     super(app);
@@ -156,9 +179,16 @@ export class RedisIoAdapter extends IoAdapter {
       // The adapter issues its SUBSCRIBE/PSUBSCRIBE once, at construction. With a bounded per-request
       // retry, an outage at boot flushes them before Redis is ever reached, and ioredis only replays
       // subscriptions the server confirmed, so the replica would never subscribe. This connection
-      // carries nothing else, so keep its commands queued until the first connect. It waits for no
-      // reply either, which is why none of the publisher's deadlines apply to it.
-      const subClient = new Redis({ ...wsRedisOptions(), maxRetriesPerRequest: null });
+      // carries nothing else, so keep its commands queued until the first connect. Nothing waits on
+      // its replies, so the publisher's command deadline and dropped queues do not apply to it. A
+      // socket deadline of its own does, armed by the pings below: a destroyed socket loses no
+      // subscription, since on the next ready ioredis subscribes again to what the server had
+      // confirmed and resends the commands it had not answered.
+      const subClient = new Redis({
+        ...wsRedisOptions(),
+        maxRetriesPerRequest: null,
+        socketTimeout: WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS,
+      });
       for (const [name, client] of [
         ['pub', pubClient],
         ['sub', subClient],
@@ -210,6 +240,12 @@ export class RedisIoAdapter extends IoAdapter {
       this.pubClient = pubClient;
       this.subClient = subClient;
       server.adapter(createAdapter(pubClient, subClient));
+      // Only a ready connection is pinged: one issued while reconnecting would wait in the offline queue
+      // for as long as the outage lasts. A failed ping needs nothing more, the deadline or the next ping
+      // covers the connection. The timer alone does not keep the process alive.
+      this.subPing = setInterval(() => {
+        if (subClient.status === 'ready') subClient.ping().catch(() => undefined);
+      }, WS_REDIS_SUBSCRIBER_PING_MS).unref();
       logger.log('WebSocket events fan out across replicas via the Redis adapter');
     } catch (error) {
       logger.error(
@@ -229,6 +265,7 @@ export class RedisIoAdapter extends IoAdapter {
     // a shutdown that had in fact gone fine. Close the server first, then release the pair. Under
     // forceCloseConnections Nest skips the server close when the socket.io server shares the HTTP
     // server, so only the pub/sub pair is released here and the HTTP close tears the sockets down.
+    clearInterval(this.subPing);
     await super.close(server);
     await Promise.allSettled([this.quitClient(this.pubClient), this.quitClient(this.subClient)]);
     this.pubClient = undefined;

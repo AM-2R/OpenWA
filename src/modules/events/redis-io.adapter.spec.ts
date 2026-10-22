@@ -11,6 +11,8 @@ class FakeRedis {
   readonly handlers: Record<string, (err: Error) => void> = {};
   quit = jest.fn().mockResolvedValue('OK');
   disconnect = jest.fn();
+  status = 'ready';
+  ping = jest.fn().mockResolvedValue('PONG');
   readonly sent = jest.fn().mockResolvedValue(1);
   publish(channel: string, message: string): Promise<number> {
     return this.sent(channel, message) as Promise<number>;
@@ -42,6 +44,8 @@ import {
   WS_REDIS_MAX_UNANSWERED,
   WS_REDIS_QUIT_TIMEOUT_MS,
   WS_REDIS_SOCKET_TIMEOUT_MS,
+  WS_REDIS_SUBSCRIBER_PING_MS,
+  WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS,
 } from './redis-io.adapter';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import type { Server } from 'socket.io';
@@ -196,9 +200,10 @@ describe('RedisIoAdapter', () => {
     });
 
     // A Redis that keeps the connection open and stops answering never errors the publisher's socket, so only
-    // its own deadlines release what it holds. The subscriber must not inherit them: it waits for no reply, and
-    // a destroyed socket or a dropped queue would strand its one-time SUBSCRIBE.
-    it('puts the deadlines on the publisher only', () => {
+    // its own deadlines release what it holds. The subscriber gets a socket deadline of its own, which its pings
+    // arm, and nothing else: a rejected or dropped command would strand its one-time SUBSCRIBE, while a destroyed
+    // socket does not, since ioredis subscribes again on the next connection.
+    it('puts the command deadlines on the publisher only, and a socket deadline on each', () => {
       process.env.REDIS_ENABLED = 'true';
       const spy = withBaseServer(fakeServer().server);
       try {
@@ -218,15 +223,13 @@ describe('RedisIoAdapter', () => {
         // The figure docs/13 and the adapter comment quote ("a pause under 10 s is delivered late", "at most 10 s of
         // events"): the other tests derive their waits from the constant and would follow it to any value.
         expect(WS_REDIS_SOCKET_TIMEOUT_MS).toBe(10_000);
-        for (const option of [
-          'commandTimeout',
-          'socketTimeout',
-          'enableOfflineQueue',
-          'autoResendUnfulfilledCommands',
-        ]) {
+        for (const option of ['commandTimeout', 'enableOfflineQueue', 'autoResendUnfulfilledCommands']) {
           expect(sub.opts).not.toHaveProperty(option);
         }
-        expect(sub.opts).toMatchObject({ maxRetriesPerRequest: null });
+        expect(sub.opts).toMatchObject({
+          maxRetriesPerRequest: null,
+          socketTimeout: WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS,
+        });
       } finally {
         spy.mockRestore();
       }
@@ -397,6 +400,97 @@ describe('RedisIoAdapter', () => {
       } finally {
         spy.mockRestore();
       }
+    });
+  });
+
+  // The subscriber only receives, so a connection that stops answering without being closed shows nothing until TCP
+  // keepalive gives up, and never behind a proxy that keeps its side open. A ping arms the socket deadline that
+  // replaces it.
+  describe('the subscriber ping', () => {
+    const withSubscriber = async (
+      check: (pub: FakeRedis, sub: FakeRedis, adapter: RedisIoAdapter, server: Server) => Promise<void>,
+    ): Promise<void> => {
+      jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+      process.env.REDIS_ENABLED = 'true';
+      const { server } = fakeServer();
+      const createSpy = withBaseServer(server);
+      const closeSpy = jest.spyOn(IoAdapter.prototype, 'close').mockResolvedValue(undefined);
+      try {
+        const adapter = new RedisIoAdapter({} as never);
+        adapter.createIOServer(2785);
+        const [pub, sub] = redisInstances as [FakeRedis, FakeRedis];
+        await check(pub, sub, adapter, server);
+      } finally {
+        jest.useRealTimers();
+        createSpy.mockRestore();
+        closeSpy.mockRestore();
+      }
+    };
+
+    it('pins the figures docs/13 quotes, and keeps the subscriber through a pause the publisher gives up on', () => {
+      expect(WS_REDIS_SUBSCRIBER_PING_MS).toBe(15_000);
+      expect(WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS).toBe(30_000);
+      expect(WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS).toBeGreaterThan(WS_REDIS_SOCKET_TIMEOUT_MS);
+      // "At most about 45 s": a flow dropped right after an answered ping, the next ping, then the deadline.
+      expect(WS_REDIS_SUBSCRIBER_PING_MS + WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS).toBe(45_000);
+    });
+
+    it('pings the subscriber every interval while it is ready, and never while it is not', async () => {
+      await withSubscriber(async (pub, sub) => {
+        await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS - 1);
+        expect(sub.ping).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(1);
+        expect(sub.ping).toHaveBeenCalledTimes(1);
+
+        // A ping issued while reconnecting would wait in the offline queue for as long as the outage lasts.
+        sub.status = 'reconnecting';
+        await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS * 4);
+        expect(sub.ping).toHaveBeenCalledTimes(1);
+
+        sub.status = 'ready';
+        await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS);
+        expect(sub.ping).toHaveBeenCalledTimes(2);
+        expect(pub.ping).not.toHaveBeenCalled();
+      });
+    });
+
+    it('gives a failed ping an owner', async () => {
+      const unhandled = jest.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        await withSubscriber(async (_pub, sub) => {
+          sub.ping.mockRejectedValue(new Error('Connection is closed.'));
+          await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS);
+          await new Promise(resolve => setImmediate(resolve));
+          expect(sub.ping).toHaveBeenCalledTimes(1);
+        });
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
+
+    it('does not keep the process alive with its timer', () => {
+      process.env.REDIS_ENABLED = 'true';
+      const spy = withBaseServer(fakeServer().server);
+      try {
+        const adapter = new RedisIoAdapter({} as never);
+        adapter.createIOServer(2785);
+        const timer = (adapter as unknown as { subPing: NodeJS.Timeout }).subPing;
+        expect(timer.hasRef()).toBe(false);
+        clearInterval(timer);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('stops pinging once the adapter is closed', async () => {
+      await withSubscriber(async (_pub, sub, adapter, server) => {
+        await adapter.close(server);
+        await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS * 3);
+        expect(sub.ping).not.toHaveBeenCalled();
+        expect(jest.getTimerCount()).toBe(0);
+      });
     });
   });
 

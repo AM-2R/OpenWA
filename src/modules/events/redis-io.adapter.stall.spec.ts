@@ -7,7 +7,10 @@ import {
   RedisIoAdapter,
   WS_REDIS_COMMAND_TIMEOUT_MS,
   WS_REDIS_MAX_UNANSWERED,
+  WS_REDIS_QUIT_TIMEOUT_MS,
   WS_REDIS_SOCKET_TIMEOUT_MS,
+  WS_REDIS_SUBSCRIBER_PING_MS,
+  WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS,
 } from './redis-io.adapter';
 
 /**
@@ -23,6 +26,10 @@ class FakeRedis {
   readonly sockets = new Set<net.Socket>();
   /** When set, a PUBLISH is answered one at a time through answerOne(): a Redis that is slow, not silent. */
   trickle = false;
+  /** PINGs answered so far. */
+  pings = 0;
+  /** The subscriptions each connection asked for, in the order the connections asked. */
+  readonly subscriptions = new Map<net.Socket, string[]>();
   private stalled = false;
   private readonly slowReplies: Array<() => void> = [];
   /** What a stalled peer owes its clients. Sent when it comes back, as a Redis that was paused does. */
@@ -37,6 +44,19 @@ class FakeRedis {
   /** Answer every PUBLISH a slow peer still owes. */
   answerAll(): void {
     for (const send of this.slowReplies.splice(0)) send();
+  }
+
+  /**
+   * Stop reading every connection that has subscribed, without closing it, as behind a proxy that lost its upstream
+   * or a paused Redis. New connections are served. What arrives meanwhile waits in the socket and is answered once
+   * they are resumed.
+   */
+  pauseSubscribers(): void {
+    for (const socket of this.subscriptions.keys()) socket.pause();
+  }
+
+  resumeSubscribers(): void {
+    for (const socket of this.subscriptions.keys()) socket.resume();
   }
 
   get silent(): boolean {
@@ -59,6 +79,11 @@ class FakeRedis {
         pending = Buffer.concat([pending, chunk]);
         for (const command of FakeRedis.takeCommands(pending, rest => (pending = rest))) {
           if (command[0].toUpperCase() === 'PUBLISH') this.published.push(command[2]);
+          if (command[0].toUpperCase() === 'PING') this.pings++;
+          if (/^p?subscribe$/i.test(command[0])) {
+            const asked = this.subscriptions.get(socket) ?? [];
+            this.subscriptions.set(socket, [...asked, ...command.slice(1).map(channel => `${command[0]} ${channel}`)]);
+          }
           // A stalled peer answers nothing the publisher or its reconnect asks until it comes back. Subscriptions
           // are exempt: the adapter issues them without a handler, when a namespace is first used, and a SUBSCRIBE
           // that no reply ever settles is rejected as an unhandled rejection when the client is closed, which ends
@@ -119,11 +144,17 @@ class FakeRedis {
       }
       case 'PUBLISH':
         return ':1\r\n';
+      case 'PING':
+        return '+PONG\r\n';
+      // The client said HELLO 3, so each subscription is confirmed as a push of its own kind, as Redis 6 and
+      // later do. ioredis records what a push confirms and subscribes to exactly that again after a reconnect.
       case 'SUBSCRIBE':
-      case 'PSUBSCRIBE':
+      case 'PSUBSCRIBE': {
+        const kind = name.toLowerCase();
         return args
-          .map((channel, i) => `*3\r\n$9\r\nsubscribe\r\n$${channel.length}\r\n${channel}\r\n:${i + 1}\r\n`)
+          .map((channel, i) => `>3\r\n$${kind.length}\r\n${kind}\r\n$${channel.length}\r\n${channel}\r\n:${i + 1}\r\n`)
           .join('');
+      }
       default:
         return '+OK\r\n';
     }
@@ -376,4 +407,117 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
     expect(redis.connections).toBeGreaterThan(connections);
     expect(redis.published.filter(payload => payload === 'stalled-frame')).toHaveLength(1);
   }, 60_000);
+});
+
+/**
+ * The subscriber only receives, so a connection that stops answering while the far side keeps it open, as a proxy
+ * does, errors nothing: the client stays ready and the replica misses what the others publish. Real adapter and real
+ * ioredis against the same peer, on fake timers so the ping interval and the socket deadline cost no wall time;
+ * socket I/O stays real and is read between steps.
+ */
+describe('RedisIoAdapter subscriber against a connection that goes quiet while idle', () => {
+  const prevEnv = { ...process.env };
+  let redis: FakeRedis;
+  let adapter: RedisIoAdapter;
+  let io: Server;
+  let sub: { status: string; commandQueue: Queue };
+  let warn: jest.SpyInstance;
+
+  /** Let real socket I/O run until the condition holds, for up to `ms` of wall time. */
+  const settle = async (condition: () => boolean, ms = 3000): Promise<boolean> => {
+    const until = process.hrtime.bigint() + BigInt(ms) * 1_000_000n;
+    while (!condition() && process.hrtime.bigint() < until) await new Promise(resolve => setImmediate(resolve));
+    return condition();
+  };
+  const idle = (): boolean => sub.status === 'ready' && sub.commandQueue.length === 0;
+  const warned = (text: string): number =>
+    warn.mock.calls
+      .flat()
+      .map(line => String(line))
+      .filter(line => line.includes(text)).length;
+
+  beforeEach(async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'clearImmediate', 'queueMicrotask', 'hrtime'] });
+    redis = new FakeRedis();
+    const port = await redis.listen();
+    process.env.REDIS_ENABLED = 'true';
+    process.env.REDIS_HOST = '127.0.0.1';
+    process.env.REDIS_PORT = String(port);
+    io = new Server();
+    jest.spyOn(IoAdapter.prototype, 'createIOServer').mockReturnValue(io);
+    jest.spyOn(IoAdapter.prototype, 'close').mockResolvedValue(undefined);
+    warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    adapter = new RedisIoAdapter({} as never);
+    adapter.createIOServer(0);
+    io.of('/events');
+    sub = (adapter as unknown as { subClient: typeof sub }).subClient;
+    expect(await settle(() => idle() && redis.subscriptions.size === 1)).toBe(true);
+  });
+
+  afterEach(async () => {
+    const closed = adapter.close(io);
+    await jest.advanceTimersByTimeAsync(WS_REDIS_QUIT_TIMEOUT_MS);
+    await closed;
+    jest.useRealTimers();
+    await redis.close();
+    jest.restoreAllMocks();
+    process.env = { ...prevEnv };
+  });
+
+  it('replaces a subscriber connection that stops answering, and subscribes again on the new one', async () => {
+    const [first] = redis.subscriptions.keys();
+    const connections = redis.connections;
+    redis.pauseSubscribers();
+
+    // The next ping goes unanswered. Until the deadline the client still looks ready.
+    await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS);
+    expect(await settle(() => sub.commandQueue.length === 1)).toBe(true);
+    await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS - 1);
+    expect(await settle(() => sub.status !== 'ready', 500)).toBe(false);
+
+    // At the deadline the socket is destroyed, and after the first reconnect delay a new connection subscribes.
+    await jest.advanceTimersByTimeAsync(1);
+    expect(await settle(() => sub.status === 'reconnecting')).toBe(true);
+    expect(warned('Redis sub client error: Socket timeout')).toBe(1);
+    await jest.advanceTimersByTimeAsync(500);
+    expect(await settle(() => idle() && redis.subscriptions.size === 2)).toBe(true);
+    expect(redis.connections).toBe(connections + 1);
+    const [, second] = redis.subscriptions.keys();
+    expect([...redis.subscriptions.get(second)!].sort()).toEqual([...redis.subscriptions.get(first)!].sort());
+  }, 20_000);
+
+  it('keeps an idle subscriber connection that answers its pings', async () => {
+    const connections = redis.connections;
+
+    // Each step lets the answer be read before the clock moves on, as it is in real time. The six intervals span the
+    // socket deadline several times over, so a deadline the answers did not clear would have fired.
+    for (let ping = 1; ping <= 6; ping++) {
+      await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS);
+      expect(await settle(() => redis.pings === ping && idle())).toBe(true);
+    }
+    expect(WS_REDIS_SUBSCRIBER_PING_MS * 6).toBeGreaterThan(WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS * 2);
+
+    expect(redis.connections).toBe(connections);
+    expect(sub.status).toBe('ready');
+    expect(warned('Socket timeout')).toBe(0);
+  }, 20_000);
+
+  // A Redis that pauses (a snapshot fork, a slow disk) for longer than the publisher's deadline still delivers, once
+  // it resumes, what the others had written before giving up. The subscriber keeps its connection to receive it.
+  it('keeps a subscriber connection whose ping is answered after a pause longer than the publish deadline', async () => {
+    const connections = redis.connections;
+    redis.pauseSubscribers();
+
+    await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_PING_MS);
+    expect(await settle(() => sub.commandQueue.length === 1)).toBe(true);
+    await jest.advanceTimersByTimeAsync(WS_REDIS_SOCKET_TIMEOUT_MS + 3000);
+    redis.resumeSubscribers();
+    expect(await settle(() => idle() && redis.pings === 1)).toBe(true);
+    await jest.advanceTimersByTimeAsync(WS_REDIS_SUBSCRIBER_SOCKET_TIMEOUT_MS);
+
+    expect(await settle(() => sub.status !== 'ready', 500)).toBe(false);
+    expect(redis.connections).toBe(connections);
+    expect(warned('Socket timeout')).toBe(0);
+  }, 20_000);
 });

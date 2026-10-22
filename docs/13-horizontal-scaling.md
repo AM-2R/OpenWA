@@ -170,7 +170,13 @@
 > as raising it past its 6,000th frame takes under 2 s: a healthy Redis answers it right after, and the node
 > holds it until then. A synchronous burst that takes longer than that to raise past 6,000 frames is cut at
 > 12,000 even against a healthy Redis, and the warning names the unanswered count. A replica whose own Redis
-> connection is reconnecting also misses what the others publish meanwhile.
+> connection is reconnecting also misses what the others publish meanwhile. The connection a replica receives
+> on only listens, so it is pinged every 15 s and replaced when an answer takes over 30 s: one that stops
+> answering without being closed (a proxy in the path that keeps its side open, a NAT or a firewall that drops
+> the flow) costs that replica at most about 45 s of the others' events before it subscribes again. A Redis
+> that pauses for up to 30 s keeps that connection, so the replica still receives late what the others had
+> written before their own 10 s deadline; a longer silence while a ping waits replaces it, and what the others
+> had published into that silence is then lost for that replica.
 >
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The
 > node that processes a revoke, delete, or narrowing tears down that key's sockets synchronously, in
