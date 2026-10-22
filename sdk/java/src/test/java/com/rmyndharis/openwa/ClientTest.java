@@ -2,6 +2,7 @@ package com.rmyndharis.openwa;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import com.rmyndharis.openwa.errors.OpenWANotFoundError;
 import com.rmyndharis.openwa.errors.OpenWARateLimitError;
 import com.rmyndharis.openwa.http.BinaryResponse;
 import com.rmyndharis.openwa.http.HttpMethod;
+import com.rmyndharis.openwa.model.AuthValidateResponse;
 import com.rmyndharis.openwa.model.SuccessResult;
 import com.rmyndharis.openwa.support.MockTransport;
 import java.nio.charset.StandardCharsets;
@@ -126,10 +128,29 @@ class ClientTest {
 
     @Test
     void authPostsToValidatePath() {
-        tx.respond(200, "{\"valid\":true,\"role\":\"OPERATOR\",\"scoped\":true}");
+        tx.respond(200, "{\"valid\":true,\"role\":\"operator\",\"scoped\":true}");
         assertEquals(Boolean.TRUE, client.auth().scoped());
         assertEquals("http://h:2785/api/auth/validate", tx.lastRequest().url());
         assertEquals(HttpMethod.POST, tx.lastRequest().method());
+    }
+
+    @Test
+    void authDecodesEveryField() {
+        // A renamed component would read a valid key as invalid or drop its role without any other test noticing.
+        tx.respond(200, "{\"valid\":true,\"role\":\"operator\",\"engineType\":\"baileys\",\"scoped\":false}");
+        AuthValidateResponse ok = client.auth();
+        assertTrue(ok.valid());
+        assertEquals("operator", ok.role());
+        assertEquals("baileys", ok.engineType());
+        assertEquals(Boolean.FALSE, ok.scoped());
+
+        // A key the gateway refuses is answered with the one key.
+        tx.respond(200, "{\"valid\":false}");
+        AuthValidateResponse refused = client.auth();
+        assertFalse(refused.valid());
+        assertNull(refused.role());
+        assertNull(refused.engineType());
+        assertNull(refused.scoped());
     }
 
     @Test
