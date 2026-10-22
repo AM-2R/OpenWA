@@ -884,6 +884,50 @@ test('NumberChecker: a chosen session that leaves the ready list is replaced by 
   assert.match(checked[0], /\/sessions\/sess-a\/contacts\/check\//);
 });
 
+// The select is locked during a run, so what it shows has to stay the session the run uses, whatever the ready list does.
+test('NumberChecker: a locked select keeps naming the run session when the chosen session drops out and returns', async () => {
+  const checked: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/')) {
+      checked.push(url);
+      return url.endsWith('/919999999999')
+        ? Promise.resolve(registered('919999999999'))
+        : new Promise<Response>(() => {});
+    }
+    return Promise.resolve(jsonResponse(twoSessions('ready')));
+  }) as typeof fetch;
+  const client = createTestQueryClient();
+  renderComponent('operator', client);
+  await rtl.screen.findByRole('option', { name: /Beta/ });
+  const select = () => rtl.screen.getByRole('combobox', { name: 'WhatsApp Session' }) as HTMLSelectElement;
+  const options = () => [...select().options].map(option => option.value);
+
+  // Beta is chosen, drops out (the select falls back to Alpha), and the run starts on Alpha.
+  rtl.fireEvent.change(select(), { target: { value: 'sess-b' } });
+  await rtl.act(async () => client.setQueryData(['sessions'], twoSessions('disconnected')));
+  await rtl.waitFor(() => assert.deepEqual(options(), ['sess-a']));
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: THREE_NUMBERS } });
+  startBatch();
+  await rtl.waitFor(() => assert.equal(checked.length, 1));
+  assert.match(checked[0], /\/sessions\/sess-a\//);
+
+  // Beta returns while the run is going: the select still names the session the lookups go to.
+  await rtl.act(async () => client.setQueryData(['sessions'], twoSessions('ready')));
+  await rtl.waitFor(() => assert.deepEqual(options(), ['sess-a', 'sess-b']));
+  assert.equal(select().value, 'sess-a');
+  assert.equal(select().disabled, true);
+
+  // A single check made meanwhile goes to the session the select shows too.
+  rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Single Check/i }));
+  assert.equal(select().value, 'sess-a');
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '919999999999' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.waitFor(() => assert.equal(checked.length, 2));
+  assert.match(checked[1], /\/sessions\/sess-a\/contacts\/check\/919999999999/);
+});
+
 test('NumberChecker: the session cannot be switched from the Single tab while a bulk run is going', async () => {
   globalThis.fetch = ((input: RequestInfo | URL) => {
     if (String(input).includes('/contacts/check/')) return new Promise<Response>(() => {});

@@ -102,6 +102,10 @@ export function NumberChecker() {
   const [batchInput, setBatchInput] = useState('');
   const [batchDelay, setBatchDelay] = useState<number>(1000);
   const [isCheckingBatch, setIsCheckingBatch] = useState(false);
+  // The session a running bulk run is bound to. Both selects are locked meanwhile, so they keep showing it even if
+  // the chosen session leaves the ready list and returns during the run, and a single check goes to it too.
+  const [runSession, setRunSession] = useState('');
+  const shownSession = isCheckingBatch ? runSession : currentSession;
   const [batchResults, setBatchResults] = useState<CheckResultItem[]>([]);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
@@ -204,18 +208,18 @@ export function NumberChecker() {
       toast.error(t('numberChecker.toast.enterNumber'));
       return;
     }
-    if (!currentSession) {
+    if (!shownSession) {
       toast.error(t('numberChecker.toast.noSession'));
       return;
     }
 
     setIsCheckingSingle(true);
     try {
-      const res = await contactApi.checkNumber(currentSession, formatted);
+      const res = await contactApi.checkNumber(shownSession, formatted);
       let avatar: string | null = null;
       if (res.exists && res.whatsappId) {
         try {
-          const pic = await contactApi.profilePicture(currentSession, res.whatsappId);
+          const pic = await contactApi.profilePicture(shownSession, res.whatsappId);
           avatar = pic.url;
         } catch {
           // Profile picture is optional
@@ -266,6 +270,7 @@ export function NumberChecker() {
     }
 
     const runId = ++batchRunIdRef.current;
+    setRunSession(currentSession);
     setIsCheckingBatch(true);
     setBatchResults([]);
     setBatchFilter('all');
@@ -327,6 +332,7 @@ export function NumberChecker() {
 
     if (batchRunIdRef.current !== runId) return;
     setIsCheckingBatch(false);
+    setRunSession('');
     if (refusedWith !== undefined) {
       const stop = { status: refusedWith, attempted: results.length, total: numbers.length };
       setBatchStop(stop);
@@ -343,6 +349,7 @@ export function NumberChecker() {
   const handleStopBatch = () => {
     batchRunIdRef.current++;
     setIsCheckingBatch(false);
+    setRunSession('');
   };
 
   // Filter batch results
@@ -446,7 +453,7 @@ export function NumberChecker() {
                   id="nc-single-session"
                   aria-label={t('numberChecker.session.label')}
                   className="nc-input"
-                  value={currentSession}
+                  value={shownSession}
                   onChange={e => setSelectedSession(e.target.value)}
                   disabled={readySessions.length === 0 || isCheckingBatch}
                 >
@@ -718,7 +725,7 @@ export function NumberChecker() {
                   id="nc-batch-session"
                   aria-label={t('numberChecker.session.label')}
                   className="nc-input"
-                  value={currentSession}
+                  value={shownSession}
                   onChange={e => setSelectedSession(e.target.value)}
                   disabled={readySessions.length === 0 || isCheckingBatch}
                 >
