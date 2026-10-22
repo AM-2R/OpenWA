@@ -1353,6 +1353,17 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
     });
 
+    // A stored built-in flag keeps it under any host: the save leaves what the next boot dials with as it was.
+    it('keeps it beside a stored built-in flag when the environment pins another host', () => {
+      process.env.DATABASE_HOST = 'db.example.com';
+      recordPinnedEnvKeys({ DATABASE_HOST: 'db.example.com' });
+      const env = written(
+        { database: { type: 'postgres', builtIn: true } },
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=CustomPw123!\n',
+      );
+      expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
+    });
+
     // The pinned password keeps that boot past the default-secret guard; the file's is what the rule decides.
     it('still resets it when the environment pins another host over the bundled host in the file', () => {
       process.env.DATABASE_HOST = 'db.example.com';
@@ -1403,6 +1414,17 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
         'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_BUCKET=media\n' + KEYS,
       );
       expect(env).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+    });
+
+    it('keeps them beside a stored built-in flag when the environment pins another endpoint', () => {
+      process.env.S3_ENDPOINT = 'https://s3.example.com';
+      recordPinnedEnvKeys({ S3_ENDPOINT: 'https://s3.example.com' });
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=http://minio:9000\nS3_BUCKET=openwa\n' + KEYS,
+      );
+      expect(env).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+      expect(env).toContain('S3_SECRET_ACCESS_KEY=StoredSecret1234567890');
     });
 
     it('keeps the legacy names the bundled container was created with', () => {
