@@ -47,3 +47,12 @@ test('ASCII text is returned without any per-character mapping', t => {
   assert.equal(normalizePhoneText(char(0x0662)), '2');
   assert.ok(calls > 0);
 });
+
+// The five Mathematical Alphanumeric digit sets (bold, double-struck, sans-serif, sans-serif bold, monospace), common
+// in copied profile text, sit back to back as one run of fifty digits, so a digit's value is its place in its own ten.
+test('the Mathematical digit sets read as ASCII digits', () => {
+  for (const zero of [0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6]) {
+    const digits = [...'0123456789'].map(d => String.fromCodePoint(zero + Number(d))).join('');
+    assert.equal(normalizePhoneText(digits), '0123456789');
+  }
+});
