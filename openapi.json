@@ -22233,6 +22233,11 @@
             "type": "boolean",
             "example": true
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the built-in flag is stored, in the saved file or pinned by the environment. When false, builtIn is false only because nothing says otherwise (a Compose deployment that pins the bundled host never writes it): read what runs from /infra/status.",
+            "example": true
+          },
           "host": {
             "type": "string",
             "example": "openwa-postgres"
@@ -22276,6 +22281,7 @@
         "required": [
           "type",
           "builtIn",
+          "builtInSet",
           "host",
           "port",
           "username",
@@ -22298,6 +22304,11 @@
             "type": "boolean",
             "example": true
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the built-in flag is stored, in the saved file or pinned by the environment. When false, builtIn is false only because nothing says otherwise (a Compose deployment that pins the bundled host never writes it): read what runs from /infra/status.",
+            "example": true
+          },
           "host": {
             "type": "string",
             "example": "openwa-redis"
@@ -22316,6 +22327,7 @@
         "required": [
           "enabled",
           "builtIn",
+          "builtInSet",
           "host",
           "port",
           "passwordSet"
@@ -22348,6 +22360,11 @@
             "type": "boolean",
             "example": false
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the built-in flag is stored, in the saved file or pinned by the environment. When false, builtIn is false only because nothing says otherwise (a Compose deployment that pins the bundled host never writes it): read what runs from /infra/status.",
+            "example": true
+          },
           "localPath": {
             "type": "string",
             "example": "./data/media"
@@ -22373,6 +22390,7 @@
         "required": [
           "type",
           "builtIn",
+          "builtInSet",
           "localPath",
           "s3Bucket",
           "s3Region",

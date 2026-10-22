@@ -5619,6 +5619,7 @@ Read the effective infrastructure config used to hydrate the dashboard form. Eac
   "database": {
     "type": "sqlite",
     "builtIn": false,
+    "builtInSet": false,
     "host": "",
     "port": "",
     "username": "",
@@ -5629,11 +5630,12 @@ Read the effective infrastructure config used to hydrate the dashboard form. Eac
     "sslRejectUnauthorized": true,
     "passwordSet": false
   },
-  "redis": { "enabled": false, "builtIn": false, "host": "", "port": "", "passwordSet": false },
+  "redis": { "enabled": false, "builtIn": false, "builtInSet": false, "host": "", "port": "", "passwordSet": false },
   "queue": { "enabled": false },
   "storage": {
     "type": "local",
     "builtIn": false,
+    "builtInSet": false,
     "localPath": "./data/media",
     "s3Bucket": "",
     "s3Region": "",
@@ -5648,6 +5650,8 @@ Read the effective infrastructure config used to hydrate the dashboard form. Eac
   }
 }
 ```
+
+`builtInSet` says whether each `builtIn` flag is stored (in the saved file or pinned by the environment). A Compose deployment that pins `DATABASE_HOST=postgres`, `REDIS_HOST=redis` or `S3_ENDPOINT` in `.env` never writes the flag, so there `builtIn` is `false` only because nothing says otherwise: read what runs from `GET /api/infra/status`.
 
 When nothing supplies a key — no pinned environment value and the file absent or silent about it — empty-string/default values are returned (`schema='public'`, `poolSize=10`, `sslRejectUnauthorized=true`, `engine.type='whatsapp-web.js'`, `headless=true`).
 

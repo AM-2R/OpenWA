@@ -235,12 +235,20 @@ export class InfraUpdateCheckResponseDto {
 
 // ---------- GET /infra/config ----------
 
+const BUILT_IN_SET_DESCRIPTION =
+  'Whether the built-in flag is stored, in the saved file or pinned by the environment. When false, builtIn is ' +
+  'false only because nothing says otherwise (a Compose deployment that pins the bundled host never writes it): ' +
+  'read what runs from /infra/status.';
+
 export class InfraConfigDatabaseDto {
   @ApiProperty({ enum: ['sqlite', 'postgres'], example: 'postgres' })
   type!: string;
 
   @ApiProperty({ example: true })
   builtIn!: boolean;
+
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
 
   @ApiProperty({ example: 'openwa-postgres' })
   host!: string;
@@ -277,6 +285,9 @@ export class InfraConfigRedisDto {
   @ApiProperty({ example: true })
   builtIn!: boolean;
 
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
+
   @ApiProperty({ example: 'openwa-redis' })
   host!: string;
 
@@ -298,6 +309,9 @@ export class InfraConfigStorageDto {
 
   @ApiProperty({ example: false })
   builtIn!: boolean;
+
+  @ApiProperty({ description: BUILT_IN_SET_DESCRIPTION, example: true })
+  builtInSet!: boolean;
 
   @ApiProperty({ example: './data/media' })
   localPath!: string;

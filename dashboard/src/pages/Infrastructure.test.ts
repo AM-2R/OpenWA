@@ -34,6 +34,7 @@ const SAVED_CONFIG: SavedConfig = {
   database: {
     type: 'postgres',
     builtIn: false,
+    builtInSet: true,
     host: 'shared-db-host',
     port: '6543',
     username: 'openwa_admin',
@@ -44,11 +45,12 @@ const SAVED_CONFIG: SavedConfig = {
     sslRejectUnauthorized: true,
     passwordSet: true,
   },
-  redis: { enabled: false, builtIn: false, host: 'localhost', port: '6379', passwordSet: false },
+  redis: { enabled: false, builtIn: false, builtInSet: true, host: 'localhost', port: '6379', passwordSet: false },
   queue: { enabled: false },
   storage: {
     type: 'local',
     builtIn: false,
+    builtInSet: true,
     localPath: './data/media',
     s3Bucket: '',
     s3Region: 'ap-southeast-1',
@@ -620,7 +622,7 @@ const RUNNING_SQLITE: InfraStatus = {
 };
 const SAVED_SWITCH: SavedConfig = {
   ...SAVED_CONFIG,
-  redis: { enabled: true, builtIn: false, host: 'redis.internal', port: '6380', passwordSet: true },
+  redis: { enabled: true, builtIn: false, builtInSet: true, host: 'redis.internal', port: '6380', passwordSet: true },
   queue: { enabled: true },
   storage: { ...SAVED_CONFIG.storage, type: 's3', s3Bucket: 'media', s3CredentialsSet: true },
 };
@@ -734,7 +736,7 @@ const RUNNING_BUNDLED: InfraStatus = {
 };
 const SAVED_EXTERNAL: SavedConfig = {
   ...SAVED_CONFIG,
-  redis: { enabled: true, builtIn: false, host: 'redis.internal', port: '6379', passwordSet: false },
+  redis: { enabled: true, builtIn: false, builtInSet: true, host: 'redis.internal', port: '6379', passwordSet: false },
   storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: false },
 };
 
@@ -815,7 +817,7 @@ test('a switch to a bundled container waiting for a restart says what runs now, 
     },
     saved: {
       ...SAVED_BUNDLED,
-      redis: { enabled: true, builtIn: true, host: 'redis', port: '6379', passwordSet: false },
+      redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
     },
   };
   const { container } = renderInfrastructure();
@@ -1065,7 +1067,14 @@ test('the database, Redis and S3 secret fields are not offered saved passwords',
     },
     saved: {
       ...SAVED_CONFIG,
-      redis: { enabled: true, builtIn: false, host: 'redis.example', port: '6379', passwordSet: true },
+      redis: {
+        enabled: true,
+        builtIn: false,
+        builtInSet: true,
+        host: 'redis.example',
+        port: '6379',
+        passwordSet: true,
+      },
       storage: { ...SAVED_CONFIG.storage, type: 's3' },
     },
   };
@@ -1089,7 +1098,7 @@ test('turning a running built-in Redis off asks the restart to stop its containe
     status: { ...INFRA_STATUS, redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true } },
     saved: {
       ...SAVED_CONFIG,
-      redis: { enabled: true, builtIn: true, host: 'redis', port: '6379', passwordSet: false },
+      redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
     },
   };
   const { container } = renderInfrastructure();

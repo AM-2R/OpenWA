@@ -655,6 +655,9 @@ export interface SavedConfig {
   database: {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
+    // Whether the flag is stored (saved file or environment). A deployment that pins the bundled host never
+    // writes it, and `builtIn` is then false only because nothing says otherwise: /infra/status has what runs.
+    builtInSet: boolean;
     host: string;
     port: string;
     username: string;
@@ -665,11 +668,12 @@ export interface SavedConfig {
     sslRejectUnauthorized: boolean;
     passwordSet: boolean;
   };
-  redis: { enabled: boolean; builtIn: boolean; host: string; port: string; passwordSet: boolean };
+  redis: { enabled: boolean; builtIn: boolean; builtInSet: boolean; host: string; port: string; passwordSet: boolean };
   queue: { enabled: boolean };
   storage: {
     type: 'local' | 's3';
     builtIn: boolean;
+    builtInSet: boolean;
     localPath: string;
     s3Bucket: string;
     s3Region: string;

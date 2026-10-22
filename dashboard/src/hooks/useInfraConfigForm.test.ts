@@ -46,6 +46,7 @@ const SAVED: SavedConfig = {
   database: {
     type: 'postgres',
     builtIn: false,
+    builtInSet: true,
     host: 'pg.internal',
     port: '5433',
     username: 'openwa',
@@ -56,11 +57,12 @@ const SAVED: SavedConfig = {
     sslRejectUnauthorized: false,
     passwordSet: true,
   },
-  redis: { enabled: true, builtIn: false, host: 'redis.internal', port: '6380', passwordSet: true },
+  redis: { enabled: true, builtIn: false, builtInSet: true, host: 'redis.internal', port: '6380', passwordSet: true },
   queue: { enabled: true },
   storage: {
     type: 's3',
     builtIn: false,
+    builtInSet: true,
     localPath: '',
     s3Bucket: 'media',
     s3Region: 'eu-west-1',

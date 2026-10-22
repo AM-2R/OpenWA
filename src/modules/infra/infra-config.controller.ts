@@ -70,6 +70,7 @@ interface SavedConfigResponse {
   database: {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
+    builtInSet: boolean;
     host: string;
     port: string;
     username: string;
@@ -80,11 +81,12 @@ interface SavedConfigResponse {
     sslRejectUnauthorized: boolean;
     passwordSet: boolean;
   };
-  redis: { enabled: boolean; builtIn: boolean; host: string; port: string; passwordSet: boolean };
+  redis: { enabled: boolean; builtIn: boolean; builtInSet: boolean; host: string; port: string; passwordSet: boolean };
   queue: { enabled: boolean };
   storage: {
     type: 'local' | 's3';
     builtIn: boolean;
+    builtInSet: boolean;
     localPath: string;
     s3Bucket: string;
     s3Region: string;
@@ -142,6 +144,7 @@ export class InfraConfigController {
       database: {
         type: effective('DATABASE_TYPE') === 'postgres' ? 'postgres' : 'sqlite',
         builtIn: effective('POSTGRES_BUILTIN') === 'true',
+        builtInSet: Boolean(effective('POSTGRES_BUILTIN')),
         host: effective('DATABASE_HOST') || '',
         port: effective('DATABASE_PORT') || '',
         username: effective('DATABASE_USERNAME') || '',
@@ -155,6 +158,7 @@ export class InfraConfigController {
       redis: {
         enabled: effective('REDIS_ENABLED') === 'true',
         builtIn: effective('REDIS_BUILTIN') === 'true',
+        builtInSet: Boolean(effective('REDIS_BUILTIN')),
         host: effective('REDIS_HOST') || '',
         port: effective('REDIS_PORT') || '',
         passwordSet: Boolean(effective('REDIS_PASSWORD')),
@@ -163,6 +167,7 @@ export class InfraConfigController {
       storage: {
         type: effective('STORAGE_TYPE') === 's3' ? 's3' : 'local',
         builtIn: effective('MINIO_BUILTIN') === 'true',
+        builtInSet: Boolean(effective('MINIO_BUILTIN')),
         localPath: effective('STORAGE_LOCAL_PATH') || '',
         s3Bucket: effective('S3_BUCKET') || '',
         s3Region: effective('S3_REGION') || '',

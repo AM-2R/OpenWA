@@ -1401,6 +1401,57 @@ describe('InfraConfigController.getConfig reflects environment-pinned values (#1
   });
 });
 
+// A Compose deployment that pins DATABASE_HOST=postgres, REDIS_HOST=redis or S3_ENDPOINT in .env never writes the
+// *_BUILTIN keys, so a false flag there only means nothing says otherwise: the form must tell it from a flag
+// that was saved as false.
+describe('InfraConfigController.getConfig reports whether each built-in flag is stored', () => {
+  const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
+  const withFile = (contents: string) => {
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(contents);
+  };
+  const flags = (cfg: ReturnType<InfraConfigController['getConfig']>) => ({
+    database: [cfg.database.builtIn, cfg.database.builtInSet],
+    redis: [cfg.redis.builtIn, cfg.redis.builtInSet],
+    storage: [cfg.storage.builtIn, cfg.storage.builtInSet],
+  });
+
+  afterEach(() => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+    delete process.env.POSTGRES_BUILTIN;
+    recordPinnedEnvKeys({});
+  });
+
+  it('a file that holds no flag reports every flag as not stored', () => {
+    withFile('DATABASE_TYPE=postgres\nDATABASE_HOST=postgres\nREDIS_HOST=redis\nS3_ENDPOINT=http://minio:9000\n');
+
+    expect(flags(newController().getConfig())).toEqual({
+      database: [false, false],
+      redis: [false, false],
+      storage: [false, false],
+    });
+  });
+
+  it('a flag saved as false is stored, as is one saved as true', () => {
+    withFile('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\n');
+
+    expect(flags(newController().getConfig())).toEqual({
+      database: [false, true],
+      redis: [true, true],
+      storage: [false, false],
+    });
+  });
+
+  it('a flag only the environment pins is stored', () => {
+    recordPinnedEnvKeys({ POSTGRES_BUILTIN: 'true' });
+    process.env.POSTGRES_BUILTIN = 'true';
+    withFile('');
+
+    expect(flags(newController().getConfig()).database).toEqual([true, true]);
+  });
+});
+
 describe('InfraConfigController.requestRestart constrains teardown to managed profiles', () => {
   const buildController = (dockerService: Record<string, unknown>) =>
     new InfraConfigController(
