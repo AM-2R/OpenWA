@@ -919,6 +919,45 @@ describe('redactSecrets', () => {
       expect(redactSecrets(deep(zeros(1000)))).toEqual(deep('[Truncated]'));
     });
 
+    // The caps are applied to the length an array or a typed array has, not to the length an object claims.
+    it('reads the length of an array once, for the cap and for the copy', () => {
+      let reads = 0;
+      const answering = new Proxy([], {
+        get: (target, key, receiver): unknown =>
+          key === 'length' ? (++reads === 1 ? 0 : 3) : Reflect.get(target, key, receiver),
+      });
+
+      expect(redactSecrets({ list: answering })).toEqual({ list: [] });
+      expect(reads).toBe(1);
+    });
+
+    describe('a typed array that claims another length than it has', () => {
+      class Claiming extends Uint8Array {
+        get length(): number {
+          return 0;
+        }
+      }
+      const redefined = (): Uint8Array => Object.defineProperty(new Uint8Array(1_000_001), 'length', { value: 0 });
+
+      it.each([
+        ['an own length property', redefined],
+        ['a length getter', (): Uint8Array => new Claiming(1_000_001)],
+      ])('is written as [Truncated] by the elements it has, with %s', (_name, make) => {
+        expect(redactSecrets({ file: make() })).toEqual({ file: '[Truncated]' });
+        expect(redactSecrets(make())).toBe('[Truncated]');
+      });
+
+      it('counts the elements of a typed array, not its bytes', () => {
+        const copy = redactSecrets({ list: new Float64Array(150_000) }) as { list: object };
+
+        expect(Object.keys(copy.list)).toHaveLength(150_000);
+      });
+
+      it('copies a DataView, which has no elements, as an empty object', () => {
+        expect(redactSecrets({ view: new DataView(new ArrayBuffer(8)) })).toEqual({ view: {} });
+      });
+    });
+
     // A typed array lists one entry per element, as an array does, and an object one per key.
     describe('a typed array or a wide object', () => {
       const deep = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });

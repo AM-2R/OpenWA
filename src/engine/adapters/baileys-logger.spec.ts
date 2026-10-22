@@ -195,6 +195,12 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: '[Truncated]' } } } } }, msg: 'x' });
   });
 
+  it('counts a typed array by the elements it has, not by the length it claims', () => {
+    const file = Object.defineProperty(new Uint8Array(1_000_001), 'length', { value: 0 });
+
+    expect(write({ file, jid: 'j' }, 'x')).toMatchObject({ file: '[Truncated]', jid: 'j', msg: 'x' });
+  });
+
   it('writes a record that is an array longer than the limit as one [Truncated] field', () => {
     const line = write(new Array<number>(1_000_001).fill(0), 'x');
 

@@ -51,6 +51,17 @@ export interface RedactOptions {
 
 const isSecretName = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
 
+const TYPED_ARRAY_PROTOTYPE: object = Object.getPrototypeOf(Int8Array.prototype) as object;
+
+/** The elements a typed array holds, read from the array itself, not from a `length` it claims. A DataView has none. */
+function elementCount(view: ArrayBufferView): number {
+  try {
+    return Reflect.get(TYPED_ARRAY_PROTOTYPE, 'length', view) as number;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
@@ -70,11 +81,13 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
     const room = deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH;
     if (Array.isArray(node)) {
-      if (node.length > room) return '[Truncated]';
+      // Read once: the same number gates the copy and sizes it, whatever the object answers the next time.
+      const length = node.length;
+      if (length > room) return '[Truncated]';
       // A plain Array read by index: map would build the copy through the constructor of an Array subclass.
-      return Array.from({ length: node.length }, (_, index) => copy(node[index]));
+      return Array.from({ length }, (_, index) => copy(node[index]));
     }
-    if (ArrayBuffer.isView(node) && ((node as { length?: number }).length ?? 0) > room) return '[Truncated]';
+    if (ArrayBuffer.isView(node) && elementCount(node) > room) return '[Truncated]';
     const props = node as Record<string, unknown>;
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
