@@ -299,17 +299,18 @@ describe('import-data and the writes of the sessions it removes', () => {
       'another transaction opened while the writes drained',
       () => {
         onRunner(runner => {
-          let read = false;
+          let opened = false;
           const query = runner.query.bind(runner);
-          runner.query = ((...args: Parameters<typeof query>) => {
-            if (/^SELECT id FROM sessions/.test(args[0])) read = true;
-            return query(...args);
+          runner.query = (async (...args: Parameters<typeof query>) => {
+            const rows: unknown = await query(...args);
+            if (!opened && /^SELECT id FROM sessions/.test(args[0])) {
+              opened = true;
+              // Someone else's transaction on the one connection, rolled back once the import has refused.
+              await runner.startTransaction();
+              setTimeout(() => void runner.rollbackTransaction(), 20);
+            }
+            return rows;
           }) as typeof runner.query;
-          Object.defineProperty(runner, 'isTransactionActive', {
-            get: () => read,
-            set: () => undefined,
-            configurable: true,
-          });
         });
         return importNow({ stopOrphans: true });
       },
@@ -331,6 +332,45 @@ describe('import-data and the writes of the sessions it removes', () => {
       expect(current('s1')).toBe(true);
     });
   });
+
+  // On SQLite a transaction someone else opens while the import drains is open on the import's connection
+  // too. Failing the batch inside it would tie the fail to that transaction's outcome.
+  it.each([['rolls back'], ['commits']])(
+    'fails the batch of an import refused for a transaction opened while it drained, which then %s',
+    async outcome => {
+      const entered = deferred();
+      const finish = deferred();
+      const messages = ds.getRepository(Message);
+      const save = messages.save.bind(messages);
+      jest.spyOn(messages, 'save').mockImplementationOnce(async message => {
+        entered.resolve();
+        await finish.promise;
+        return save(message);
+      });
+      const sending = sender.sendText('s1', { chatId: 'first@c.us', text: 'hello' }).catch((error: unknown) => error);
+      await entered.promise;
+      const batch = await parkBatch();
+      const importing = importNow({ stopOrphans: true }).catch((error: unknown) => error);
+      await new Promise<void>(setImmediate);
+      const outer = ds.createQueryRunner();
+      await outer.connect();
+      await outer.startTransaction();
+      finish.resolve();
+      // The drained write has landed and the import has refused by the time a timer runs.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      await (outcome === 'commits' ? outer.commitTransaction() : outer.rollbackTransaction());
+
+      expect(await importing).toMatchObject({ response: { code: 'IMPORT_NESTED_TRANSACTION' } });
+      await batch.finish();
+      await sending;
+      const row = await batchRow(batch.id);
+      expect(row.status).toBe(BatchStatus.FAILED);
+      expect(JSON.stringify(row.messages)).not.toContain('MEDIA-PAYLOAD');
+      expect(engine.sendTextMessage).not.toHaveBeenCalled();
+      expect(await ds.getRepository(Session).count()).toBe(2);
+      expect(current('s1')).toBe(true);
+    },
+  );
 
   describe.each<[string, () => Promise<unknown>]>([
     ['would orphan a running engine', () => importNow({})],
