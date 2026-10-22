@@ -85,7 +85,10 @@ export function mapBaileysMessageType(
     case 'pollCreationMessage':
     case 'pollCreationMessageV2':
     case 'pollCreationMessageV3':
+    case 'pollCreationMessageV4':
+    case 'pollCreationMessageV5':
       // Native polls; WhatsApp bumps the content key across versions, all map to the same neutral type.
+      // V4 and V5 are read from the pinned library's proto schema (see pollCreationOf).
       return 'poll';
     case 'interactiveMessage':
     case 'buttonsMessage':
@@ -145,6 +148,9 @@ export interface BaileysBodyContent {
   pollCreationMessage?: { name?: string | null } | null;
   pollCreationMessageV2?: { name?: string | null } | null;
   pollCreationMessageV3?: { name?: string | null } | null;
+  pollCreationMessageV5?: { name?: string | null } | null;
+  /** A wrapper whose inner message carries the poll under one of the keys above. */
+  pollCreationMessageV4?: { message?: PollCreationKeys<{ name?: string | null }> | null } | null;
   /** A shared WhatsApp event; only its display name is surfaced as text. */
   eventMessage?: { name?: string | null } | null;
   /** The user tapping a business message button: which visible label they pressed. */
@@ -169,6 +175,28 @@ export interface BaileysBodyContent {
 /** A poll's question as it reaches the body, bounded like the poll's own copy of it. */
 const pollQuestion = (name: string | null | undefined): string | undefined =>
   name == null ? undefined : boundPollText(name);
+
+/** The content keys that carry a PollCreationMessage directly. */
+interface PollCreationKeys<P> {
+  pollCreationMessage?: P | null;
+  pollCreationMessageV2?: P | null;
+  pollCreationMessageV3?: P | null;
+  pollCreationMessageV5?: P | null;
+}
+
+/**
+ * The poll a message carries under one of {@link PollCreationKeys}. `pollCreationMessageV4` is a
+ * FutureProofMessage that the library's normalizeMessageContent does not open, so callers read its
+ * inner message with this once, one level down. V4 and V5 (a PollCreationMessage with quiz fields)
+ * are handled from the proto schema of the pinned library; no inbound message under either key has
+ * been captured from a live account.
+ */
+const pollCreationOf = <P>(content: PollCreationKeys<P> | null | undefined): P | undefined =>
+  content?.pollCreationMessage ??
+  content?.pollCreationMessageV2 ??
+  content?.pollCreationMessageV3 ??
+  content?.pollCreationMessageV5 ??
+  undefined;
 
 /**
  * Extract the display text of an inbound Baileys message: plain text first, then a media caption,
@@ -199,6 +227,8 @@ export function extractBaileysBody(content: BaileysBodyContent): string {
     pollQuestion(content.pollCreationMessage?.name) ??
     pollQuestion(content.pollCreationMessageV2?.name) ??
     pollQuestion(content.pollCreationMessageV3?.name) ??
+    pollQuestion(content.pollCreationMessageV5?.name) ??
+    pollQuestion(pollCreationOf(content.pollCreationMessageV4?.message)?.name) ??
     content.eventMessage?.name ??
     content.buttonsResponseMessage?.selectedDisplayText ??
     content.templateButtonReplyMessage?.selectedDisplayText ??
@@ -851,6 +881,8 @@ export interface BaileysContextContent {
   templateButtonReplyMessage?: BaileysContextCarrier | null;
   listResponseMessage?: BaileysContextCarrier | null;
   interactiveResponseMessage?: BaileysContextCarrier | null;
+  /** A poll wrapper; the poll inside it carries the `contextInfo`. */
+  pollCreationMessageV4?: { message?: object | null } | null;
 }
 
 /** Everything the context region of an inbound message yields — not just the quote. */
@@ -894,9 +926,11 @@ export function extractBaileysContext(content: BaileysContextContent): BaileysMe
   const contextInfo = subForContext?.contextInfo;
   // WhatsApp stamps the timer on every message in a disappearing chat, a product, poll, contact card, live
   // location, order or event included, so any content node answers when the carriers above have none.
+  // A V4 poll's node is one level down, inside its wrapper.
   const expiration =
     contextInfo?.expiration ??
     Object.values(content)
+      .concat(Object.values(content.pollCreationMessageV4?.message ?? {}))
       .map(node => (node as BaileysContextCarrier | null | undefined)?.contextInfo?.expiration)
       .find((e): e is number => typeof e === 'number' && e > 0);
 
@@ -944,7 +978,7 @@ export function mapBaileysStatus(status: number | null | undefined): DeliverySta
 
 /** Extract native poll versions from content already normalized by Baileys. */
 export function extractBaileysPoll(content: proto.IMessage): IncomingMessage['poll'] {
-  const poll = content.pollCreationMessage ?? content.pollCreationMessageV2 ?? content.pollCreationMessageV3;
+  const poll = pollCreationOf(content) ?? pollCreationOf(content.pollCreationMessageV4?.message);
   if (!poll) return undefined;
   const options = (poll.options ?? [])
     .map(option => option.optionName)

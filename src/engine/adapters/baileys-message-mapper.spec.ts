@@ -55,6 +55,10 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     ['pollCreationMessage', false, 'poll'],
     ['pollCreationMessageV2', false, 'poll'],
     ['pollCreationMessageV3', false, 'poll'],
+    ['pollCreationMessageV4', false, 'poll'],
+    ['pollCreationMessageV5', false, 'poll'],
+    // A vote changes a poll and carries nothing of its own; it is never a poll itself.
+    ['pollUpdateMessage', false, 'unknown'],
     // Regression trap: calls arrive via the `call` socket event, never as a message content type,
     // so any call-ish token must stay 'unknown' (no accidental mapping).
     ['callLogMessage', false, 'unknown'],
@@ -171,6 +175,23 @@ describe('extractBaileysBody (inbound text/caption + interactive shapes)', () =>
     expect(extractBaileysBody({ pollCreationMessage: { name: 'Lunch order?' } })).toBe('Lunch order?');
     expect(extractBaileysBody({ pollCreationMessageV2: { name: 'Team offsite?' } })).toBe('Team offsite?');
     expect(extractBaileysBody({ pollCreationMessageV3: { name: 'Standup time?' } })).toBe('Standup time?');
+    expect(extractBaileysBody({ pollCreationMessageV5: { name: 'Quiz?' } })).toBe('Quiz?');
+    expect(
+      extractBaileysBody({ pollCreationMessageV4: { message: { pollCreationMessage: { name: 'Wrapped?' } } } }),
+    ).toBe('Wrapped?');
+  });
+
+  it('reads a V4 poll one level down only, and nothing but a poll from inside it', () => {
+    expect(
+      extractBaileysBody({
+        pollCreationMessageV4: {
+          message: { pollCreationMessageV4: { message: { pollCreationMessage: { name: 'Deep' } } } },
+        },
+      } as BaileysBodyContent),
+    ).toBe('');
+    expect(
+      extractBaileysBody({ pollCreationMessageV4: { message: { conversation: 'not a poll' } } } as BaileysBodyContent),
+    ).toBe('');
   });
 
   it('returns empty for a poll with no name rather than falling through to other sources', () => {
@@ -270,6 +291,13 @@ describe('extractBaileysContext (quoted body shares the live body extractor)', (
   ])('reads the disappearing-messages timer off a %s', type => {
     const content = { [type]: { contextInfo: { expiration: 86400 } } } as BaileysContextContent;
     expect(extractBaileysContext(content).ephemeralDuration).toBe(86400);
+  });
+
+  it('reads the disappearing-messages timer off the poll inside a pollCreationMessageV4', () => {
+    const content = {
+      pollCreationMessageV4: { message: { pollCreationMessage: { contextInfo: { expiration: 604800 } } } },
+    } as BaileysContextContent;
+    expect(extractBaileysContext(content).ephemeralDuration).toBe(604800);
   });
 
   it('reads no timer when no content node carries one', () => {
@@ -1170,20 +1198,56 @@ describe('isBaileysCatalogShare (the productMessage arm with no product)', () =>
 });
 
 describe('native poll choice metadata', () => {
-  it.each(['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3'] as const)(
-    'reads %s without changing option texts',
-    key => {
-      expect(
-        extractBaileysPoll({
-          [key]: {
-            name: 'Where?',
-            options: [{ optionName: ' Park ' }, { optionName: 'Beach' }],
-            selectableOptionsCount: 1,
-          },
+  type PollNode = { name?: string; options?: Array<{ optionName?: string }>; selectableOptionsCount?: number };
+  // Every content key a poll travels under. pollCreationMessageV4 wraps a whole message, with the poll inside it.
+  const shapes: Array<[string, (poll: PollNode) => Record<string, unknown>]> = [
+    ['pollCreationMessage', poll => ({ pollCreationMessage: poll })],
+    ['pollCreationMessageV2', poll => ({ pollCreationMessageV2: poll })],
+    ['pollCreationMessageV3', poll => ({ pollCreationMessageV3: poll })],
+    ['pollCreationMessageV5', poll => ({ pollCreationMessageV5: poll })],
+    ...(
+      ['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3', 'pollCreationMessageV5'] as const
+    ).map((inner): [string, (poll: PollNode) => Record<string, unknown>] => [
+      `pollCreationMessageV4 around ${inner}`,
+      poll => ({ pollCreationMessageV4: { message: { [inner]: poll } } }),
+    ]),
+  ];
+
+  it.each(shapes)('reads %s without changing option texts', (_label, wrap) => {
+    expect(
+      extractBaileysPoll(
+        wrap({
+          name: 'Where?',
+          options: [{ optionName: ' Park ' }, { optionName: 'Beach' }],
+          selectableOptionsCount: 1,
         }),
-      ).toEqual({ name: 'Where?', options: [' Park ', 'Beach'], allowMultipleAnswers: false });
-    },
-  );
+      ),
+    ).toEqual({ name: 'Where?', options: [' Park ', 'Beach'], allowMultipleAnswers: false });
+  });
+
+  it('reads a V5 quiz as its question and options, with the correct answer kept out of the options', () => {
+    expect(
+      extractBaileysPoll({
+        pollCreationMessageV5: {
+          name: 'Capital of France?',
+          options: [{ optionName: 'Paris' }, { optionName: 'Lyon' }],
+          selectableOptionsCount: 1,
+          pollType: 1,
+          correctAnswer: { optionName: 'Paris' },
+        },
+      }),
+    ).toEqual({ name: 'Capital of France?', options: ['Paris', 'Lyon'], allowMultipleAnswers: false });
+  });
+
+  it('opens a V4 wrapper one level only', () => {
+    const poll = { name: 'Deep', options: [{ optionName: 'a' }, { optionName: 'b' }] };
+    expect(
+      extractBaileysPoll({
+        pollCreationMessageV4: { message: { pollCreationMessageV4: { message: { pollCreationMessage: poll } } } },
+      }),
+    ).toBeUndefined();
+    expect(extractBaileysPoll({ pollCreationMessageV4: {} })).toBeUndefined();
+  });
   it('reports multiple choices and omits unavailable poll data', () => {
     expect(
       extractBaileysPoll({
@@ -1198,55 +1262,51 @@ describe('native poll choice metadata', () => {
     expect(extractBaileysPoll({ pollCreationMessage: {} })).toBeUndefined();
   });
 
-  describe.each(['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3'] as const)(
-    'bounds on %s',
-    key => {
-      const content = (name: string, optionNames: string[]) => ({
-        [key]: { name, options: optionNames.map(optionName => ({ optionName })), selectableOptionsCount: 1 },
-      });
+  describe.each(shapes)('bounds on %s', (_label, wrap) => {
+    const content = (name: string, optionNames: string[]) =>
+      wrap({ name, options: optionNames.map(optionName => ({ optionName })), selectableOptionsCount: 1 });
 
-      it('keeps a poll WhatsApp itself could send exactly as it is', () => {
-        const question = 'q'.repeat(255);
-        const options = Array.from({ length: 12 }, (_, i) => `${i}`.padEnd(100, 'o'));
-        expect(extractBaileysPoll(content(question, options))).toEqual({
-          name: question,
-          options,
-          allowMultipleAnswers: false,
-        });
-        expect(extractBaileysBody(content(question, options) as BaileysBodyContent)).toBe(question);
+    it('keeps a poll WhatsApp itself could send exactly as it is', () => {
+      const question = 'q'.repeat(255);
+      const options = Array.from({ length: 12 }, (_, i) => `${i}`.padEnd(100, 'o'));
+      expect(extractBaileysPoll(content(question, options))).toEqual({
+        name: question,
+        options,
+        allowMultipleAnswers: false,
       });
+      expect(extractBaileysBody(content(question, options) as BaileysBodyContent)).toBe(question);
+    });
 
-      // The numbers are written out here, not read from the constants, so moving either by one shows up.
-      it('keeps a poll of 32 options with 1024 characters in each text whole', () => {
-        const text = (i: number) => `${i}`.padEnd(1024, 'x');
-        const options = Array.from({ length: 32 }, (_, i) => text(i));
-        expect(extractBaileysPoll(content(text(99), options))).toEqual({
-          name: text(99),
-          options,
-          allowMultipleAnswers: false,
-        });
-        expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99));
+    // The numbers are written out here, not read from the constants, so moving either by one shows up.
+    it('keeps a poll of 32 options with 1024 characters in each text whole', () => {
+      const text = (i: number) => `${i}`.padEnd(1024, 'x');
+      const options = Array.from({ length: 32 }, (_, i) => text(i));
+      expect(extractBaileysPoll(content(text(99), options))).toEqual({
+        name: text(99),
+        options,
+        allowMultipleAnswers: false,
       });
+      expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99));
+    });
 
-      it('cuts a poll at its 33rd option and at the 1025th character of a text', () => {
-        const text = (i: number) => `${i}`.padEnd(1025, 'x');
-        const options = Array.from({ length: 33 }, (_, i) => text(i));
-        const poll = extractBaileysPoll(content(text(99), options))!;
-        expect(poll.options).toEqual(options.slice(0, 32).map(option => option.slice(0, 1024)));
-        expect(poll.name).toBe(text(99).slice(0, 1024));
-        expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99).slice(0, 1024));
-      });
+    it('cuts a poll at its 33rd option and at the 1025th character of a text', () => {
+      const text = (i: number) => `${i}`.padEnd(1025, 'x');
+      const options = Array.from({ length: 33 }, (_, i) => text(i));
+      const poll = extractBaileysPoll(content(text(99), options))!;
+      expect(poll.options).toEqual(options.slice(0, 32).map(option => option.slice(0, 1024)));
+      expect(poll.name).toBe(text(99).slice(0, 1024));
+      expect(extractBaileysBody(content(text(99), options) as BaileysBodyContent)).toBe(text(99).slice(0, 1024));
+    });
 
-      it('truncates an oversized poll, in the poll and in the body, and keeps it a poll', () => {
-        const long = 'x'.repeat(POLL_TEXT_MAX_LENGTH * 3);
-        const optionNames = Array.from({ length: POLL_MAX_OPTIONS * 50 }, (_, i) => `${i}${long}`);
-        const poll = extractBaileysPoll(content(long, optionNames))!;
-        expect(poll.options).toHaveLength(POLL_MAX_OPTIONS);
-        expect(poll.options.every(option => option.length === POLL_TEXT_MAX_LENGTH)).toBe(true);
-        expect(poll.options[1].startsWith('1xxx')).toBe(true);
-        expect(poll.name).toHaveLength(POLL_TEXT_MAX_LENGTH);
-        expect(extractBaileysBody(content(long, optionNames) as BaileysBodyContent)).toHaveLength(POLL_TEXT_MAX_LENGTH);
-      });
-    },
-  );
+    it('truncates an oversized poll, in the poll and in the body, and keeps it a poll', () => {
+      const long = 'x'.repeat(POLL_TEXT_MAX_LENGTH * 3);
+      const optionNames = Array.from({ length: POLL_MAX_OPTIONS * 50 }, (_, i) => `${i}${long}`);
+      const poll = extractBaileysPoll(content(long, optionNames))!;
+      expect(poll.options).toHaveLength(POLL_MAX_OPTIONS);
+      expect(poll.options.every(option => option.length === POLL_TEXT_MAX_LENGTH)).toBe(true);
+      expect(poll.options[1].startsWith('1xxx')).toBe(true);
+      expect(poll.name).toHaveLength(POLL_TEXT_MAX_LENGTH);
+      expect(extractBaileysBody(content(long, optionNames) as BaileysBodyContent)).toHaveLength(POLL_TEXT_MAX_LENGTH);
+    });
+  });
 });
