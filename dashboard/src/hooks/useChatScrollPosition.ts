@@ -250,6 +250,9 @@ export function useChatScrollPosition(
       pinnedRef.current = atBottom;
       const visibleChatId = prevChatIdRef.current;
       if (visibleChatId && loadedRef.current) rememberPosition(visibleChatId, el);
+      // With an older page out, media decoding above the reader is left to the landing (see onMediaLoad), and the
+      // landing can only count it against the row the reader is on now, not the one they asked for the page on.
+      if (awaitingOlderPageRef.current) olderAnchorRef.current = firstVisibleAnchor(el) ?? olderAnchorRef.current;
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);

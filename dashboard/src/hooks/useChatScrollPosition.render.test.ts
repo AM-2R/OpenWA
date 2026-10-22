@@ -1043,7 +1043,7 @@ test('a decode after an older page landed does not apply the saved spot from bef
 // Rows laid out top to bottom in the container, each an anchor; a row may hold an image, which the test grows as it
 // decodes. Positions are what a browser would report for them at the current scrollTop.
 
-type Row = { id: string; h: number; img?: number };
+type Row = { id: string; h: number; img?: number; anchor?: false };
 type Thread = { rows: Row[]; top: number };
 
 const rowsHeight = (t: Thread) => t.rows.reduce((sum, r) => sum + r.h + (r.img ?? 0), 0);
@@ -1097,7 +1097,7 @@ function RowsProbe({ chatId, rows, fetching = false }: { chatId: string; rows: R
     rows.map(r =>
       createElement(
         'div',
-        { key: r.id, 'data-id': r.id, 'data-scroll-anchor': '' },
+        { key: r.id, 'data-id': r.id, ...(r.anchor === false ? {} : { 'data-scroll-anchor': '' }) },
         r.img === undefined ? null : createElement('img', { ref: result.measureMedia, 'data-img': r.id }),
       ),
     ),
@@ -1218,6 +1218,60 @@ test('an image that decodes above the reader while an older page is out is count
     t.rows = [...textRows('p', 10), ...t.rows]; // the page lands: 1000px above
     rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
     assert.equal(el.scrollTop, 450 + 300 + 1000, 'the reader was not held on the message they were on');
+  } finally {
+    restore();
+  }
+});
+
+// The reader goes on reading while a page is out, and an image above where they went decodes: the landing holds them on
+// the row they are on now, the image included, not on the row they were on when the page was asked for.
+test('an image that decodes above where the reader scrolled while an older page is out is counted when it lands', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  t.rows[20] = { id: 'a20', h: 100, img: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50); // near the top: an older page is asked for
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+    readerScrollsTo(el, 2550); // the reader reads on, to a25, while it is out
+
+    t.rows[20] = { id: 'a20', h: 100, img: 300 }; // the image in a20, above them, decodes
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="a20"]') });
+    await nextFrame();
+    t.rows = [...textRows('p', 10), ...t.rows]; // the page lands: 1000px above
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+    assert.equal(el.scrollTop, 2550 + 300 + 1000, 'the reader was left displaced by the image');
+  } finally {
+    restore();
+  }
+});
+
+// A reader can stop where no row is in view (a tall element that is not a message): the landing then holds them by the
+// row they were on before, not by every pixel the thread grew, growth below them included.
+test('a reader who scrolls to where no message is in view while an older page is out is held by the row before', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: [...textRows('a', 46), { id: 'tail', h: 600, anchor: false }], top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50); // near the top: an older page is asked for
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+    readerScrollsTo(el, 4700); // down to where only the tail is in view
+
+    t.rows = [...t.rows.slice(0, -1), { id: 'tail', h: 700, anchor: false }]; // it grows below the reader
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+    t.rows = [...textRows('p', 10), ...t.rows]; // the page lands: 1000px above
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+    assert.equal(el.scrollTop, 4700 + 1000, 'the growth below the reader moved them');
   } finally {
     restore();
   }
