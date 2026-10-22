@@ -1214,6 +1214,16 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('REDIS_HOST=cache.example.com');
     });
 
+    // The restart keeps a container while the saved host reaches it in any spelling, so each one is dropped here.
+    it.each(HOST_SPELLINGS.redis.reach)('drops a host %j that still reaches the bundled container', host => {
+      const env = written(
+        { redis: { enabled: false, builtIn: false, host }, queue: { enabled: false } },
+        `REDIS_ENABLED=true\nREDIS_BUILTIN=false\nREDIS_HOST=${host}\n`,
+      );
+
+      expect(env).not.toMatch(/^REDIS_HOST=/m);
+    });
+
     it('keeps the bundled Redis while the queue still uses it', () => {
       const env = written({ redis: { enabled: false, builtIn: true }, queue: { enabled: true } }, BUILTIN_REDIS_ENV);
 
@@ -1377,6 +1387,24 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('DATABASE_PASSWORD=openwa');
       expect(env).not.toContain('ExternalPw!');
     });
+
+    // Any spelling that reaches the bundled container is the bundled host, as for the restart's stop and start rules.
+    const STORED = 'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_PASSWORD=CustomPw123!\n';
+    it.each(HOST_SPELLINGS.database.reach)('keeps it under %j in the file or pinned', host => {
+      expect(written({ database: { type: 'postgres', builtIn: true } }, `${STORED}DATABASE_HOST=${host}\n`)).toContain(
+        'DATABASE_PASSWORD=CustomPw123!',
+      );
+      process.env.DATABASE_HOST = host;
+      recordPinnedEnvKeys({ DATABASE_HOST: host });
+      expect(
+        written({ database: { type: 'postgres', builtIn: true } }, `${STORED}DATABASE_HOST=db.old.example\n`),
+      ).toContain('DATABASE_PASSWORD=CustomPw123!');
+    });
+    it.each(HOST_SPELLINGS.database.elsewhere)('still resets it under %j in the file', host => {
+      expect(written({ database: { type: 'postgres', builtIn: true } }, `${STORED}DATABASE_HOST=${host}\n`)).toContain(
+        'DATABASE_PASSWORD=openwa',
+      );
+    });
   });
 
   // The bundled MinIO is created with the keys the next boot reads, like the database password above.
@@ -1445,6 +1473,21 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('S3_ACCESS_KEY_ID=minioadmin');
       expect(env).toContain('S3_SECRET_ACCESS_KEY=minioadmin');
       expect(env).not.toContain('StoredKey12345');
+    });
+
+    const STORED = 'STORAGE_TYPE=s3\nMINIO_BUILTIN=false\nS3_BUCKET=openwa\n' + KEYS;
+    it.each(HOST_SPELLINGS.storage.reach)('keeps them under %j in the file or pinned', host => {
+      expect(written({ storage: { type: 's3', builtIn: true } }, `${STORED}S3_ENDPOINT=${host}\n`)).toContain(
+        'S3_SECRET_ACCESS_KEY=StoredSecret1234567890',
+      );
+      process.env.S3_ENDPOINT = host;
+      recordPinnedEnvKeys({ S3_ENDPOINT: host });
+      expect(written({ storage: { type: 's3', builtIn: true } }, STORED)).toContain('S3_ACCESS_KEY_ID=StoredKey12345');
+    });
+    it.each(HOST_SPELLINGS.storage.elsewhere)('still resets them under %j in the file', host => {
+      expect(written({ storage: { type: 's3', builtIn: true } }, `${STORED}S3_ENDPOINT=${host}\n`)).toContain(
+        'S3_ACCESS_KEY_ID=minioadmin',
+      );
     });
   });
 

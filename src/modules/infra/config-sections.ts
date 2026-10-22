@@ -3,7 +3,7 @@ import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { isEnvPinned } from '../../config/env-precedence';
 import { postgresSchemaError } from '../../config/env.validation';
 import type { EngineFactory } from '../../engine/engine.factory';
-import { datastoreInUse } from '../docker';
+import { datastoreInUse, namesBundledContainer } from '../docker';
 import { DatabaseConfigDto, EngineConfigDto, RedisConfigDto, StorageConfigDto } from './dto/save-config.dto';
 
 // Mutable accumulator threaded through the pipeline stages and per-section appliers extracted
@@ -91,10 +91,11 @@ export function applyDatabaseSection(
       // What decides it is whether the stored password belongs to this same bundled container:
       // it does when the previous mode was already built-in, or when the next boot already dials the
       // bundled host with it (the environment's host, else the file's, a file that names it without the
-      // flag included). Coming from external, the stored value is the external DB's credential and must
-      // not be carried into the container.
+      // flag included, in any spelling that reaches the container). Coming from external, the stored value is the
+      // external DB's credential and must not be carried into the container.
       const storedPassword =
-        existing.POSTGRES_BUILTIN === 'true' || nextBootHost('DATABASE_HOST', existing) === 'postgres'
+        existing.POSTGRES_BUILTIN === 'true' ||
+        namesBundledContainer('postgres', nextBootHost('DATABASE_HOST', existing))
           ? existing.DATABASE_PASSWORD
           : undefined;
       updates.DATABASE_PASSWORD = database.password || storedPassword || 'openwa';
@@ -198,7 +199,7 @@ export function applyRedisSection(
     // bundled container may be started for it at boot or kept by the restart, which keeps a container while the
     // saved host still names it. A Redis only a pin switches off keeps the stored choice.
     updates.REDIS_BUILTIN = 'false';
-    if (saved('REDIS_HOST') === 'redis') staleKeys.add('REDIS_HOST');
+    if (namesBundledContainer('redis', saved('REDIS_HOST'))) staleKeys.add('REDIS_HOST');
   }
 }
 
@@ -233,9 +234,9 @@ export function applyStorageSection(
     if (storage.builtIn === true) {
       // Built-in MinIO - use container name as endpoint. The bundled keys are only the DEFAULT, as for the database
       // password: keys the next boot already dials the bundled endpoint with (the flag already set, or the bundled
-      // endpoint pinned or stored) are the ones that container was created with, and are kept.
+      // endpoint pinned or stored, in any spelling) are the ones that container was created with, and are kept.
       const keepKeys =
-        existing.MINIO_BUILTIN === 'true' || nextBootHost('S3_ENDPOINT', existing) === 'http://minio:9000';
+        existing.MINIO_BUILTIN === 'true' || namesBundledContainer('minio', nextBootHost('S3_ENDPOINT', existing));
       updates.S3_ENDPOINT = 'http://minio:9000';
       updates.S3_ACCESS_KEY_ID = (keepKeys && (existing.S3_ACCESS_KEY_ID || existing.S3_ACCESS_KEY)) || 'minioadmin';
       updates.S3_SECRET_ACCESS_KEY =
