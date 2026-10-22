@@ -1113,8 +1113,9 @@ most 2^26 (about 67 million) characters of string values, key names and BigInt t
 value referenced again is counted again at each use, and what no longer fits is written as `[Truncated]`.
 A value that keeps its data outside its own properties is written readably, at any depth: an Error as its
 `name`, `message` and `stack` before its own properties, a Date as its ISO text (`Invalid Date` when it holds
-none), a Buffer or typed array as its `type` and `length`, never its bytes, a Map as an array of
-`[key, value]` pairs (the value of a secret-named string key redacted) and a Set as an array of its values.
+none), a boxed string, number or boolean as its value, a Buffer or typed array as its `type` and `length`, never
+its bytes, a Map as an array of `[key, value]` pairs (the value of a secret-named string key redacted) and a Set
+as an array of its values.
 
 The same logger is installed as Nest's framework logger, so framework lines (route mapping, unhandled
 exception stacks from the exception handler) follow `LOG_LEVEL` and `LOG_FORMAT` and carry the

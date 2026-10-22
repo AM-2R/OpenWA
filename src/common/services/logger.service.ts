@@ -78,16 +78,25 @@ function dateText(date: Date): string {
   return Number.isNaN(Date.prototype.getTime.call(date)) ? 'Invalid Date' : Date.prototype.toISOString.call(date);
 }
 
+/** The value a boxed string, number or boolean holds, read through the built-in method of its brand. */
+function boxedValue(node: object): string | number | boolean {
+  if (types.isStringObject(node)) return String.prototype.valueOf.call(node);
+  return types.isNumberObject(node) ? Number.prototype.valueOf.call(node) : Boolean.prototype.valueOf.call(node);
+}
+
 /**
- * The readable form a value takes, if any. It is told apart by its prototype, which costs little, and a Date, Map or Set
- * then by its brand, which a value made from that prototype alone lacks. A Proxy is copied by its own properties, also
- * when its getPrototypeOf trap throws, and so is a value made in another realm.
+ * The readable form a value takes, if any. It is told apart by its prototype, which costs little, and a Date, Map, Set
+ * or boxed value then by its brand, which a value made from that prototype alone lacks. A Proxy is copied by its own
+ * properties, also when its getPrototypeOf trap throws, and so is a value made in another realm.
  */
-function formOf(node: object): 'date' | 'map' | 'set' | 'error' | undefined {
+function formOf(node: object): 'date' | 'map' | 'set' | 'boxed' | 'error' | undefined {
   try {
     if (node instanceof Date) return types.isDate(node) ? 'date' : undefined;
     if (node instanceof Map) return types.isMap(node) ? 'map' : undefined;
     if (node instanceof Set) return types.isSet(node) ? 'set' : undefined;
+    if (node instanceof String) return types.isStringObject(node) ? 'boxed' : undefined;
+    if (node instanceof Number) return types.isNumberObject(node) ? 'boxed' : undefined;
+    if (node instanceof Boolean) return types.isBooleanObject(node) ? 'boxed' : undefined;
     return node instanceof Error && !types.isProxy(node) ? 'error' : undefined;
   } catch {
     return undefined;
@@ -99,8 +108,8 @@ function formOf(node: object): 'date' | 'map' | 'set' | 'error' | undefined {
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
  * whatever lies beyond the deep node, entry or character budget `[Truncated]`. A value whose data is not in its own
  * properties is written readably: an Error as its name, message and stack before its own properties, a Date as its ISO
- * text, a Buffer or typed array as its type and length, a Map as the array of its [key, value] pairs and a Set as the
- * array of its values. Shared with the Baileys wire logger.
+ * text, a boxed string, number or boolean as its value, a Buffer or typed array as its type and length, a Map as the
+ * array of its [key, value] pairs and a Set as the array of its values. Shared with the Baileys wire logger.
  */
 export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
   const { isSecretKey = isSecretName, marker = '[REDACTED]' } = options;
@@ -112,6 +121,7 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     if (node === null || typeof node !== 'object') return node;
     const form = formOf(node);
     if (form === 'date') return walk(dateText(node as Date), path);
+    if (form === 'boxed') return walk(boxedValue(node), path);
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;
     // A negative budget means something that did not fit was met: nothing else is copied or listed after it.

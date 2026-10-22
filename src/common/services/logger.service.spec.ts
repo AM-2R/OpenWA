@@ -962,6 +962,30 @@ describe('redactSecrets', () => {
       expect(shallowAndDeep(forged)).toEqual(['1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z']);
     });
 
+    it('writes a boxed string, number or boolean as its value, read through the built-in method', () => {
+      const forged = Object.assign(new String('ab'), { valueOf: () => 'forged', toString: () => 'forged' });
+
+      expect(shallowAndDeep(new String('ab'))).toEqual(['ab', 'ab']);
+      expect(shallowAndDeep(new Number(5))).toEqual([5, 5]);
+      expect(shallowAndDeep(new Boolean(false))).toEqual([false, false]);
+      expect(shallowAndDeep(forged)).toEqual(['ab', 'ab']);
+      expect(JSON.stringify(redactSecrets({ nan: new Number(Number.NaN) }))).toBe('{"nan":null}');
+    });
+
+    it('copies a boxed BigInt, a Proxy of a boxed string and a value with only its prototype by their own properties', () => {
+      const prototypeOnly = [String, Number, Boolean].map(Kind => Object.create(Kind.prototype) as object);
+      const otherBrand = Object.setPrototypeOf(new Number(1), String.prototype) as object;
+
+      expect(redactSecrets([Object(1n), new Proxy(new String('ab'), {}), ...prototypeOnly, otherBrand])).toEqual([
+        {},
+        { 0: 'a', 1: 'b' },
+        {},
+        {},
+        {},
+        {},
+      ]);
+    });
+
     it('writes a Buffer or a typed array as its type and the elements it has, never its bytes', () => {
       const claiming = Object.defineProperty(new Uint8Array(5_000_001), 'length', { value: 0 });
 
@@ -1087,13 +1111,26 @@ describe('redactSecrets', () => {
           map: new Map([[1, 2]]),
           set: new Set([1]),
           error: new Error('boom'),
+          boxed: new String('ab'),
         });
 
         const line = (log.mock.calls as string[][])[0][0];
         const fields =
           format === LogFormat.JSON
-            ? ['"at":"1970-01-01T00:00:00.000Z"', '"bytes":{"type":"Buffer","length":2}', '"map":[[1,2]]', '"set":[1]']
-            : ['at=1970-01-01T00:00:00.000Z', 'bytes={"type":"Buffer","length":2}', 'map=[[1,2]]', 'set=[1]'];
+            ? [
+                '"at":"1970-01-01T00:00:00.000Z"',
+                '"bytes":{"type":"Buffer","length":2}',
+                '"map":[[1,2]]',
+                '"set":[1]',
+                '"boxed":"ab"',
+              ]
+            : [
+                'at=1970-01-01T00:00:00.000Z',
+                'bytes={"type":"Buffer","length":2}',
+                'map=[[1,2]]',
+                'set=[1]',
+                'boxed=ab',
+              ];
         for (const field of fields) expect(line).toContain(field);
         expect(line).toContain('"name":"Error","message":"boom","stack":"Error: boom');
       } finally {
@@ -1513,6 +1550,15 @@ describe('redactSecrets', () => {
       const copy = redactSecrets({ a: { [text(LIMIT + 1)]: 1 }, b: 'after', c: {}, d: [] });
 
       expect(shown(copy)).toEqual({ a: '[Truncated]', b: '[Truncated]', c: '[Truncated]', d: '[Truncated]' });
+    });
+
+    it('charges the value of a boxed string like a string', () => {
+      // The key names take 2 characters.
+      expect(shown(redactSecrets({ a: text(LIMIT - 4), s: new String('ab') }))).toEqual({ a: LIMIT - 4, s: 'ab' });
+      expect(shown(redactSecrets({ a: text(LIMIT - 3), s: new String('ab') }))).toEqual({
+        a: LIMIT - 3,
+        s: '[Truncated]',
+      });
     });
 
     it('charges the text of a BigInt sixteen characters to the digit', () => {

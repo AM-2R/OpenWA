@@ -8,6 +8,7 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { PluginLogLevel } from './sandbox/protocol';
 import { PLUGIN_SEARCH_REGISTRY_PORT } from './plugin-host-ports';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
+import { redactSecrets } from '../../common/services/logger.service';
 
 type FakeHost = {
   load: jest.Mock;
@@ -965,6 +966,21 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       expect(floats).toMatchObject({ metaTruncated: true });
       expect(floats.metaLength).toBeGreaterThan(8192);
       expect(bigints).toEqual({});
+    });
+
+    // A boxed string is written as its text, so one that fits is relayed and written in that many characters. A worker's
+    // meta arrives in the host's realm; structuredClone here would make it in another, which the logger copies by its
+    // own properties.
+    it('relays a boxed string that the logger writes as its text', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const text = 'x'.repeat(8000);
+
+      loader.capturedOnLog!('log', 'boxed', { s: new String(text) });
+
+      expect(JSON.stringify(redactSecrets(logSpy.mock.calls[0][1]))).toBe(JSON.stringify({ s: text }));
     });
 
     it('still drops a circular meta without a marker, as it cannot be written as JSON', async () => {
