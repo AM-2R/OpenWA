@@ -1,4 +1,3 @@
-import { setTimeout } from 'node:timers/promises';
 import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
@@ -7,6 +6,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
 import { closeSessionWrites } from '../../common/utils/session-write-scope';
+import { awaitNoOpenTransaction, SHARED_CONNECTION_DIALECTS } from '../../common/utils/shared-connection';
 import { failUnfinishedSessionBatches } from '../message/batch-media.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -148,20 +148,6 @@ export function toSqliteDatetime(value: unknown): unknown {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : DateUtils.mixedDateToUtcDatetimeString(date);
 }
-
-/**
- * Dialects where every TypeORM query runner shares ONE connection, so an open transaction is visible
- * to anything else querying in the same process. A positive list on purpose: a dialect nobody has
- * classified must not silently opt into suspending a safety mechanism.
- */
-const SHARED_CONNECTION_DIALECTS = new Set(['better-sqlite3', 'sqlite']);
-
-/**
- * How long an import refused because another transaction opened on the shared connection waits for that
- * transaction to end before it fails the batches of the sessions it meant to remove. Those transactions are
- * short (a session create, the closing transaction of a delete); the bound is for one that never ends.
- */
-const FOREIGN_TRANSACTION_WAIT_MS = 10_000;
 
 /**
  * Aggregate budget for the inline base64 media ONE export may carry, counted in the encoded bytes
@@ -735,7 +721,7 @@ export class InfraDataService {
     let retired: Array<{ id: string; writes: ReturnType<typeof closeSessionWrites> }> = [];
     let committed = false;
     // Set when another transaction opened on the shared connection while the writes drained.
-    let foreignTransaction: QueryRunner | undefined;
+    let foreignTransaction = false;
 
     // Everything from here is wrapped so the token cannot outlive this request. It is not enough to
     // release it in the transaction's own finally: createQueryRunner/connect/startTransaction sit
@@ -790,7 +776,7 @@ export class InfraDataService {
         await Promise.all(retired.map(({ writes }) => writes.drain()));
         await queryRunner.connect();
         // Again after the drain's await: BEGIN must follow the check with nothing in between.
-        if (queryRunner.isTransactionActive) foreignTransaction = queryRunner;
+        if (queryRunner.isTransactionActive) foreignTransaction = true;
         refuseNestedTransaction();
         await queryRunner.startTransaction();
       } catch (error) {
@@ -1144,15 +1130,11 @@ export class InfraDataService {
       // the close stays stopped, so its row is failed before the release, as a failed delete does. Their
       // engines are gone, so the batch could not have sent anyway. Not inside a transaction another caller
       // opened on the shared connection while the writes drained: the fail would roll back with it.
-      if (foreignTransaction && retired.length > 0) {
-        const settleBy = Date.now() + FOREIGN_TRANSACTION_WAIT_MS;
-        while (foreignTransaction.isTransactionActive && Date.now() < settleBy) await setTimeout(5);
-        if (foreignTransaction.isTransactionActive) {
-          this.logger.warn('Failing the unfinished batches of a refused import inside another open transaction', {
-            action: 'infra_import_foreign_transaction_open',
-            sessionIds: retired.map(({ id }) => id),
-          });
-        }
+      if (foreignTransaction && retired.length > 0 && !(await awaitNoOpenTransaction(this.dataDataSource))) {
+        this.logger.warn('Failing the unfinished batches of a refused import inside another open transaction', {
+          action: 'infra_import_foreign_transaction_open',
+          sessionIds: retired.map(({ id }) => id),
+        });
       }
       for (const { id } of committed ? [] : retired) {
         await failUnfinishedSessionBatches(this.dataDataSource, id).catch((error: unknown) =>

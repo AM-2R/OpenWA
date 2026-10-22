@@ -22,6 +22,7 @@ import { BaileysStoredMessage } from '../../engine';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { closeSessionWrites } from '../../common/utils/session-write-scope';
+import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -891,7 +892,15 @@ export class SessionEngineControls {
       // instance-keyed inbound dedup record, payload already dropped after dispatch, always pruned
       // after INGRESS_DEDUP_RETENTION_DAYS), lid_mappings (a global cache by design) and audit_logs (the audit trail).
       await this.deleteTrafficRowsInBatches(id);
-      await this.host.dataSource().transaction(async manager => {
+      // On SQLite every caller shares one connection: opened inside another caller's transaction, this one
+      // would only be a savepoint in it, undone if that one rolls back after this delete has answered.
+      const dataSource = this.host.dataSource();
+      if (!(await awaitNoOpenTransaction(dataSource))) {
+        throw new ServiceUnavailableException(
+          `Session ${id} was not deleted: another database transaction stayed open. Retry the delete.`,
+        );
+      }
+      await dataSource.transaction(async manager => {
         await manager.delete(Message, { sessionId: id });
         await manager.delete(MessageBatch, { sessionId: id });
         await manager.delete(ChatState, { sessionId: id });
@@ -971,7 +980,15 @@ export class SessionEngineControls {
    */
   private async failUnfinishedBatches(sessionId: string): Promise<void> {
     try {
-      await failUnfinishedSessionBatches(this.host.dataSource(), sessionId);
+      const dataSource = this.host.dataSource();
+      // Not inside another caller's transaction on the shared connection, where the fail would roll back with it.
+      if (!(await awaitNoOpenTransaction(dataSource))) {
+        this.logger.warn(`Failing the unfinished batches of session ${sessionId} inside another open transaction`, {
+          sessionId,
+          action: 'session_delete_foreign_transaction_open',
+        });
+      }
+      await failUnfinishedSessionBatches(dataSource, sessionId);
     } catch (error) {
       this.logger.warn(`Could not fail the unfinished batches of session ${sessionId} after a failed delete`, {
         sessionId,

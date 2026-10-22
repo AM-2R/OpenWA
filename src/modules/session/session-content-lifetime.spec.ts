@@ -1,7 +1,7 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
@@ -35,6 +35,7 @@ import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { captureSessionWrites, closeSessionWrites } from '../../common/utils/session-write-scope';
+import { FOREIGN_TRANSACTION_WAIT_MS } from '../../common/utils/shared-connection';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -694,5 +695,125 @@ describe('Session content lifetime', () => {
 
       expect(await statuses()).toEqual([]);
     });
+  });
+
+  // On SQLite every query runner is the one connection, and a transaction opened while another is open there
+  // becomes a savepoint inside it: the rows the delete removed would come back when that one rolls back, after
+  // the delete had answered. On PostgreSQL the other transaction holds a pooled client of its own.
+  describe('a delete beside another transaction on the data connection', () => {
+    const gone = { sessions: 0, messages: 0, batches: 0 };
+
+    async function seedContent(name: string): Promise<string> {
+      const session = await db.getRepository(Session).save({ name, config: {} });
+      await db
+        .getRepository(Message)
+        .insert({ sessionId: session.id, chatId: '10000000001@c.us', from: 'me', to: '10000000001@c.us', body: 'm' });
+      await db.getRepository(MessageBatch).save({
+        batchId: `b-${name}`,
+        sessionId: session.id,
+        status: BatchStatus.PENDING,
+        messages: [],
+        options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+        progress: { total: 0, sent: 0, failed: 0, pending: 0, cancelled: 0 },
+        results: [],
+      });
+      return session.id;
+    }
+
+    const rowsOf = async (sessionId: string) => ({
+      sessions: await db.getRepository(Session).countBy({ id: sessionId }),
+      messages: await db.getRepository(Message).countBy({ sessionId }),
+      batches: await db.getRepository(MessageBatch).countBy({ sessionId }),
+    });
+
+    /** A transaction someone else opened on the connection, held until the test ends it. */
+    async function openTransaction(): Promise<QueryRunner> {
+      const runner = db.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      return runner;
+    }
+
+    it.each(['rolls back', 'commits'])(
+      'removes every row of the session when a transaction open beside it %s',
+      async ending => {
+        const id = await seedContent('doomed');
+        const other = await openTransaction();
+
+        const deletion = controls.delete(id);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (ending === 'rolls back') await other.rollbackTransaction();
+        else await other.commitTransaction();
+        await other.release();
+        await deletion;
+
+        expect(await rowsOf(id)).toEqual(gone);
+      },
+    );
+
+    // Begun from the session:deleted hook a number of promise steps later, in the same turn of the event loop, as a
+    // session create does when another session holds its name. Over this range it begins before, during and after
+    // the delete's closing transaction.
+    it('keeps its closing transaction its own against one begun in the same turn', async () => {
+      await db.getRepository(Session).save({ name: 'taken', config: {} });
+      let steps = 0;
+      let create: Promise<unknown> = Promise.resolve();
+      hooks.register('test', 'session:deleted', () => {
+        create = (async () => {
+          for (let i = 0; i < steps; i += 1) await Promise.resolve();
+          await db.transaction(manager => manager.save(manager.create(Session, { name: 'taken', config: {} })));
+        })().catch(() => undefined);
+        return Promise.resolve({ continue: true });
+      });
+
+      for (; steps <= 100; steps += 1) {
+        const id = await seedContent(`doomed-${steps}`);
+        const outcome = await controls.delete(id).then(
+          () => 'deleted',
+          (error: unknown) => String(error),
+        );
+        await create;
+        expect({ steps, outcome, ...(await rowsOf(id)) }).toEqual({ steps, outcome: 'deleted', ...gone });
+      }
+    }, 60000);
+
+    it('fails the batches of a failed delete outside a transaction opened beside it', async () => {
+      const id = await seedContent('doomed');
+      let ended: Promise<void> = Promise.resolve();
+      jest.spyOn(db, 'transaction').mockImplementationOnce(async () => {
+        const other = await openTransaction();
+        ended = new Promise(resolve => setTimeout(resolve, 20))
+          .then(() => other.rollbackTransaction())
+          .then(() => other.release());
+        throw new Error('closing transaction failed');
+      });
+
+      await expect(controls.delete(id)).rejects.toThrow('closing transaction failed');
+      await ended;
+
+      expect((await db.getRepository(MessageBatch).findOneByOrFail({ sessionId: id })).status).toBe(BatchStatus.FAILED);
+    });
+
+    (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
+      'refuses with 503 and removes nothing more when a transaction beside it stays open',
+      async () => {
+        const id = await seedContent('doomed');
+        const other = await openTransaction();
+        const start = Date.now();
+        let calls = 0;
+        const clock = jest.spyOn(Date, 'now').mockImplementation(() => start + FOREIGN_TRANSACTION_WAIT_MS * calls++);
+
+        await expect(controls.delete(id)).rejects.toThrow(ServiceUnavailableException);
+        clock.mockRestore();
+        await other.rollbackTransaction();
+        await other.release();
+
+        expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, batches: 1 });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('inside another open transaction'),
+          expect.objectContaining({ action: 'session_delete_foreign_transaction_open' }),
+        );
+      },
+    );
   });
 });
