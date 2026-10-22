@@ -954,6 +954,68 @@ test('no built-in note under S3 storage that is saved but not running yet', asyn
   assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a storage not running');
 });
 
+// The other half of the same guard: the service runs, but the saved config does not use it. Selecting it in the form
+// then shows its Use Built-in toggle, and the note under it would claim a switch for a service nothing saved.
+test('no built-in note for a Redis the saved config has disabled, once it is enabled in the form', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...INFRA_STATUS, redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true } },
+    saved: {
+      ...SAVED_CONFIG,
+      redis: { enabled: false, builtIn: false, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Enable Redis'));
+
+  assert.equal(toggleInput(container, 'Use Built-in Redis Container').checked, false);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note for a Redis nothing saved');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a Redis nothing saved');
+});
+
+test('no built-in note for a storage the saved config keeps local, once S3 is chosen in the form', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...INFRA_STATUS, storage: { type: 's3', bucket: 'openwa', builtIn: true, s3Available: true } },
+    saved: { ...SAVED_CONFIG, storage: { ...SAVED_CONFIG.storage, type: 'local', builtIn: false, builtInSet: true } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="storageType"]')[1]);
+
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, false);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note for a storage nothing saved');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a storage nothing saved');
+});
+
+test('no built-in note for a database the saved config keeps on SQLite, once PostgreSQL is chosen in the form', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...INFRA_STATUS, database: { connected: true, type: 'postgres', host: 'postgres', builtIn: true } },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, type: 'sqlite', builtIn: false, builtInSet: true },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="dbType"]')[1]);
+
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, false);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note for a database nothing saved');
+  assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note for a database nothing saved');
+});
+
 test('the built-in notes are hidden while a save is in flight and back once it settles', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   resetFetchCalls();
