@@ -676,11 +676,15 @@ export function Chats() {
       const open = activeChatIdRef.current;
       const withheld = open !== undefined && withheldReads.has(readKey(selectedSessionId, open));
       withheldReads.clear();
-      if (withheld) markChatRead(open);
+      if (!withheld) return;
+      markChatRead(open);
+      // The messages that came while the tab was hidden are counted unread by any list reloaded meanwhile, and
+      // are read now: the row says so, as it does when the chat is opened.
+      if (canWrite) markRowRead(open);
     };
     document.addEventListener('visibilitychange', sendWithheldRead);
     return () => document.removeEventListener('visibilitychange', sendWithheldRead);
-  }, [selectedSessionId, markChatRead, withheldReads]);
+  }, [selectedSessionId, markChatRead, markRowRead, canWrite, withheldReads]);
 
   const handleIncomingMessage = useCallback(
     (event: { sessionId: string; message: Record<string, unknown> }) => {

@@ -2391,6 +2391,57 @@ test('a message that reaches the open chat while the tab is hidden is marked rea
   assert.ok(!screen.queryByLabelText(/unread message/), 'the open chat was badged');
 });
 
+test('a list reload while the tab is hidden badges nothing on the open chat once the tab is visible and the read went out', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, 1, 'opening the chat did not mark it read'), {
+    timeout: 3_000,
+  });
+
+  // What the gateway reports for Alice: one unread message from the moment it arrived until a read reaches it.
+  let readsAtArrival = Number.POSITIVE_INFINITY;
+  Object.defineProperty(aliceNow, 'unreadCount', {
+    enumerable: true,
+    configurable: true,
+    get: () => (readsOf(CHAT.id).length > readsAtArrival ? 0 : 1),
+  });
+  const listReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path.includes('/chats?')).length;
+  setTabHidden(true);
+  try {
+    readsAtArrival = readsOf(CHAT.id).length;
+    receiveFromAlice('wamid.hidden.badge', 'are you there?');
+    await screen.findAllByText('are you there?');
+    // Past the quiet window: the read is withheld, so the gateway still counts the message.
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.equal(readsOf(CHAT.id).length, readsAtArrival, 'a hidden tab sent a read receipt');
+
+    // An edit in a chat that was never opened asks for the list, which now reports the unread message. A badge on
+    // the chat nobody is looking at is accepted while the tab is hidden.
+    const before = listReads();
+    receiveEvent('message.edited', {
+      messageId: 'wamid.edit.badge',
+      chatId: '15550002222@c.us',
+      body: 'edited',
+      timestamp: 1_700_001_000,
+    });
+    await waitFor(() => assert.ok(listReads() > before, 'the edit did not reload the list'), { timeout: 3_000 });
+    await settle();
+  } finally {
+    setTabHidden(false);
+  }
+  rtl.act(() => {
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  await waitFor(() => assert.equal(readsOf(CHAT.id).length, readsAtArrival + 1, 'the withheld read did not follow'), {
+    timeout: 3_000,
+  });
+  await settle();
+  assert.ok(!screen.queryByLabelText('1 unread message'), 'the open chat still shows an unread badge after its read');
+  assert.equal(readsOf(CHAT.id).length, readsAtArrival + 1, 'more than one read went out');
+});
+
 test('a tab that was hidden but sees no message owes no read when it is visible again', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderPage();
