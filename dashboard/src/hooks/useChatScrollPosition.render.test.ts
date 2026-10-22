@@ -1097,7 +1097,7 @@ function RowsProbe({ chatId, rows, fetching = false }: { chatId: string; rows: R
     rows.map(r =>
       createElement(
         'div',
-        { key: r.id, 'data-id': r.id, ...(r.anchor === false ? {} : { 'data-scroll-anchor': '' }) },
+        { key: r.id, 'data-id': r.id, ...(r.anchor === false ? {} : { 'data-scroll-anchor': r.id }) },
         r.img === undefined ? null : createElement('img', { ref: result.measureMedia, 'data-img': r.id }),
       ),
     ),
@@ -1192,6 +1192,101 @@ for (const scenario of [
     }
   });
 }
+
+// The page can also land while the reader is still in the other chat, so it is never seen landing: it is above the
+// offset saved for the chat when they come back, and so is everything that offset was measured against.
+test('an older page that lands while the reader is in another chat reopens the chat on the message they left', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50); // near the top: an older page is asked for
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+    const rowsOfA = [...textRows('p', 10), ...t.rows]; // the page lands while the reader is in B: 1000px above
+    t.rows = textRows('b', 30);
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows }));
+    fireEvent.scroll(el);
+    t.rows = rowsOfA;
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 50 + 1000, 'A reopened on the page that landed instead of the message the reader left');
+
+    // Out and back again without scrolling: the same message, not the offset from before the page.
+    t.rows = textRows('b', 30);
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows }));
+    fireEvent.scroll(el);
+    t.rows = rowsOfA;
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 50 + 1000, 'the second return went back to the offset from before the page');
+  } finally {
+    restore();
+  }
+});
+
+// The rows of that page mount when the chat is shown again, so their images decode after the restore: each one is above
+// the reader, and the restore waiting for media holds them through it.
+test('an image in a page that landed while the reader was away decodes after they came back without moving them', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 50);
+    hook().onOlderMessagesRequested();
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+    const page = textRows('p', 10);
+    page[2] = { id: 'p2', h: 100, img: 0 };
+    const rowsOfA = [...page, ...t.rows];
+    t.rows = textRows('b', 30);
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows }));
+    fireEvent.scroll(el);
+    t.rows = rowsOfA;
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    fireEvent.scroll(el);
+
+    t.rows[2] = { id: 'p2', h: 100, img: 300 }; // the page's image decodes
+    hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="p2"]') });
+    await nextFrame();
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 50 + 1000 + 300, 'the image in the page pushed the reader off their message');
+  } finally {
+    restore();
+  }
+});
+
+// A saved spot whose first row is gone from the thread (the chat's history was fetched again from its newest page) has
+// nothing to be moved by: the offset is written as it was saved.
+test('a chat whose first row is gone when the reader comes back reopens at the saved offset', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const t: Thread = { rows: textRows('a', 46), top: 0 };
+  const restore = installRows(t);
+  try {
+    const { rerender } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 2000);
+    t.rows = textRows('b', 30);
+    rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows }));
+    fireEvent.scroll(el);
+    t.rows = textRows('a', 46).slice(10);
+    rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+    assert.equal(el.scrollTop, 2000);
+  } finally {
+    restore();
+  }
+});
 
 // While a page is out, an image that decodes above the reader is left to the landing, which holds them by the message
 // they were on: a commit in between (a message far below) must not take that measure again from the moved message.

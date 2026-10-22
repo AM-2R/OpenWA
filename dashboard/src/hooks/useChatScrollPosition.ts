@@ -144,6 +144,22 @@ function firstVisibleAnchor(container: HTMLElement): { node: Element; top: numbe
   return null;
 }
 
+/**
+ * Where a saved spot is in the thread now: its offset, moved down by whatever sits above the row that was first in the
+ * thread when it was saved. An older page asked for before the reader left a chat can land while they are in another
+ * one, above everything the offset was measured against. With nothing new above that row the shift is zero and the
+ * offset is written as saved; it is read live, as the images of such a page decode after the chat is shown again.
+ */
+function savedSpotTop(container: HTMLElement, spot: { top: number; first: string | null }): number {
+  const first = container.querySelector(`[${SCROLL_ANCHOR_ATTRIBUTE}]`);
+  const saved =
+    spot.first === null
+      ? undefined
+      : Array.from(container.children).find(row => row.getAttribute(SCROLL_ANCHOR_ATTRIBUTE) === spot.first);
+  if (!first || !saved) return spot.top;
+  return spot.top + saved.getBoundingClientRect().top - first.getBoundingClientRect().top;
+}
+
 export function useChatScrollPosition(
   activeChatId: string | null,
   isLoaded: boolean,
@@ -159,7 +175,8 @@ export function useChatScrollPosition(
   onOlderMessagesRequested: () => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const scrollMap = useRef<Map<string, number>>(new Map());
+  // Each chat's saved offset, with the anchor key of the row that was first in its thread then (see savedSpotTop).
+  const scrollMap = useRef<Map<string, { top: number; first: string | null }>>(new Map());
   const prevChatIdRef = useRef<string | null>(null);
   const pinnedRef = useRef<boolean>(true);
   // Whether the visible chat's messages have rendered. While a chat loads, the container shows only a
@@ -169,7 +186,7 @@ export function useChatScrollPosition(
   // A 'saved' restore writes scrollTop BEFORE media decodes — the browser clamps the write to the
   // still-short scrollHeight and the thread lands at the top. The saved value lives here and is
   // re-applied on every media decode until the user scrolls (any genuine scroll cancels it).
-  const pendingRestoreRef = useRef<number | null>(null);
+  const pendingRestoreRef = useRef<{ top: number; first: string | null } | null>(null);
   // Where our own last write left the thread, so the scroll listener can skip the event it raised (a genuine
   // user scroll both updates the pin state / position map AND cancels pendingRestore; our writes must do
   // neither). That event reports the position by value, and so does the clamp event a content swap queued
@@ -228,7 +245,10 @@ export function useChatScrollPosition(
   // state, not an offset, because the thread keeps growing under a reader who follows it.
   const rememberPosition = useCallback((chatId: string, el: HTMLDivElement) => {
     if (isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight)) scrollMap.current.delete(chatId);
-    else scrollMap.current.set(chatId, el.scrollTop);
+    else {
+      const first = el.querySelector(`[${SCROLL_ANCHOR_ATTRIBUTE}]`)?.getAttribute(SCROLL_ANCHOR_ATTRIBUTE) || null;
+      scrollMap.current.set(chatId, { top: el.scrollTop, first });
+    }
   }, []);
 
   // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
@@ -269,7 +289,7 @@ export function useChatScrollPosition(
     // declared before the height tracker, so the flag is gone before the tracker could act on it.
     if (next !== prevChatIdRef.current) awaitingOlderPageRef.current = false;
 
-    const decision = decideRestoreTarget(next, isLoaded, next !== null ? scrollMap.current.get(next) : undefined);
+    const decision = decideRestoreTarget(next, isLoaded, next !== null ? scrollMap.current.get(next)?.top : undefined);
     // A message the reader sent while this chat loaded opens it at that message, the way a send in a loaded chat
     // scrolls to it. Only in the chat it was sent in: the next restore decision, in whichever chat, forgets it.
     const sentWhileLoading = sentWhileLoadingRef.current === next;
@@ -282,7 +302,7 @@ export function useChatScrollPosition(
         const saved = scrollMap.current.get(next);
         if (saved !== undefined) {
           pendingRestoreRef.current = saved; // re-applied on media loads until the user scrolls
-          writeScrollTop(el, saved);
+          writeScrollTop(el, savedSpotTop(el, saved));
           pinnedRef.current = false; // a saved spot is (almost always) not the bottom
         }
       } else if (decision.restore === 'bottom') {
@@ -435,7 +455,7 @@ export function useChatScrollPosition(
       if (pending !== null) {
         requestAnimationFrame(() => {
           const cur = containerRef.current;
-          if (cur && onScreen() && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
+          if (cur && onScreen() && pendingRestoreRef.current !== null) writeScrollTop(cur, savedSpotTop(cur, pending));
         });
         return;
       }
