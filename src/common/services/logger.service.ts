@@ -86,16 +86,21 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
 /** Written in place of a message or trace that cannot be read. */
 const UNPRINTABLE = '[Unprintable]';
 
+/**
+ * What a value that could not be turned into JSON is written as: a primitive as it prints, anything else not at all.
+ * The text an object or a function gives for itself (its own toString, a function's source) never went through the
+ * redaction, so it is not used.
+ */
+function plainText(value: unknown): string {
+  return value === null || (typeof value !== 'object' && typeof value !== 'function') ? String(value) : UNPRINTABLE;
+}
+
 /** A non-string, non-Error message as one line of text (redacted like metadata, never throwing). */
 function stringifyMessage(message: unknown): string {
   try {
-    return JSON.stringify(redactSecrets(message)) ?? String(message);
+    return JSON.stringify(redactSecrets(message)) ?? plainText(message);
   } catch {
-    try {
-      return String(message);
-    } catch {
-      return UNPRINTABLE;
-    }
+    return plainText(message);
   }
 }
 

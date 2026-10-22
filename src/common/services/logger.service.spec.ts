@@ -390,6 +390,48 @@ describe('LoggerService', () => {
         expect(getRawOutput(errorSpy)).toContain('saved-trace');
       });
 
+      // The redaction never saw what such a value prints for itself, so it is not printed.
+      describe('an object or function that has a text of its own but cannot be copied', () => {
+        const ownText = (): object => ({
+          get boom(): string {
+            throw new Error('getter');
+          },
+          toString: () => 'password=value-text',
+        });
+        const functionWithText = (): (() => string) =>
+          function leaky() {
+            return 'password=value-text';
+          };
+
+        it.each([
+          ['an object', ownText],
+          ['a function', functionWithText],
+        ])('writes %s passed as the message or as the trace as [Unprintable]', (_name, make) => {
+          const errorSpy = jest.spyOn(console, 'error');
+
+          logger.error(make());
+          logger.error('saved-message', make());
+
+          const lines = (errorSpy.mock.calls as string[][]).map(call => call[0]);
+          expect(lines).toHaveLength(2);
+          for (const line of lines) {
+            expect(line).toContain('[Unprintable]');
+            expect(line).not.toContain('value-text');
+          }
+        });
+      });
+
+      it.each([
+        [42, '42'],
+        [true, 'true'],
+        [Symbol('s'), 'Symbol(s)'],
+        [undefined, 'undefined'],
+      ])('still writes the primitive %p as its own text', (value, text) => {
+        logger.log(value);
+
+        expect(getRawOutput(consoleSpy)).toContain(text);
+      });
+
       describe('an Error passed as the trace whose stack is not text', () => {
         const withStack = (stack: unknown): Error => Object.assign(new Error('boom'), { stack });
         const cyclic = (): Record<string, unknown> => {
