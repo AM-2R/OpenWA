@@ -37,6 +37,10 @@
 .filter-row select {
   height: 2.25rem;
   padding: 0 0.5rem;
+  /* The chevron takes 28px at the end (12px from the edge, 16px wide). The global 2.5rem would leave these
+     compact selects too little text, so they ask for the chevron's room and no more. */
+  padding-inline-end: 1.75rem !important;
+  text-overflow: ellipsis;
   border: 1px solid var(--border);
   border-radius: 6px;
   background-color: var(--bg-white);
@@ -49,12 +53,14 @@
   width: 100%;
 }
 
+/* Wide enough, with the padding above, for the longest field and operator label in every shipped locale
+   except the two or three over-long ones, which end in an ellipsis; the open list shows them whole. */
 .filter-field {
-  flex: 0 0 8.5rem;
+  flex: 0 0 10.75rem;
 }
 
 .filter-operator {
-  flex: 0 0 7rem;
+  flex: 0 0 7.75rem;
 }
 
 .filter-value {
@@ -107,6 +113,14 @@
 
   .filter-value {
     flex: 1 1 calc(100% - 3.5rem);
+  }
+}
+
+/* At 320px the two selects share a row with 89px of text each, which cuts even "Message body"; the field takes
+   the first row and the operator the second. */
+@media (max-width: 340px) {
+  .filter-field {
+    flex-basis: 100%;
   }
 }
 
