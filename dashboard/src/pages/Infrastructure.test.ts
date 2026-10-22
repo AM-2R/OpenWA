@@ -97,6 +97,7 @@ let overrides: {
   saved?: SavedConfig;
   // What /config reports once a save went through (the file that save wrote), when it differs from `saved`.
   savedAfterSave?: SavedConfig;
+  savedAfterSaveFails?: boolean;
   savedFails?: boolean;
   statusFails?: boolean;
   currentEngine?: { engineType: string };
@@ -172,6 +173,9 @@ function installFetchStub(): void {
     }
     if (method === 'GET' && path === '/api/infra/config') {
       if (overrides.savedFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
+      if (overrides.savedAfterSaveFails && findFetchCall('PUT', '/api/infra/config')) {
+        return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
+      }
       if (overrides.savedAfterSave && findFetchCall('PUT', '/api/infra/config')) {
         return Promise.resolve(jsonResponse(overrides.savedAfterSave));
       }
@@ -2005,6 +2009,22 @@ async function saveAndRestart(): Promise<{ dialogText: string; body: unknown }> 
 test('a bundled container OpenWA created whose host the environment pins elsewhere is stopped and named', async () => {
   resetFetchCalls();
   overrides = { status: PINNED_AWAY, saved: PINNED_AWAY_SAVED, saveProfiles: ['postgres', 'redis', 'minio'] };
+
+  const { dialogText, body } = await saveAndRestart();
+
+  assert.ok(dialogText.includes(STOPS_ALL_THREE), dialogText);
+  assert.deepEqual(body, { profiles: [], profilesToRemove: ['postgres', 'redis', 'minio'] });
+});
+
+// Without the read the server's own check decides: the page asks for what it would have asked for before.
+test('a configuration that cannot be read back after the save still opens the restart and asks to stop', async () => {
+  resetFetchCalls();
+  overrides = {
+    status: PINNED_AWAY,
+    saved: PINNED_AWAY_SAVED,
+    saveProfiles: ['postgres', 'redis', 'minio'],
+    savedAfterSaveFails: true,
+  };
 
   const { dialogText, body } = await saveAndRestart();
 
