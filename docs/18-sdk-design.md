@@ -1,6 +1,6 @@
 # 18 - SDK Design
 
-> This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The PHP notes on Guzzle 8 describe the next SDK release after 0.6.0.
+> This document describes SDK 0.7.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 ## 18.1 Overview
 

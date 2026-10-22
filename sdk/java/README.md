@@ -1,6 +1,6 @@
 # OpenWA Java SDK
 
-This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+This document describes SDK 0.7.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official Java client for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
@@ -19,14 +19,14 @@ Java 17+, one runtime dependency ([Gson](https://github.com/google/gson)).
 <dependency>
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.6.0</version>
+  <version>0.7.0</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```groovy
-implementation 'com.rmyndharis:openwa:0.6.0'
+implementation 'com.rmyndharis:openwa:0.7.0'
 ```
 
 ## Quickstart
@@ -215,7 +215,7 @@ before tagging rather than tagging to see what happens.
 Cutting a release:
 
 1. Bump `<version>` in `pom.xml` and land it on `main`.
-2. Tag that commit `java-sdk-v<version>` (e.g. `java-sdk-v0.6.0`) and push the
+2. Tag that commit `java-sdk-v<version>` (e.g. `java-sdk-v0.7.0`) and push the
    tag. The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow builds, signs, and publishes; Central syncs within a few hours.
