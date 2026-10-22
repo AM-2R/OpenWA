@@ -909,7 +909,9 @@ const STOP_REASON: Record<number, RegExp> = {
 
 for (const status of [400, 409, 429, 503]) {
   test(`NumberChecker: HTTP ${status} on the first lookup stops the batch before the second`, async () => {
-    const lookups = stubLookups(() => jsonResponse({ message: `refused ${status}` }, status));
+    const lookups = stubLookups(() =>
+      jsonResponse({ message: status === 400 ? 'Session is not started' : `refused ${status}` }, status),
+    );
     const { container } = renderComponent();
     const textarea = await openBulkTab();
     rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
@@ -951,6 +953,22 @@ test('NumberChecker: a lookup that gets no answer at all stops the batch before 
 test('NumberChecker: an answer that is not JSON fails that number and the run goes on', async () => {
   const lookups = stubLookups(number =>
     number === '911111111111' ? new Response('<html>sign in</html>', { status: 200 }) : registered(number),
+  );
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  startBatch();
+
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['911111111111', '912222222222']);
+  assert.equal(statValue('Failed'), '1');
+  assert.equal(container.querySelector('.nc-batch-stopped'), null);
+});
+
+// 400 ends a run only for a session that is not running; any other 400 is about that number.
+test('NumberChecker: a 400 that is not about the session fails that number and the run goes on', async () => {
+  const lookups = stubLookups(number =>
+    number === '911111111111' ? jsonResponse({ message: 'Invalid number' }, 400) : registered(number),
   );
   const { container } = renderComponent();
   const textarea = await openBulkTab();

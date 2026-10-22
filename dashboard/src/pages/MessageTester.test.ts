@@ -145,7 +145,7 @@ function groupJsonResponse(data: unknown, status = 200): Response {
 }
 
 // How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
-type FirstSendFailure = number | 'unreachable' | 'unconfirmed';
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'vetoed';
 
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
@@ -173,6 +173,10 @@ function stubGroupGateway(
       if (refuseFirstWith && textSends.length === 1) {
         if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
         if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        // A plugin that vetoes one chat's send: the gateway answers 400 for that chat alone.
+        if (refuseFirstWith === 'vetoed') {
+          return Promise.resolve(groupJsonResponse({ message: 'Message sending blocked by plugin' }, 400));
+        }
         const message =
           refuseFirstWith === 400 ? "Session 's1' is not active. Start the session first." : 'Too many requests';
         return Promise.resolve(groupJsonResponse({ message }, refuseFirstWith));
@@ -281,6 +285,25 @@ test('a 400 (the session is not active) stops the run, since every group would f
   await rtl.screen.findByText('1, stopped after HTTP 400');
   assert.ok(rtl.screen.getByText(/is not active/, { selector: 'li' }));
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The same 400 status, but about one chat: that group fails by itself and the others are still sent.
+test('a 400 that blocks one group fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'vetoed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/blocked by plugin/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
 });
 
 test('a gateway that does not answer stops the run, and the notice says so', async () => {

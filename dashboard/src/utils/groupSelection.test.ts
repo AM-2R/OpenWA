@@ -79,16 +79,28 @@ test('forward uses the first group as its source chat instead of looping', () =>
 });
 
 test('a stopped session, a refusal and a fetch with no answer end a run, other failures do not', () => {
-  const withStatus = (status: number) => Object.assign(new Error('refused'), { status });
-  assert.equal(isGatewayRefusal(withStatus(400)), true);
+  const withStatus = (status: number, message = 'refused') => Object.assign(new Error(message), { status });
   assert.equal(isGatewayRefusal(withStatus(409)), true);
   assert.equal(isGatewayRefusal(withStatus(429)), true);
   assert.equal(isGatewayRefusal(withStatus(503)), true);
   assert.equal(isGatewayRefusal(new TypeError('Failed to fetch')), true);
   assert.equal(isGatewayRefusal(withStatus(404)), false);
   assert.equal(isGatewayRefusal(withStatus(500)), false);
-  // An error the page raised itself, or an unreadable answer, is not a fetch that got no answer.
+  // An error the page raised itself, or an answer it could not read, is not a fetch that got no answer.
   assert.equal(isGatewayRefusal(new Error('offline')), false);
   assert.equal(isGatewayRefusal(new SyntaxError('Unexpected token')), false);
   assert.equal(isGatewayRefusal(null), false);
+});
+
+// A 400 is also what the gateway answers for one chat alone, so it ends a run only when it says the session is not running.
+test('a 400 ends a run only when it says the session is not active or not started', () => {
+  const withStatus = (message: string) => Object.assign(new Error(message), { status: 400 });
+  assert.equal(isGatewayRefusal(withStatus("Session 's1' is not active. Start the session first.")), true);
+  assert.equal(isGatewayRefusal(withStatus('Session is not started')), true);
+  assert.equal(isGatewayRefusal(withStatus('SESSION IS NOT STARTED')), true);
+  assert.equal(isGatewayRefusal(withStatus('Message sending blocked by plugin')), false);
+  assert.equal(isGatewayRefusal(withStatus('The body failed validation')), false);
+  assert.equal(isGatewayRefusal(withStatus('Contact is not active on WhatsApp')), false);
+  assert.equal(isGatewayRefusal(withStatus('')), false);
+  assert.equal(isGatewayRefusal(Object.assign(new Error('Session is not started'), { status: 404 })), false);
 });
