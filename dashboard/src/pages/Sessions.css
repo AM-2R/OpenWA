@@ -678,9 +678,15 @@
 /* Same amber token as the transient states above — a literal here was the only pill not on a theme
    variable, and it lost contrast on the dark card. The heavier tint is what separates "needs a human"
    from the in-progress amber, since the two must not read alike. */
-.sessions-page .status-pill.action_required,
-.sessions-page .status-badge.action_required {
+.sessions-page .status-pill.action_required {
   background: rgba(245, 158, 11, 0.22);
+  color: var(--warning-text);
+}
+
+/* The detail badge spells the status out beside its own label, so it takes the 10 percent tint of the other
+   badges: --warning-text is 4.76:1 on it, 4.34:1 on the pill's 22 percent. */
+.sessions-page .status-badge.action_required {
+  background: rgba(245, 158, 11, 0.1);
   color: var(--warning-text);
 }
 

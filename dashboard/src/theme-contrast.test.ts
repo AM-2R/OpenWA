@@ -132,6 +132,25 @@ test('the action required pill clears 4.5:1 on its tint in the dark theme, with 
   }
 });
 
+// The detail modal repeats the status as a badge beside its own "Status" label. The 22 percent tint the card pill
+// uses leaves --warning-text at 4.34:1 on white there, so the badge takes the 10 percent tint every other
+// status badge has.
+test('the action required badge in the session details clears 4.5:1 on its tint in every theme', () => {
+  const rule =
+    /\.sessions-page \.status-badge\.action_required\s*\{[^}]*background:\s*rgba\(245,\s*158,\s*11,\s*([\d.]+)\)/.exec(
+      read('Sessions.css'),
+    );
+  assert.ok(rule, 'Sessions.css has no amber tint for the action required badge');
+  for (const anchor of [LIGHT, ...DARKS]) {
+    const block = blockAfter(anchor);
+    for (const surface of ['--bg-white', '--bg-light']) {
+      const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--warning')), Number(rule[1]), rgb(hexOf(block, surface)));
+      const ratio = contrast(rgb(hexOf(block, '--warning-text')), tint);
+      assert.ok(ratio >= 4.5, `${anchor} badge text on ${rule[1]} over ${surface} is ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
 test('the search match and the Number Checker highlight pill clear AA in both themes', () => {
   const search = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/GlobalSearch.css'), 'utf8');
   const mark =
