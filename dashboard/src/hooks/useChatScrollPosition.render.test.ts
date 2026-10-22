@@ -687,6 +687,45 @@ test('a thread pinned to the bottom stays there as media decodes, until the read
   }
 });
 
+// A chat comes back at its saved spot while its media has not decoded: the short thread clamps the write, so it reads
+// as at the bottom. A live message announced in that window is not the reader following the conversation.
+test('a live message in the decode window of a restored chat does not erase the saved spot', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the reader's spot in A
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+
+    g.height = 2000; // back to A before its media has decoded: the write clamps
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 1600);
+
+    hook().onMessageAppended('incoming');
+    g.height = 2070;
+    rerender(createElement(Probe, { chatId: 'A' })); // its row commits
+
+    g.height = 4670; // the media decodes and the saved spot is reached
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'the decode did not return the reader to the saved spot');
+    fireEvent.scroll(el);
+
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader leaves again without scrolling
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, 3000, `A reopened at ${el.scrollTop}, not at the spot the reader was reading`);
+  } finally {
+    restore();
+  }
+});
+
 // ── Older pages landing under a position the memory holds ────────────────────
 
 // The echo of a send from the page can reach it after the composer reconciled its placeholder: the cache write
