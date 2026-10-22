@@ -181,6 +181,25 @@ test('a wildcard COPY source is expanded in its own directory, and only its matc
   assert.doesNotMatch(run.out, /rejects 'sub\/other\.txt'/);
 });
 
+test('? and [..] in a COPY source are wildcards of the file name', () => {
+  const files = { 'sub/pkg-a.txt': '', 'sub/pkg-b.txt': '', 'sub/pkg-ab.txt': '', 'sub/pkg-c.txt': '' };
+  // A source, the rules that drop two of the files, the one the source reaches and the one it does not.
+  const cases = [
+    ['sub/pkg-?.txt', ['sub/pkg-b.txt', 'sub/pkg-ab.txt'], 'sub/pkg-b.txt', 'sub/pkg-ab.txt'],
+    ['sub/pkg-[ab].txt', ['sub/pkg-b.txt', 'sub/pkg-c.txt'], 'sub/pkg-b.txt', 'sub/pkg-c.txt'],
+  ];
+  for (const [source, rules, reached, missed] of cases) {
+    const run = runGate({
+      ...files,
+      Dockerfile: `COPY ${source} ./\n`,
+      '.dockerignore': `${REAL_DOCKERIGNORE}\n${rules.join('\n')}\n`,
+    });
+    assert.equal(run.status, 1, `${source}: ${run.out}`);
+    assert.match(run.out, new RegExp(`rejects '${reached.replaceAll('.', '\\.')}'`), `${source}: ${run.out}`);
+    assert.doesNotMatch(run.out, new RegExp(`rejects '${missed.replaceAll('.', '\\.')}'`), `${source}: ${run.out}`);
+  }
+});
+
 test('a scheme in capitals is not a URL to BuildKit, so an ADD of it names a context path', () => {
   // Real BuildKit fetches ADD https://host/x.tgz, and looks for the file HTTPS:/host/x.tgz in the context for
   // ADD HTTPS://host/x.tgz, as it does for any scheme that is not in lower case.
@@ -221,6 +240,7 @@ test('only the context files a COPY or ADD reads are build inputs', () => {
         'ADD git@example.com:org/repo.git /opt/repo',
         'COPY . .',
         'COPY ./ ./',
+        'COPY / ./',
         '',
       ].join('\n'),
     ),
