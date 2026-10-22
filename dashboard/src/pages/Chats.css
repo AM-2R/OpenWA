@@ -774,20 +774,20 @@
 
 .chats-page .message-status-icon.read {
   /* The WhatsApp blue is 2.13:1 on the outgoing bubble, and these checks are TEXT, not an icon.
-     Darkened to clear 4.5:1 there and on white; the status is also spelled out in aria-label/title,
+     Darkened to clear 4.5:1 there (4.62:1) and on white; the status is also spelled out in aria-label/title,
      since delivered and read otherwise differ only by this colour. */
   color: #337592;
 }
 
-/* That blue is for the light bubble (1.56:1 on the dark green one). On the dark bubble the info blue clears
-   the 3:1 a status glyph needs; the status is also spelled out in aria-label/title. */
+/* That blue is for the light bubble (4.62:1 on it, 1.56:1 on the dark green one). On the dark bubble the read tick
+   takes --read-tick, 4.78:1 there where --info is 3.14:1; the status is also spelled out in aria-label/title. */
 [data-theme='dark'] .chats-page .message-status-icon.read {
-  color: var(--info);
+  color: var(--read-tick);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .chats-page .message-status-icon.read {
-    color: var(--info);
+    color: var(--read-tick);
   }
 }
 

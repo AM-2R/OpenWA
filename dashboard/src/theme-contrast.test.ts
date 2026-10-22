@@ -87,6 +87,10 @@ test('time stamps and read ticks on the outgoing bubble clear their ratios in bo
   assert.match(chats, /\.message-bubble\.outgoing \.message-time\s*\{\s*color:\s*var\(--text-secondary\)/);
   const secondaryLight = contrast(rgb(hexOf(blockAfter(LIGHT), '--text-secondary')), light);
   assert.ok(secondaryLight >= 4.5, `light time stamp ${secondaryLight.toFixed(2)}:1`);
+  const lightTick = /\.chats-page \.message-status-icon\.read\s*\{[^}]*?color:\s*(#[0-9a-f]{6})/i.exec(chats);
+  assert.ok(lightTick, 'Chats.css has no light read tick colour');
+  const tickLight = contrast(rgb(lightTick[1]), light);
+  assert.ok(tickLight >= 4.5, `light read tick ${tickLight.toFixed(2)}:1`);
   // The dark bubble and its read tick are written twice: once under [data-theme='dark'], once for the system theme.
   const escape = (text: string): string => text.replace(/[[\]().]/g, '\\$&');
   for (const [anchor, prefix] of [
@@ -100,14 +104,16 @@ test('time stamps and read ticks on the outgoing bubble clear their ratios in bo
     assert.ok(bubble, `Chats.css has no outgoing bubble rule under ${prefix}`);
     assert.match(
       chats,
-      new RegExp(`${escape(prefix)}\\.chats-page \\.message-status-icon\\.read\\s*\\{\\s*color:\\s*var\\(--info\\)`),
+      new RegExp(
+        `${escape(prefix)}\\.chats-page \\.message-status-icon\\.read\\s*\\{\\s*color:\\s*var\\(--read-tick\\)`,
+      ),
       `Chats.css has no read tick rule under ${prefix}`,
     );
     const dark = rgb(bubble[1]);
     const secondary = contrast(rgb(hexOf(blockAfter(anchor), '--text-secondary')), dark);
     assert.ok(secondary >= 4.5, `${anchor} time stamp ${secondary.toFixed(2)}:1`);
-    const tick = contrast(rgb(hexOf(blockAfter(anchor), '--info')), dark);
-    assert.ok(tick >= 3, `${anchor} read tick ${tick.toFixed(2)}:1 (a status glyph needs 3:1)`);
+    const tick = contrast(rgb(hexOf(blockAfter(anchor), '--read-tick')), dark);
+    assert.ok(tick >= 4.5, `${anchor} read tick ${tick.toFixed(2)}:1 (the glyph is held to the 4.5:1 of text)`);
   }
 });
 
