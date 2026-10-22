@@ -129,6 +129,23 @@ test('comparePair flags a primitive widened to a union of primitives', () => {
   assert.ok(diffs.some(d => d.includes('"count": hand union(int,str), contract number')));
 });
 
+test('comparePair with namesOnly keeps the field names and drops optionality and token', () => {
+  // The excluded Go and Java pairs keep a deliberately looser type: that stays accepted, a renamed field does not.
+  const loose = {
+    id: { optional: true, token: 'number' },
+    direction: { optional: false, token: 'string' },
+    count: { optional: false, token: 'string' },
+    name: { optional: false, token: 'string' },
+  };
+  assert.deepEqual(comparePair('Sample', loose, 'SampleDto', schemas.SampleDto, schemas, true, true), []);
+  assert.ok(comparePair('Sample', loose, 'SampleDto', schemas.SampleDto, schemas, true).length > 0);
+  const renamed = { ...loose, nmae: loose.name };
+  delete renamed.name;
+  const diffs = comparePair('Sample', renamed, 'SampleDto', schemas.SampleDto, schemas, true, true);
+  assert.equal(diffs.length, 2);
+  assert.ok(diffs[0].startsWith('hand has "nmae"') && diffs[1].startsWith('contract has "name"'));
+});
+
 test('parseObjectToken splits nested object tokens without losing members', () => {
   const members = parseObjectToken('object(id:string,sub:object(a:number,b?:boolean),tail:string)');
   assert.deepEqual(Object.keys(members), ['id', 'sub', 'tail']);
@@ -526,8 +543,16 @@ const gateRoot = fileURLToPath(new URL('..', import.meta.url));
  * sources linked in. A hook receives the original text (the parsed contract for `contract`) and returns the
  * one to use. Every file is read with LF endings, so a hook anchors the same text on any checkout, and
  * written with `lineEnding`: '\r\n' also copies the SDK sources the gate reads, as a Windows checkout has them.
+ * `sdk` maps a path under the repository (`sdk/go/types_group.go`) to such a hook for one SDK source, which
+ * also makes the run copy the SDK sources instead of linking them.
  */
-function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s => s, lineEnding = '\n' } = {}) {
+function runGateOnCopy({
+  script = s => s,
+  contract = c => c,
+  dashboardTypes = s => s,
+  lineEnding = '\n',
+  sdk = {},
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'contract-shapes-copy-'));
   const read = (...path) => readFileSync(join(gateRoot, ...path), 'utf8').replace(/\r\n/g, '\n');
   const write = (path, text) => {
@@ -535,7 +560,7 @@ function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s 
     writeFileSync(join(dir, ...path), text.replace(/\n/g, lineEnding));
   };
   try {
-    if (lineEnding === '\n') {
+    if (lineEnding === '\n' && !Object.keys(sdk).length) {
       symlinkSync(join(gateRoot, 'sdk'), join(dir, 'sdk'));
     } else {
       const modelDir = ['sdk', 'java', 'src', 'main', 'java', 'com', 'rmyndharis', 'openwa', 'model'];
@@ -550,7 +575,13 @@ function runGateOnCopy({ script = s => s, contract = c => c, dashboardTypes = s 
           .filter(f => f.endsWith('.java'))
           .map(f => [...modelDir, f]),
       ];
-      for (const path of sources) write(path, read(...path));
+      for (const path of sources) write(path, (sdk[path.join('/')] ?? (text => text))(read(...path)));
+      for (const path of Object.keys(sdk)) {
+        assert.ok(
+          sources.some(s => s.join('/') === path),
+          `${path} is not an SDK source the gate reads`,
+        );
+      }
     }
     write(['scripts', 'check-contract-shapes.mjs'], script(read('scripts', 'check-contract-shapes.mjs')));
     write(
@@ -634,6 +665,82 @@ test('a schema that only the dashboard compares, or only an excluded pair holds,
     excludedOnly.output,
     /MembershipRequestActionDto is sent or returned by the SDKs but no client compares it/,
   );
+});
+
+const javaModel = 'sdk/java/src/main/java/com/rmyndharis/openwa/model';
+
+test('an excluded pair with a looser field type is still compared by field name', () => {
+  // Each pair keeps a plain string (or a pointer) where the contract is stricter, so it is excluded from the
+  // full comparison. Renaming one wire field in the hand type must still fail the run, naming the pair.
+  const rename = (from, to) => text => editSource(text, from, to);
+  const cases = [
+    ['sdk/go/types_contact.go', 'ContactRecord ↔ ContactDto', 'json:"isBlocked"', 'json:"isBlockedd"', 'isBlockedd'],
+    [
+      'sdk/go/types_group.go',
+      'GroupPictureResponse ↔ GroupPictureResponseDto',
+      'URL string `json:"url"`',
+      'URL string `json:"uri"`',
+      'uri',
+    ],
+    [
+      'sdk/go/types_group.go',
+      'GroupSettings ↔ GroupSettingsResponseDto',
+      'MemberAddMode *string `json:"memberAddMode,omitempty"`',
+      'MemberAddMode *string `json:"memberAddmode,omitempty"`',
+      'memberAddmode',
+    ],
+    [
+      'sdk/go/types_status.go',
+      'StatusRecord ↔ StatusDto',
+      'json:"backgroundColor,omitempty"',
+      'json:"backgroundColour,omitempty"',
+      'backgroundColour',
+    ],
+    [
+      'sdk/go/types_misc.go',
+      'AuthValidateResponse ↔ ValidateApiKeyResponseDto',
+      'json:"engineType,omitempty"',
+      'json:"engine,omitempty"',
+      'engine',
+    ],
+    [
+      `${javaModel}/GroupSettings.java`,
+      'GroupSettings ↔ GroupSettingsResponseDto',
+      'String memberAddMode) {',
+      'String memberAddModes) {',
+      'memberAddModes',
+    ],
+    [
+      `${javaModel}/StatusRecord.java`,
+      'StatusRecord ↔ StatusDto',
+      '    String backgroundColor,',
+      '    String backgroundColour,',
+      'backgroundColour',
+    ],
+    [
+      `${javaModel}/AuthValidateResponse.java`,
+      'AuthValidateResponse ↔ ValidateApiKeyResponseDto',
+      'String engineType,',
+      'String engine,',
+      'engine',
+    ],
+  ];
+  for (const [path, pair, from, to, renamed] of cases) {
+    const run = runGateOnCopy({ sdk: { [path]: rename(from, to) } });
+    assert.equal(run.status, 1, `${path}: ${run.output}`);
+    assert.ok(run.output.includes(`${pair}:`), `${path} did not fail on ${pair}: ${run.output}`);
+    assert.match(run.output, new RegExp(`hand has "${renamed}"`), path);
+  }
+});
+
+test('the gate refuses a NAMES_ONLY entry whose pair is not excluded', () => {
+  // An entry left behind after a pair is retyped and un-excluded would keep the weaker name-only comparison.
+  const run = runGateOnCopy({
+    script: source =>
+      editSource(source, "  'sdk/java': ['GroupSettings',", "  'sdk/java': ['ContactRecord', 'GroupSettings',"),
+  });
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.output, /ContactRecord is in NAMES_ONLY but not in EXCLUDED/);
 });
 
 test('the gate and its CLI cases give the same verdicts on a CRLF checkout', () => {

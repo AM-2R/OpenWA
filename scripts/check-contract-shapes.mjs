@@ -44,6 +44,14 @@
  * the goal is to shrink it to zero (usually by tightening the hand type; where the CONTRACT
  * under-describes reality, fix the backend DTO decorator, regenerate, and un-exclude).
  *
+ * An excluded pair listed in NAMES_ONLY is still compared by field NAME in both directions (not by
+ * optionality or token), so a renamed or dropped field in it fails the run. Those are the Go and Java
+ * response types whose field TYPES are deliberately looser than the contract: a plain string where the
+ * contract lists a vocabulary keeps a value the server adds later decodable and callers' string
+ * handling compiling, and a defined type or a changed pointer would be a source break for a
+ * published client. Only a pair whose every other field conforms belongs there; one that cannot be
+ * read as wire fields at all (a hand-written MarshalJSON, a client-side flag) stays whole-excluded.
+ *
  * A mapping only gates the types somebody remembered to list, so a new DTO used to ship ungated by
  * default. The coverage check closes that: every schema an exposed operation sends or returns
  * (request bodies and 2xx responses, nested schemas included, the resources sdk/README.md declares
@@ -264,6 +272,15 @@ const EXCLUDED = {
     Session:
       'BY DESIGN, not drift: the wire always carries engineLoaded, but this client clears it to "unknown" after a websocket status event so the action helpers fall back to the status set — the type models client state, not the wire',
   },
+};
+
+/**
+ * Excluded pairs that are still compared by field name (see the header). Each entry must also be in
+ * EXCLUDED: the run fails on one that is not, so a retyped pair cannot keep the weaker comparison.
+ */
+const NAMES_ONLY = {
+  'sdk/go': ['ContactRecord', 'GroupPictureResponse', 'GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
+  'sdk/java': ['GroupSettings', 'StatusRecord', 'AuthValidateResponse'],
 };
 
 const ACK_SHAPE =
@@ -908,8 +925,17 @@ function isSimpleToken(token) {
 /**
  * Compares one hand type against one schema. Returns an array of human-readable diff lines —
  * empty when the pair conforms. Exported for the spec; the CLI loop below is a thin driver.
+ * `namesOnly` keeps the field-name comparison and drops optionality and token (see NAMES_ONLY).
  */
-export function comparePair(handName, handMembers, schemaName, schema, schemas, compareOptionality = true) {
+export function comparePair(
+  handName,
+  handMembers,
+  schemaName,
+  schema,
+  schemas,
+  compareOptionality = true,
+  namesOnly = false,
+) {
   const diffs = [];
   const schemaFields = parseObjectToken(schemaToken(schema, schemas));
   for (const [field, handInfo] of Object.entries(handMembers)) {
@@ -918,6 +944,7 @@ export function comparePair(handName, handMembers, schemaName, schema, schemas, 
       diffs.push(`hand has "${field}" — contract does not`);
       continue;
     }
+    if (namesOnly) continue;
     if (compareOptionality && handInfo.optional !== sField.optional) {
       diffs.push(
         `"${field}": hand ${handInfo.optional ? 'optional' : 'required'}, contract ${sField.optional ? 'optional' : 'required'}`,
@@ -1468,6 +1495,7 @@ if (isDirectRun) {
       load: () => parseHandTypes(readFileSync(`${REPO_ROOT}${file}`, 'utf8')),
       mapping,
       excluded: EXCLUDED[file] ?? {},
+      namesOnly: NAMES_ONLY[file] ?? [],
       floor: MINIMUM_MAPPED[file],
       compareOptionality: true,
       sdk: file.startsWith('sdk/'),
@@ -1477,6 +1505,7 @@ if (isDirectRun) {
       load: () => parsePythonTypes(readFileSync(`${REPO_ROOT}sdk/python/openwa/types.py`, 'utf8')),
       mapping: PYTHON_MAPPING,
       excluded: EXCLUDED['sdk/python/openwa/types.py'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/python/openwa/types.py'] ?? [],
       floor: MINIMUM_MAPPED['sdk/python/openwa/types.py'],
       compareOptionality: true,
       sdk: true,
@@ -1486,6 +1515,7 @@ if (isDirectRun) {
       load: () => parseGoTypes(goSources()),
       mapping: GO_MAPPING,
       excluded: EXCLUDED['sdk/go'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/go'] ?? [],
       floor: MINIMUM_MAPPED['sdk/go'],
       compareOptionality: true,
       sdk: true,
@@ -1495,6 +1525,7 @@ if (isDirectRun) {
       load: () => parseJavaTypes(javaSources()),
       mapping: JAVA_MAPPING,
       excluded: EXCLUDED['sdk/java'] ?? {},
+      namesOnly: NAMES_ONLY['sdk/java'] ?? [],
       floor: MINIMUM_MAPPED['sdk/java'],
       compareOptionality: false,
       sdk: true,
@@ -1509,8 +1540,16 @@ if (isDirectRun) {
     let fileCompared = 0;
     const fileResults = [];
 
+    for (const name of client.namesOnly.filter(n => !client.excluded[n])) {
+      fileResults.push(
+        `  ${name} is in NAMES_ONLY but not in EXCLUDED: remove it, or the pair is compared by name only`,
+      );
+      failures++;
+    }
+
     for (const [handName, target] of Object.entries(client.mapping)) {
-      if (client.excluded[handName]) continue;
+      const namesOnly = Boolean(client.excluded[handName]) && client.namesOnly.includes(handName);
+      if (client.excluded[handName] && !namesOnly) continue;
       const hand = handTypes[handName];
       if (!hand) {
         fileResults.push(`  MISSING hand type ${handName} (declared in mapping but not found in ${client.label})`);
@@ -1528,7 +1567,7 @@ if (isDirectRun) {
         }
         fileCompared++;
         compared++;
-        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality);
+        const diffs = comparePair(handName, hand, schemaName, schema, schemas, client.compareOptionality, namesOnly);
         if (diffs.length) {
           fileResults.push(`  ${handName} ↔ ${schemaName}:`, ...diffs.map(d => `    ${d}`));
           failures++;
@@ -1550,7 +1589,8 @@ if (isDirectRun) {
     for (const line of fileResults) console.log(line);
     const excludedCount = Object.keys(client.excluded).length;
     if (excludedCount) {
-      console.log(`  (${excludedCount} excluded pair(s) with recorded reasons — see EXCLUDED in this script)`);
+      const byName = client.namesOnly.length ? `, ${client.namesOnly.length} of them still compared by field name` : '';
+      console.log(`  (${excludedCount} excluded pair(s) with recorded reasons, see EXCLUDED in this script${byName})`);
     }
   }
 
