@@ -32,8 +32,9 @@ export class InfraDatabaseStatusDto {
 
   @ApiPropertyOptional({
     description:
-      'Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
+      'Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
   running?: boolean;
@@ -57,8 +58,9 @@ export class InfraRedisStatusDto {
 
   @ApiPropertyOptional({
     description:
-      'Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
+      'Whether a bundled Redis container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
   running?: boolean;
@@ -111,8 +113,9 @@ export class InfraStorageStatusDto {
 
   @ApiPropertyOptional({
     description:
-      'Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False ' +
-      'for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.',
+      'Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it, beside ' +
+      "this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the " +
+      'flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.',
     example: false,
   })
   running?: boolean;

@@ -21912,7 +21912,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
+            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           }
         },
@@ -21951,7 +21951,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
+            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           }
         },
@@ -22043,7 +22043,7 @@
           },
           "running": {
             "type": "boolean",
-            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it. False for one Docker Compose created; absent when Docker is unreachable, where nothing can be seen or stopped.",
+            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           },
           "s3Available": {

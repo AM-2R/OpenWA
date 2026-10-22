@@ -742,6 +742,15 @@ The replica count stays at **1** (see 13.3 and 13.4), so the only levers availab
 single-instance deployment with its own session volume and split sessions between them. Horizontal
 `scale up` / `scale down` becomes an option only once the gaps listed at the top of this guide are closed.
 
+On one Docker daemon, the built-in datastores Dashboard > Infrastructure starts are shared, not per
+instance: their container names (`openwa-postgres`, `openwa-redis`, `openwa-minio`), their volumes and
+the `openwa-network` network are fixed, so a second instance that turns on Use Built-in attaches to the
+first instance's container and data. Let at most one instance on a daemon use them, and point the
+others at datastores of their own with their Use Built-in toggles off. A restart from the dashboard
+stops a bundled container only when that instance's own configuration uses it or set it up (its
+`*_BUILTIN` flag), so an instance that never chose the built-in and dials its own servers leaves the
+other one's containers running.
+
 | Metric                            | Threshold  | Action                                                                                                     |
 | --------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
 | CPU > 80%                         | 5 minutes  | Raise `limits.cpu` (StatefulSet); the Swarm block above declares no CPU constraint, so add one             |

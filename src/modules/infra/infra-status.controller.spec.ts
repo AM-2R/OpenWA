@@ -397,8 +397,22 @@ describe('InfraStatusController.getStatus built-in fallback reads the flag only 
 });
 
 // `running` reports a bundled container OpenWA created that is up, apart from whether the service uses it: the page
-// stops one whose host the environment pins elsewhere. One Docker Compose created belongs to the deployment.
+// stops one whose host the environment pins elsewhere. One Docker Compose created belongs to the deployment, and one
+// beside a configuration that never chose the built-in service belongs to no setup of this instance (a second
+// instance on the same daemon sees the first one's containers under the same names).
 describe('InfraStatusController.getStatus running bundled containers', () => {
+  const FLAGS_TRUE = 'POSTGRES_BUILTIN=true\nREDIS_BUILTIN=true\nMINIO_BUILTIN=true\n';
+  const withFile = (contents: string | null) => {
+    (fs.existsSync as jest.Mock).mockReturnValue(contents !== null);
+    (fs.readFileSync as jest.Mock).mockReturnValue(contents ?? '');
+  };
+  beforeEach(() => withFile(FLAGS_TRUE));
+  afterEach(() => {
+    withFile(null);
+    recordPinnedEnvKeys({});
+    for (const flag of ['POSTGRES_BUILTIN', 'REDIS_BUILTIN', 'MINIO_BUILTIN']) delete process.env[flag];
+  });
+
   const build = (containers: Record<'database' | 'cache' | 'storage', false | 'compose' | 'openwa'> | null) => {
     const values: Record<string, unknown> = {
       'engine.type': 'baileys',
@@ -444,6 +458,26 @@ describe('InfraStatusController.getStatus running bundled containers', () => {
 
     expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
     expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([false, true, false]);
+  });
+
+  it.each([
+    ['a first-boot file', 'POSTGRES_BUILTIN=false\nREDIS_BUILTIN=false\nMINIO_BUILTIN=false\n'],
+    ['no saved file', null],
+  ])('reports none of the three running beside %s that never chose them', async (_label, contents) => {
+    withFile(contents);
+    const status = await build({ database: 'openwa', cache: 'openwa', storage: 'openwa' }).getStatus();
+
+    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+  });
+
+  it('reads the flag the environment pins over the saved one', async () => {
+    withFile('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\nMINIO_BUILTIN=false\n');
+    process.env.POSTGRES_BUILTIN = 'true';
+    process.env.REDIS_BUILTIN = 'false';
+    recordPinnedEnvKeys({ POSTGRES_BUILTIN: 'true', REDIS_BUILTIN: 'false' });
+    const status = await build({ database: 'openwa', cache: 'openwa', storage: 'openwa' }).getStatus();
+
+    expect([status.database.running, status.redis.running, status.storage.running]).toEqual([true, false, false]);
   });
 
   it('reports nothing running when no bundled container is up', async () => {

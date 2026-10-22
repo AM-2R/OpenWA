@@ -198,6 +198,8 @@ export class InfraStatusController {
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
     // pointed at the bundled service. Fall back to the saved *_BUILTIN flag (the environment's first) when
     // Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
+    // `running` names a container OpenWA created beside this instance's own built-in flag only: the container names
+    // are fixed per daemon, so a second instance there sees the first one's containers, which are not its to stop.
     const s3Endpoint = this.configService.get<string>('storage.s3.endpoint');
     const running = this.dockerService.isDockerAvailable()
       ? await this.dockerService.getRunningBuiltinServices()
@@ -234,7 +236,7 @@ export class InfraStatusController {
         type: dbType,
         host: dbHost,
         builtIn: dbBuiltIn,
-        ...(running ? { running: running.database === 'openwa' } : {}),
+        ...(running ? { running: running.database === 'openwa' && savedBuiltin.database } : {}),
       },
       redis: {
         enabled: redisEnabled,
@@ -242,7 +244,7 @@ export class InfraStatusController {
         host: redisHost,
         port: redisPort,
         builtIn: redisBuiltIn,
-        ...(running ? { running: running.cache === 'openwa' } : {}),
+        ...(running ? { running: running.cache === 'openwa' && savedBuiltin.cache } : {}),
       },
       queue: {
         enabled: queueEnabled,
@@ -255,7 +257,7 @@ export class InfraStatusController {
         // The endpoint this process dials: a bundled MinIO that is stopped still names it, an external store does not.
         ...(storageType === 's3' && s3Endpoint ? { endpoint: s3Endpoint } : {}),
         builtIn: storageBuiltIn,
-        ...(running ? { running: running.storage === 'openwa' } : {}),
+        ...(running ? { running: running.storage === 'openwa' && savedBuiltin.storage } : {}),
         ...(storageType === 's3' ? { s3Available } : {}),
       },
       engine: {
