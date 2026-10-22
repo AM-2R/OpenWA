@@ -1537,6 +1537,65 @@ test("a dismissed contact save's late answer leaves the next save dialog open an
   assert.ok(screen.queryByRole('dialog'), "the first save's answer closed the next dialog");
 });
 
+test("a dismissed block's late answer leaves the Leave dialog that is out busy, so it is not sent twice", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  const releaseBlock = hold('block');
+  renderPage();
+  await screen.findByText('Team');
+  pickRowAction('Alice', 'Block contact');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Block contact' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.path.endsWith('/block'))));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+
+  const releaseLeave = hold('leave');
+  pickRowAction('Team', 'Leave group');
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Leave group' }));
+  await waitFor(() => assert.ok(fetchCalls.some(c => c.path.endsWith('/leave'))));
+  assert.equal(confirmButton(dialog).disabled, true, 'the Leave dialog is not busy while its request is out');
+
+  releaseBlock();
+  await settle();
+  await settle();
+  assert.equal(confirmButton(dialog).disabled, true, "the earlier block's answer made the Leave dialog sendable again");
+  fireEvent.click(confirmButton(dialog));
+  await settle();
+  assert.equal(fetchCalls.filter(c => c.path.endsWith('/leave')).length, 1, 'Leave was sent twice');
+  releaseLeave();
+  await settle();
+});
+
+test("a dismissed mute's late answer leaves the mute dialog that is out busy", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listGroup = true;
+  const releaseFirst = hold('mute');
+  renderPage();
+  await screen.findByText('Team');
+  pickRowAction('Alice', 'Mute notifications');
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.equal(fetchCalls.filter(c => c.path.endsWith('/chats/mute')).length, 1));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+
+  // The second mute gets a gate of its own, so the first can answer while the second is still out.
+  gates.delete('mute');
+  const releaseSecond = hold('mute');
+  pickRowAction('Team', 'Mute notifications');
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.equal(fetchCalls.filter(c => c.path.endsWith('/chats/mute')).length, 2));
+  assert.equal(confirmButton(dialog).disabled, true, 'the second mute dialog is not busy while its request is out');
+
+  releaseFirst();
+  await settle();
+  await settle();
+  assert.equal(confirmButton(dialog).disabled, true, "the first mute's answer made the second dialog sendable again");
+  releaseSecond();
+  await settle();
+});
+
 test('a clear or delete the engine declines keeps the chat and its dialog, and says it failed', async () => {
   const { screen, fireEvent, within } = rtl;
   declineWrites = true;
