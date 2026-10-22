@@ -735,7 +735,6 @@ export class InfraDataService {
     // silently, which is strictly worse than the teardown the suspension prevents.
     try {
       const queryRunner = this.dataDataSource.createQueryRunner();
-      await queryRunner.connect();
 
       // Refuse BEFORE a single row is deleted, not after. On better-sqlite3 every query runner is a
       // driver SINGLETON, so if anything else already holds a transaction on this DataSource — a
@@ -766,12 +765,20 @@ export class InfraDataService {
       };
       try {
         refuseNestedTransaction();
-        // Drained before BEGIN: on SQLite a write still in flight would otherwise join this transaction.
-        const existing = (await queryRunner.query('SELECT id FROM sessions')) as Array<{ id: string }>;
+        // Drained before BEGIN: on SQLite a write still in flight would otherwise join this transaction. And
+        // before this runner takes a pooled client on PostgreSQL, where the write may still need one: with a
+        // pool of one it would wait for the import while the import waits for it. So the ids are read on a
+        // client that goes back at once there; on SQLite this runner is the one connection anyway.
+        const existing = await this.dataDataSource.query<Array<{ id: string }>>(
+          'SELECT id FROM sessions',
+          [],
+          sharesOneConnection ? queryRunner : undefined,
+        );
         retired = existing
           .filter(({ id }) => !importedSessionIds.has(id) && !leftRunning.has(id))
           .map(({ id }) => ({ id, writes: closeSessionWrites(this.dataDataSource, id) }));
         await Promise.all(retired.map(({ writes }) => writes.drain()));
+        await queryRunner.connect();
         // Again after the drain's await: BEGIN must follow the check with nothing in between.
         refuseNestedTransaction();
         await queryRunner.startTransaction();
