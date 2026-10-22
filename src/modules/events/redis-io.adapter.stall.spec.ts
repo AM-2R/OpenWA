@@ -257,15 +257,34 @@ describe('RedisIoAdapter publish client against a Redis that stops answering', (
       .filter(line => line.includes(text));
 
   // Every frame of a burst raised in one tick is on the queue before the first reply can be read, however healthy the
-  // peer is, so the depth of the queue alone says nothing about a Redis that is behind.
+  // peer is, so the depth of the queue alone says nothing about a Redis that is behind. The clock is moved by hand, and
+  // only between publishes, so the test does not depend on how long the loop takes on the machine running it.
   it('publishes every frame of a burst larger than the cap raised in one tick to a peer that answers', async () => {
     const burst = WS_REDIS_MAX_UNANSWERED + 3000;
+    jest.spyOn(performance, 'now').mockReturnValue(5_000);
 
     broadcast(burst);
 
     expect(await waitUntil(() => redis.published.length === burst && held() === 0, 15_000)).toBe(true);
     expect(warned('fan-out frames are dropped')).toHaveLength(0);
     expect(warned('were dropped')).toHaveLength(0);
+  }, 30_000);
+
+  // The limit of that guarantee: a burst that takes longer than a command is given to raise, past its half-cap mark, looks
+  // like a backlog, however healthy the peer. A synchronous loop cannot advance the age, so the time is simulated.
+  it('cuts a burst at the cap when raising it past half the cap takes longer than a command is given', async () => {
+    const burst = WS_REDIS_MAX_UNANSWERED + 3000;
+    const perFrameMs = (WS_REDIS_COMMAND_TIMEOUT_MS * 2) / (WS_REDIS_MAX_UNANSWERED / 2);
+    let clock = 5_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => (clock += perFrameMs));
+
+    broadcast(burst);
+
+    expect(await waitUntil(() => redis.published.length >= WS_REDIS_MAX_UNANSWERED && held() === 0, 15_000)).toBe(true);
+    expect(redis.published.length).toBe(WS_REDIS_MAX_UNANSWERED);
+    const started = warned('fan-out frames are dropped');
+    expect(started).toHaveLength(1);
+    expect(started[0]).toContain(`${WS_REDIS_MAX_UNANSWERED} fan-out frames unanswered`);
   }, 30_000);
 
   // A Redis that answers, but slower than events are raised, resets the socket timer with every reply, so the socket
