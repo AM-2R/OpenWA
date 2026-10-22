@@ -917,7 +917,7 @@ export function Sessions() {
                       {requestingPairing ? (
                         <>
                           <Loader2 className="animate-spin" size={16} />
-                          <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
+                          <span style={{ marginInlineStart: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
                         </>
                       ) : (
                         t('sessions.pairing.generateButton')

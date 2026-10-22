@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import ts from 'typescript';
 
 // i18n/index.ts sets <html dir="rtl"> for Hebrew and Arabic. A physical left or right side in a
 // margin, padding, border, corner radius or text alignment stays put when the layout mirrors, so a
@@ -121,4 +122,55 @@ test('the side detector reads single-side properties and shorthands', () => {
   ];
   for (const [property, value] of physical) assert.ok(hidesSide(property, value), `${property}: ${value}`);
   for (const [property, value] of neutral) assert.ok(!hidesSide(property, value), `${property}: ${value}`);
+});
+
+// The stylesheets are not the only place a side is written: an inline style object does the same, and
+// <span style={{ marginLeft: '0.5rem' }}> lands on the wrong edge of its label under RTL.
+const INLINE_SIDE =
+  /^(?:(?:margin|padding)(?:Left|Right)|border(?:Left|Right)(?:Width|Style|Color)?|border(?:Top|Bottom)(?:Left|Right)Radius)$/;
+
+function inlineSides(source: string, name = 'inline.tsx'): string[] {
+  const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const found: string[] = [];
+  const walk = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.parent)) {
+      const key = node.name.getText(file).replace(/^['"]|['"]$/g, '');
+      const value = ts.isStringLiteralLike(node.initializer) ? node.initializer.text : '';
+      if (INLINE_SIDE.test(key) || (key === 'textAlign' && /^(?:left|right)$/.test(value)))
+        found.push(
+          `${name}:${file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1}: ${node.getText(file)}`,
+        );
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(file);
+  return found;
+}
+
+function sources(dir = SRC): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return sources(full);
+    return entry.name.endsWith('.tsx') ? [full] : [];
+  });
+}
+
+test('no inline style names a physical side', () => {
+  const files = sources();
+  assert.ok(files.length >= 20, `only ${files.length} components found`);
+  assert.deepEqual(
+    files.flatMap(full => inlineSides(readFileSync(full, 'utf8'), full.slice(SRC.length + 1))),
+    [],
+  );
+});
+
+test('the inline side detector reads Left and Right keys and leaves logical ones alone', () => {
+  assert.equal(inlineSides(`const a = <i style={{ marginLeft: '0.5rem' }} />;`).length, 1);
+  assert.equal(inlineSides(`const a = { paddingRight: 4, 'borderLeft': '1px solid red' };`).length, 2);
+  assert.equal(inlineSides(`const a = { borderTopLeftRadius: 4, textAlign: 'right' };`).length, 2);
+  assert.equal(
+    inlineSides(`const a = { marginInlineStart: '0.5rem', textAlign: 'start', margin: '0 auto' };`).length,
+    0,
+  );
+  assert.equal(inlineSides(`const chart = { margin: { top: 5, right: 30, left: 20 } };`).length, 0);
 });
