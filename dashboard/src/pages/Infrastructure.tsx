@@ -220,9 +220,11 @@ export function Infrastructure() {
 
   // A switch between a bundled container and an external service that was saved and not restarted for. The
   // toggle shows what was saved, so the note names what runs. It needs the same service running and saved: a
-  // pending type change has its own note, and a flag says nothing about a service that is not running.
-  const builtInNote = (sameService: boolean, running: boolean, saved: boolean) =>
-    sameService && !configSave.saving && running !== saved ? (
+  // pending type change has its own note, and a flag says nothing about a service that is not running. A saved
+  // built-in choice switches nothing while the server already dials the bundled host: its container is only
+  // stopped, and the restart starts it again.
+  const builtInNote = (sameService: boolean, running: boolean, saved: boolean, dialsBundled: boolean) =>
+    sameService && !configSave.saving && running !== saved && !(saved && dialsBundled) ? (
       <p className="env-pin-note">
         <AlertTriangle size={14} />{' '}
         {t(saved ? 'infrastructure.pendingBuiltInNote' : 'infrastructure.pendingExternalNote')}
@@ -307,6 +309,7 @@ export function Infrastructure() {
                 infraStatus.database.type === 'postgres' && savedConfig.database.type === 'postgres',
                 infraStatus.database.builtIn,
                 savedBuiltIn(savedConfig.database, infraStatus.database.builtIn),
+                infraStatus.database.host === 'postgres',
               )}
               {pinNote('DATABASE_HOST')}
 
@@ -611,6 +614,7 @@ export function Infrastructure() {
                 infraStatus.redis.enabled && savedConfig.redis.enabled,
                 infraStatus.redis.builtIn,
                 savedBuiltIn(savedConfig.redis, infraStatus.redis.builtIn),
+                infraStatus.redis.host === 'redis',
               )}
               {pinNote('REDIS_HOST')}
 
@@ -811,6 +815,7 @@ export function Infrastructure() {
                   infraStatus.storage.type === 's3' && savedConfig.storage.type === 's3',
                   infraStatus.storage.builtIn,
                   savedBuiltIn(savedConfig.storage, infraStatus.storage.builtIn),
+                  infraStatus.storage.endpoint === 'http://minio:9000',
                 )}
                 {pinNote('S3_ENDPOINT')}
 

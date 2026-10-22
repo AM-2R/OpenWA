@@ -1092,6 +1092,22 @@ test('a saved built-in database and storage whose containers are stopped warn of
   });
 });
 
+// The note names what runs, and with the bundled host dialled and the container stopped that is still the built-in
+// container, which the restart starts again.
+test('a saved built-in database and storage whose containers are stopped claim no switch under the toggle', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_STOPPED, saved: SAVED_BUNDLED_HOSTS };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  assert.equal(toggleInput(container, 'Use Built-in PostgreSQL Container').checked, true);
+  assert.equal(toggleInput(container, 'Use Built-in MinIO Container').checked, true);
+  assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a switch claimed for a stopped container');
+});
+
 test('moving off a stopped bundled database and storage still warns of the switch', async () => {
   const { screen, fireEvent, within } = rtl;
   resetFetchCalls();
@@ -1423,11 +1439,15 @@ COMBOS.forEach((_, i) => {
       { combo: redis, label: 'Use Built-in Redis Container', hostKey: 'REDIS_HOST' },
       { combo: storage, label: 'Use Built-in MinIO Container', hostKey: 'S3_ENDPOINT' },
     ];
+    // A saved built-in choice switches nothing while the server already dials the bundled host, container
+    // stopped or not; only a stopped container is restarted then.
     for (const { combo, label, hostKey } of rows) {
       assert.equal(toggleInput(container, label).checked, shownMode(combo), `${label} toggle`);
       assert.equal(hostPinNoteOf(container, label), combo.pin === 'none' ? null : hostKey, `${label} pin note`);
       const note =
-        !combo.mode.builtInSet || combo.mode.builtIn === containerRuns(combo)
+        !combo.mode.builtInSet ||
+        combo.mode.builtIn === containerRuns(combo) ||
+        (combo.mode.builtIn && combo.run === 'stopped')
           ? null
           : combo.mode.builtIn
             ? PENDING_BUILT_IN_NOTE
