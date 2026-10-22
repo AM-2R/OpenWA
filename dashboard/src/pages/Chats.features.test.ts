@@ -2086,6 +2086,50 @@ test("the contact dialog follows the address book the menu read, not the chat's 
   assert.equal((within(dialog).getByLabelText('First name') as HTMLInputElement).value, '');
 });
 
+test('a contact dialog opened before the address book lands starts from the saved name once it does', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const release = hold('contacts');
+  aliceNow.name = 'Alice Smith';
+  renderPage();
+  await screen.findByText('Alice Smith');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice Smith' }));
+  // Until the book lands the entry reads the default.
+  fireEvent.click(screen.getByRole('button', { name: /^Save contact/ }));
+  const dialog = await screen.findByRole('dialog');
+  const value = (label: string) => (within(dialog).getByLabelText(label) as HTMLInputElement).value;
+  assert.equal(dialog.querySelector('h2')?.textContent, 'Save contact');
+  assert.equal(value('First name'), '');
+
+  release();
+  await waitFor(() => assert.equal(dialog.querySelector('h2')?.textContent, 'Rename contact'));
+  assert.equal(value('First name'), 'Alice', 'the Rename dialog opened with an empty name');
+  assert.equal(value('Last name (optional)'), 'Smith');
+});
+
+for (const [field, other] of [
+  ['First name', 'Last name (optional)'],
+  ['Last name (optional)', 'First name'],
+]) {
+  test(`a ${field.toLowerCase()} typed before the address book lands is kept when it does`, async () => {
+    const { screen, fireEvent, waitFor, within } = rtl;
+    const release = hold('contacts');
+    aliceNow.name = 'Alice Smith';
+    renderPage();
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice Smith' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save contact/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(field), { target: { value: 'Zed' } });
+
+    release();
+    await waitFor(() => assert.equal(dialog.querySelector('h2')?.textContent, 'Rename contact'));
+    const value = (label: string) => (within(dialog).getByLabelText(label) as HTMLInputElement).value;
+    assert.equal(value(field), 'Zed', 'what was typed was lost');
+    // The other field keeps what it showed, so the typed and the saved name never mix.
+    assert.equal(value(other), '');
+  });
+}
+
 test("the contact dialog's Save button submits its form, so Enter in a name field saves", async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   renderPage();

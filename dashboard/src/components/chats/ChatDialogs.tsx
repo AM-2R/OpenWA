@@ -81,11 +81,14 @@ export function SaveContactDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  // A saved contact starts from its name, unless that is a push name (`~Max`) or the number itself.
+  // A saved contact starts from its name, unless that is a push name (`~Max`) or the number itself. The verdict can
+  // arrive after the dialog opened (the address book is read when the first menu opens), so until the operator types
+  // the fields follow it; the first keystroke freezes both as they stand, and nothing is replaced after that.
   const named = chat.name && !chat.name.startsWith('~') && /\D/.test(chat.name.replace(/[\s+()-]/g, ''));
   const [first, ...rest] = saved && named ? chat.name.trim().split(/\s+/) : [''];
-  const [firstName, setFirstName] = useState(first ?? '');
-  const [lastName, setLastName] = useState(rest.join(' '));
+  const [typed, setTyped] = useState<{ first: string; last: string } | null>(null);
+  const firstName = typed ? typed.first : (first ?? '');
+  const lastName = typed ? typed.last : rest.join(' ');
   const canSave = firstName.trim().length > 0 && !busy;
   // The footer's Save button belongs to the form through this id, so Enter in a name field presses it.
   const formId = useId();
@@ -126,12 +129,17 @@ export function SaveContactDialog({
             type="text"
             value={firstName}
             maxLength={NAME_MAX_LENGTH}
-            onChange={e => setFirstName(e.target.value)}
+            onChange={e => setTyped({ first: e.target.value, last: lastName })}
           />
         </label>
         <label>
           <span>{t('chats.rowActions.lastName')}</span>
-          <input type="text" value={lastName} maxLength={NAME_MAX_LENGTH} onChange={e => setLastName(e.target.value)} />
+          <input
+            type="text"
+            value={lastName}
+            maxLength={NAME_MAX_LENGTH}
+            onChange={e => setTyped({ first: firstName, last: e.target.value })}
+          />
         </label>
         <p className="text-muted">{chat.id}</p>
       </form>
