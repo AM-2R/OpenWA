@@ -118,6 +118,17 @@ const revokeEvent = (client: EventEmitter, id: string, opts: { fromMe?: boolean 
 const reactionEvent = (client: EventEmitter, id: string, reaction: string) =>
   client.emit('message_reaction', { msgId: { _serialized: id }, id: { remote: CHAT }, reaction, senderId: CHAT });
 
+/** A `message_ciphertext`: a message WhatsApp Web could not decrypt yet, shown as "Waiting for this message". */
+const ciphertextEvent = (client: EventEmitter, id: string, subtype?: string) =>
+  client.emit('message_ciphertext', {
+    id: { _serialized: id },
+    from: CHAT,
+    to: SELF,
+    body: '',
+    type: 'ciphertext',
+    rawData: { type: 'ciphertext', ...(subtype ? { subtype } : {}) },
+  });
+
 describe.each([
   ['PostgreSQL', 'postgres'],
   ['SQLite', 'better-sqlite3'],
@@ -510,6 +521,26 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
+  });
+
+  it.each([
+    ['before', true],
+    ['after', false],
+  ])('stores and announces a message decrypted in place unedited, its change raised %s it', async (_, changeFirst) => {
+    const contact = deferred<null>();
+    ciphertextEvent(client, 'A');
+    if (changeFirst) editEvent(client, 'A', 'hello');
+    client.emit('message', incoming('A', 'hello', { contact: contact.promise }));
+    if (!changeFirst) editEvent(client, 'A', 'hello');
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'hello' })]);
+    expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: 'hello' })]);
+    expect(events('message.received')[0]).not.toHaveProperty('edited');
+    expect(events('message.edited')).toEqual([]);
   });
 
   // Past the changes kept for one message they are delivered at once, before the message is handed over.
@@ -971,5 +1002,64 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     expect(order[0]).toBe('edit over at once');
     expect(order.indexOf('edit m0 kept')).toBeGreaterThan(order.indexOf('message m0'));
     expect(order).toHaveLength(TRACKED + 3);
+  });
+
+  // WhatsApp Web decrypts such a message in place: whatsapp-web.js delivers it from the update that fills in its text,
+  // which raises message_edit too, before or after the message.
+  it.each([
+    ['before', true],
+    ['after', false],
+  ])('delivers no edit for the change that decrypts a message, %s the message', async (_, changeFirst) => {
+    const { client, order, bodies } = wire();
+    ciphertextEvent(client, 'A');
+    if (changeFirst) editEvent(client, 'A', 'hello');
+    client.emit('message', incoming('A', 'hello'));
+    if (!changeFirst) editEvent(client, 'A', 'hello');
+    await flush();
+
+    expect(order).toEqual(['message A']);
+    expect(bodies).toEqual(['hello']);
+  });
+
+  it.each([
+    ['after the change that decrypted it', true],
+    ['when its decryption raised no change', false],
+  ])('delivers the edits of a message decrypted in place %s, a restore included', async (_, decryptChange) => {
+    const { client, order } = wire();
+    ciphertextEvent(client, 'A');
+    client.emit('message', incoming('A', 'hello'));
+    if (decryptChange) editEvent(client, 'A', 'hello');
+    await flush();
+    editEvent(client, 'A', 'v1');
+    editEvent(client, 'A', 'hello');
+
+    expect(order).toEqual(['message A', 'edit A v1', 'edit A hello']);
+  });
+
+  it('delivers the edits of an own message decrypted in place when its decryption raised no change', async () => {
+    const { client, order } = wire();
+    ciphertextEvent(client, 'S');
+    client.emit('message_create', incoming('S', 'hello', { fromMe: true }));
+    await flush();
+    editEvent(client, 'S', 'v1', { fromMe: true });
+
+    expect(order).toEqual(['own S', 'edit S v1']);
+  });
+
+  it('delivers the edits of a message whatsapp-web.js does not deliver once decrypted', () => {
+    const { client, order } = wire();
+    ciphertextEvent(client, 'A', 'bot_unavailable_fanout');
+    editEvent(client, 'A', 'hello');
+
+    expect(order).toEqual(['edit A hello']);
+  });
+
+  it('remembers a bounded number of messages awaiting their decryption, forgetting the oldest first', () => {
+    const { client, order } = wire();
+    for (let i = 0; i <= TRACKED; i++) ciphertextEvent(client, `c${i}`);
+    editEvent(client, 'c0', 'forgotten');
+    editEvent(client, `c${TRACKED}`, 'decrypted');
+
+    expect(order).toEqual(['edit c0 forgotten']);
   });
 });

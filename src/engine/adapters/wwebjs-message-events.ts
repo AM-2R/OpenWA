@@ -150,6 +150,32 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     deliver();
   };
 
+  // A message WhatsApp Web could not decrypt on arrival ("Waiting for this message") is decrypted in place later, and
+  // whatsapp-web.js delivers it from the update that fills in its text, which raises message_edit as well: no edit.
+  // Kept by id until that change is seen: unset until the message is delivered, then the text it was delivered with.
+  const decryptedLater = new Map<string, string | undefined>();
+
+  /** Whether a message_edit is the decryption of its message (see decryptedLater). Asked once per message. */
+  const isDecryption = (edit: EditedMessage): boolean => {
+    if (!decryptedLater.has(edit.messageId)) return false;
+    const delivered = decryptedLater.get(edit.messageId);
+    decryptedLater.delete(edit.messageId);
+    return delivered === undefined || delivered === edit.body;
+  };
+
+  const deliveredDecrypted = (message: IncomingMessage): void => {
+    if (decryptedLater.has(message.id)) decryptedLater.set(message.id, message.body);
+  };
+
+  client.on('message_ciphertext', msg => {
+    const id = readWid(msg.id);
+    // whatsapp-web.js delivers none of these once decrypted, so what changes them is left as it is.
+    const subtype = (msg.rawData as { subtype?: string } | undefined)?.subtype;
+    if (!id || subtype?.endsWith('_unavailable_fanout')) return;
+    decryptedLater.set(id, undefined);
+    if (decryptedLater.size > MAX_MESSAGES_IN_PROCESSING) decryptedLater.delete(decryptedLater.keys().next().value!);
+  });
+
   client.on('message', msg => {
     let base: IncomingMessage;
     try {
@@ -158,6 +184,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       host.logger.error('Error processing incoming message', String(error));
       return;
     }
+    deliveredDecrypted(base);
     const ticket = admit(msg, base, true);
     const processing = keepChanges(base, ticket);
     const done = handleIncoming(host, msg, base, ticket, processing);
@@ -186,6 +213,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         host.logger.error('Error processing outgoing message', String(error));
         return;
       }
+      deliveredDecrypted(incomingMessage);
       // Synchronous, as the first await comes after it.
       ticket = admit(msg, incomingMessage, !incomingMessage.isStatusBroadcast);
       processing = keepChanges(incomingMessage, ticket);
@@ -337,6 +365,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         mentionedIds: message.mentionedIds,
       });
       const payload: EditedMessage = buildEditedMessage(base, Boolean(message.hasMedia));
+      if (isDecryption(payload)) {
+        host.logger.debug('Ignoring the message_edit of a message decrypted in place', { msgId: payload.messageId });
+        return;
+      }
       afterMessage(payload.messageId, () => host.getCallbacks().onMessageEdited?.(payload), {
         editedText: payload.body,
       });
