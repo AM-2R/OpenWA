@@ -270,6 +270,8 @@ describe('RedisIoAdapter', () => {
       it('pins the figures docs/13 quotes, and a 10 s silence at 1000 events a second fits under them', () => {
         expect(WS_REDIS_MAX_UNANSWERED).toBe(12_000);
         expect(WS_REDIS_MAX_UNANSWERED).toBeGreaterThanOrEqual((WS_REDIS_SOCKET_TIMEOUT_MS / 1000) * 1000 * 1.2);
+        // "Up to about 1,200 events a second" in docs/13: the rate at which a pause of one socket deadline fills the cap.
+        expect(WS_REDIS_MAX_UNANSWERED / (WS_REDIS_SOCKET_TIMEOUT_MS / 1000)).toBe(1200);
       });
 
       // Slowness is judged by how long the backlog has lasted, not by its depth: a burst raised in one tick is all on the

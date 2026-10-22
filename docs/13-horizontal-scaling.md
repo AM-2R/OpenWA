@@ -151,21 +151,25 @@
 > every form for the rooms to match.
 >
 > **The fan-out to other replicas is best effort and keeps no replay queue.** A Redis that pauses for less
-> than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches
-> the other replicas late. A longer silence, a restart, a failover or an outage drops the connection a node
-> publishes on, and what was written to it may be lost with it, or may still reach the other replicas late
-> and after newer events, which their clients then apply out of order. The events that node raises while it is
-> disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are dropped for the clients
-> connected to the other replicas: they are not delivered late and not twice. Clients connected to the node
-> that raised an event are served directly, and webhooks do not use this path, so neither is affected. Memory
-> is bounded in two ways. A Redis that sends nothing for 10 s has the connection destroyed, and the node holds
-> nothing more for it; what it had already held, at most 10 s of events, is freed once the node has reconnected.
-> A Redis that keeps answering, but slower than events are raised, is never silent for 10 s, so a cap bounds
-> it instead: once the node holds 12,000 unanswered events (10 s at 1,000 events a second, with a fifth to
-> spare) and the backlog has outlived 2 s, meaning the count has not been below 6,000 for that long, it drops
-> further frames for the other replicas until the count is back below 6,000, with a warning when dropping
-> starts and another, with the count, when it ends. A burst raised in a single tick is never cut, however
-> large: a healthy Redis answers it right after, and the node holds it until then. A replica whose own Redis
+> than 10 s (a snapshot fork, a slow fsync) answers afterwards, and every event raised meanwhile reaches the
+> other replicas late, at up to about 1,200 events a second; above that the cap described below applies
+> first and drops the frames beyond it. A longer silence, a restart, a failover or an outage drops the
+> connection a node publishes on, and what was written to it may be lost with it, or may still reach the
+> other replicas late and after newer events, which their clients then apply out of order. The events that
+> node raises while it is disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are
+> dropped for the clients connected to the other replicas: they are not delivered late and not twice.
+> Clients connected to the node that raised an event are served directly, and webhooks do not use this path,
+> so neither is affected. Memory is bounded in two ways. A Redis that sends nothing for 10 s has the
+> connection destroyed, and the node holds nothing more for it; what it had already held, at most 10 s of
+> events, is freed once the node has reconnected. A Redis that keeps answering, but slower than events are
+> raised, is never silent for 10 s, so a cap bounds it instead: once the node holds 12,000 unanswered events
+> (10 s at 1,000 events a second, with a fifth to spare) and the backlog has outlived 2 s, meaning the count
+> has not been below 6,000 for that long, it drops further frames for the other replicas until the count is
+> back below 6,000, with a warning when dropping starts and another, with the count, when it ends. The node
+> can hold the traffic of those 2 s on top of the 12,000. A burst raised in a single tick is not cut as long
+> as raising it past its 6,000th frame takes under 2 s: a healthy Redis answers it right after, and the node
+> holds it until then. A synchronous burst that takes longer than that to raise past 6,000 frames is cut at
+> 12,000 even against a healthy Redis, and the warning names the unanswered count. A replica whose own Redis
 > connection is reconnecting also misses what the others publish meanwhile.
 >
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The

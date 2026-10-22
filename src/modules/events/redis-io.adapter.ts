@@ -34,11 +34,14 @@ export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
  * than events are raised never trips the socket deadline, so without a cap the backlog grows with the load for as
  * long as the slowness lasts. The rule: frames are dropped for the other replicas while the queue holds this many
  * commands and has not been below half of it for longer than a command is given to be answered
- * (WS_REDIS_COMMAND_TIMEOUT_MS), and they go on being dropped until the queue is back below half of it. A burst
- * raised in one tick is never cut, however large, because depth alone says nothing: it is all on the queue before a
- * reply can be read. Dropping starts with a warning and ends with another, with the count. 12,000 holds a full
- * socket deadline of traffic at 1,000 events a second with a fifth to spare, which measured about 25 MB of heap with
- * 1 KiB frames. It counts commands, not bytes: events with inline media are larger.
+ * (WS_REDIS_COMMAND_TIMEOUT_MS), and they go on being dropped until the queue is back below half of it. Depth alone
+ * says nothing, since a burst raised in one tick is all on the queue before a reply can be read, so such a burst is
+ * not cut as long as raising it past half the cap takes less than a command is given. One that takes longer, a
+ * synchronous loop that cannot yield for over 2 s, is cut at the cap whatever the peer is doing, and the warning
+ * names the unanswered count. Dropping starts with a warning and ends with another, with the count. The queue can
+ * pass the cap by the traffic of one command deadline before dropping starts. 12,000 holds a full socket deadline
+ * of traffic at 1,000 events a second with a fifth to spare, which measured about 25 MB of heap with 1 KiB frames.
+ * It counts commands, not bytes: events with inline media are larger.
  */
 export const WS_REDIS_MAX_UNANSWERED = 12_000;
 
@@ -107,13 +110,15 @@ export function rejectRootNamespace(server: Server): void {
  *
  * Delivery while Redis is away or slow: the fan-out to the other replicas is best effort and keeps no replay
  * queue. A Redis that pauses for less than WS_REDIS_SOCKET_TIMEOUT_MS answers afterwards, and every event raised
- * meanwhile reaches them late. Silence for that long destroys the publisher's socket, and so does a restart, a
+ * meanwhile reaches them late, at up to about 1,200 events a second; above that the cap below applies first, and
+ * drops the frames beyond it. Silence for that long destroys the publisher's socket, and so does a restart, a
  * failover or an outage: what was written to the dropped connection may be lost with it, or may still reach the
  * other replicas late and after newer events. The events this node raises while it is disconnected, plus its
  * reconnect backoff of up to 5 s once Redis is back (wsRedisOptions), are dropped for the other replicas, never
  * delivered late and never twice. A Redis that keeps answering, but slower than events are raised, never looks
  * silent: it is bounded by WS_REDIS_MAX_UNANSWERED, which drops frames for the other replicas once the backlog has
- * outlived a command's deadline and until it is back below half of it (a burst raised in one tick is not cut).
+ * outlived a command's deadline and until it is back below half of it (a burst raised in one tick is not cut
+ * unless raising it past half the cap takes over 2 s).
  * Clients on this node are served by the local broadcast and webhooks do not use this path, so neither is
  * affected. What the publisher holds is bounded by one socket deadline of traffic for a silent Redis and by that
  * cap, plus the traffic of one command deadline, for a slow one.
