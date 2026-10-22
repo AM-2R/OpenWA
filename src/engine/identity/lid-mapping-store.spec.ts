@@ -891,6 +891,26 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(await store.findPhoneForLid('111@lid')).toBeNull();
   });
 
+  it('touches no other lid, whichever branch would let the negative replace that row', async () => {
+    const stamp = new Date('2020-01-01T00:00:00.000Z');
+    const others = [
+      { lid: '222', phone: '628222', sessionId: null }, // no owner
+      { lid: '444', phone: null, sessionId: s3 }, // holds no phone
+      { lid: '555', phone: '628555', sessionId: gone }, // owned by a deleted session
+      { lid: '666', phone: '628666', sessionId: s2 }, // owned by the session answering
+    ];
+    await repo.insert([
+      { lid: '111', phone: '628111', sessionId: s2, updatedAt: stamp },
+      ...others.map(o => ({ ...o, updatedAt: stamp })),
+    ]);
+    await store.reload();
+
+    await store.remember('111', null, s2);
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: s2 });
+    for (const other of others) expect(await row(other.lid)).toEqual({ ...other, updatedAt: stamp });
+  });
+
   it('drops a phone cached here once the table holds none, whichever session cleared it', async () => {
     await store.remember('111', '628111', s1);
     await repo.update({ lid: '111' }, { phone: null }); // s1 answered no phone on another node
