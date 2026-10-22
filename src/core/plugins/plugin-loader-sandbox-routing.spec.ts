@@ -845,6 +845,20 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
       expect(logSpy).toHaveBeenCalledWith('[p1] buffer', { metaTruncated: true, pluginId: 'p1' });
     });
 
+    it('replaces a String wrapper of 10 million characters by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+      const started = Date.now();
+      const boxed = structuredClone(new String('x'.repeat(10_000_000)));
+      loader.capturedOnLog!('log', 'boxed', boxed as unknown as Record<string, unknown>);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true, pluginId: 'p1' });
+    });
+
     it('counts a Map or a Set by its size', async () => {
       const loader = makeLoader();
       seed(loader, { builtIn: false, instance: null });
