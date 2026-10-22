@@ -1788,6 +1788,33 @@ func TestDoPathWithQueryAppendsQueryValues(t *testing.T) {
 	}
 }
 
+// net/http sends the method as written and the gateway answers 400 to a lowercase one, so Do upper-cases
+// it. The idempotency header and the retry policy compare the upper-case names too.
+func TestDoSendsTheMethodInUpperCase(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
+	c := newTestClient(t, rt)
+	for _, tc := range []struct{ given, want string }{
+		{"get", "GET"}, {"post", "POST"}, {"put", "PUT"}, {"patch", "PATCH"}, {"delete", "DELETE"},
+		{"Patch", "PATCH"}, {"PATCH", "PATCH"},
+	} {
+		rt.lastReq = nil
+		if err := c.Do(context.Background(), tc.given, "/api/x", nil, nil, nil); err != nil {
+			t.Fatalf("Do(%q): %v", tc.given, err)
+		}
+		if got := rt.lastReq.Method; got != tc.want {
+			t.Errorf("Do(%q): the transport saw %q, want %q", tc.given, got, tc.want)
+		}
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), "k1")
+	if err := c.Do(ctx, "post", "/api/sessions/s/messages/send-text", nil, map[string]string{"chatId": "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.lastReq.Header.Get("Idempotency-Key"); got != "k1" {
+		t.Errorf("a lowercase post to a send route sent Idempotency-Key %q, want %q", got, "k1")
+	}
+}
+
 func TestSendIdempotencyKey(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{"messageId":"m","timestamp":1}`}
 	c := newTestClient(t, rt, WithHeader("idempotency-key", "default"))

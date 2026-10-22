@@ -650,6 +650,22 @@ describe('OpenWAClient', () => {
     expect(wire!.get('x-trace')).toBe('keep');
   });
 
+  it('sends the method of a raw request in upper case, whatever the caller wrote', async () => {
+    // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH as written, and the gateway answers
+    // 400 to a lowercase method; a caller without the HttpMethod type can pass one.
+    const sent: Array<string | undefined> = [];
+    const recordingFetch: FetchLike = async (_url, init) => {
+      sent.push(init?.method);
+      return new Response('[]', { status: 200 });
+    };
+    const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', fetch: recordingFetch });
+    for (const method of ['get', 'post', 'put', 'patch', 'delete', 'Patch', 'PATCH']) {
+      await c.request({ method: method as never, path: '/api/sessions' });
+    }
+    await c.requestBytes({ method: 'patch' as never, path: '/api/sessions' });
+    expect(sent).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'PATCH', 'PATCH', 'PATCH']);
+  });
+
   it('calls the global fetch unbound from the client config when none is injected', async () => {
     // Browsers and Workers reject a fetch invoked as a method of another object ("Illegal invocation").
     vi.stubGlobal('fetch', function (this: unknown) {

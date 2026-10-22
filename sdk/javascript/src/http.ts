@@ -208,12 +208,17 @@ async function send<T>(
   headers['Content-Type'] = 'application/json';
   headers['X-API-Key'] = config.apiKey;
 
+  // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH and any other verb as written, and the
+  // gateway answers 400 to a lowercase method; a caller without the HttpMethod type can pass one. A missing
+  // method stays undefined, which fetch sends as GET.
+  const method = options.method?.toUpperCase();
+
   // Called without a receiver: a platform fetch passed in as `fetch: globalThis.fetch` throws
   // "Illegal invocation" in browsers and Workers when invoked as a method of `config`.
   const doFetch = config.fetch;
   try {
     const res = await doFetch(url, {
-      method: options.method,
+      method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
@@ -224,7 +229,7 @@ async function send<T>(
     });
 
     if (!res.ok) {
-      const context = `${options.method} ${options.path}`;
+      const context = `${method} ${options.path}`;
       const apiError = await OpenWAApiError.fromResponse(res, context);
       throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind, apiError.headers);
     }
