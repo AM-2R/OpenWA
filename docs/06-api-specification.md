@@ -229,7 +229,7 @@ List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt
 | Name     | Type             | Required | Default | Description                                                                                                                                                                                             |
 | -------- | ---------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `limit`  | integer (1-1000) | No       | `1000`  | Max sessions to return; oversized/non-finite values are clamped/fallback to the default window.                                                                                                         |
-| `offset` | integer          | No       | `0`     | Sessions to skip for paging; negative/non-finite values resolve to `0`.                                                                                                                                 |
+| `offset` | integer          | No       | `0`     | Sessions to skip for paging; negative/non-finite values resolve to `0`, and a value above `9007199254740991` is capped at it, which returns an empty page.                                              |
 | `name`   | string           | No       |         | Return only the session with exactly this name (case-sensitive). No match, including a name outside a scoped key's `allowedSessions`, returns `200 []`. An empty value or a repeated key returns `400`. |
 
 **Response** `200`
@@ -1330,7 +1330,7 @@ Get persisted message history for a session from the local DB (paginated, filter
 | chatId      | string  | No       | —         | Filter by chat ID. Matched across `@c.us` / `@s.whatsapp.net` dialects via the lid-mapping table. Required for a key restricted to selected chats.                                                                                      |
 | from        | string  | No       | —         | Filter by sender; matches `from` or a group message's `author`. A phone also matches any lid that resolves to it.                                                                                                                       |
 | limit       | integer | No       | 50        | Clamped to `[1,100]`; a non-finite value falls back to 50.                                                                                                                                                                              |
-| offset      | integer | No       | 0         | Clamped to `>=0`; a non-finite value falls back to 0.                                                                                                                                                                                   |
+| offset      | integer | No       | 0         | Clamped to `>=0` and capped at `9007199254740991`, which returns an empty page; a non-finite value falls back to 0.                                                                                                                     |
 | after       | string  | No       | —         | Keyset cursor: the `id` of the last message of the previous page. Anchors the window to a row rather than a count, so a message arriving mid-walk cannot shift it. Takes precedence over `offset`. Unknown in this session gives `400`. |
 | inlineMedia | boolean | No       | true      | Set `false` (or `0`) to omit every inline media payload, leaving each row's `{ omitted, sizeBytes }` marker and the media endpoint. The budget below is per response, so a paged walk pulls it afresh on every page.                    |
 | messageId   | string  | No       | (none)    | Exact WhatsApp message reference within the session and optional chat filter.                                                                                                                                                           |
@@ -4687,10 +4687,10 @@ List webhooks visible to the calling API key, scoped to its allowed sessions.
 
 **Query parameters**
 
-| Name     | Type             | Required | Default | Description                                                                                     |
-| -------- | ---------------- | -------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `limit`  | integer (1-1000) | No       | `1000`  | Max webhooks to return; oversized/non-finite values are clamped/fallback to the default window. |
-| `offset` | integer          | No       | `0`     | Webhooks to skip for paging; negative/non-finite values resolve to `0`.                         |
+| Name     | Type             | Required | Default | Description                                                                                                                                                |
+| -------- | ---------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `limit`  | integer (1-1000) | No       | `1000`  | Max webhooks to return; oversized/non-finite values are clamped/fallback to the default window.                                                            |
+| `offset` | integer          | No       | `0`     | Webhooks to skip for paging; negative/non-finite values resolve to `0`, and a value above `9007199254740991` is capped at it, which returns an empty page. |
 
 **Response** `200`
 
@@ -4723,11 +4723,11 @@ List webhook deliveries that exhausted their retries or were not sent (attempts 
 
 **Query parameters**
 
-| Name        | Type             | Required | Default | Description                                                                                                          |
-| ----------- | ---------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| `sessionId` | string           | No       | —       | Narrow to one session. A value outside the key's `allowedSessions` returns `[]` (no cross-session existence oracle). |
-| `limit`     | integer (1-1000) | No       | `1000`  | Max records to return; oversized/non-finite values are clamped/fallback to the default window.                       |
-| `offset`    | integer          | No       | `0`     | Records to skip for paging; negative/non-finite values resolve to `0`.                                               |
+| Name        | Type             | Required | Default | Description                                                                                                                                               |
+| ----------- | ---------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessionId` | string           | No       | —       | Narrow to one session. A value outside the key's `allowedSessions` returns `[]` (no cross-session existence oracle).                                      |
+| `limit`     | integer (1-1000) | No       | `1000`  | Max records to return; oversized/non-finite values are clamped/fallback to the default window.                                                            |
+| `offset`    | integer          | No       | `0`     | Records to skip for paging; negative/non-finite values resolve to `0`, and a value above `9007199254740991` is capped at it, which returns an empty page. |
 
 **Response** `200`
 
