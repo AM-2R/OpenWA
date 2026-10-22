@@ -88,8 +88,9 @@ function family(property: string): string {
   return /^(?:margin|padding|border)(?:-|$)/.test(property) ? property.split('-')[0] : property;
 }
 
-// Physical edges kept on purpose, as [selector, property]: a switch knob runs from the left (off) to the right
-// (on) by translateX, and the toast stack sits in the bottom right corner it slides in from. Neither mirrors.
+// Physical edges kept on purpose, as [selector, property]. A switch knob runs from the left (off) to the right (on)
+// by translateX and does not mirror. The toast stack does mirror, to the bottom left corner, but its
+// [dir='rtl'] .toast-container twin is in index.css and this scan reads one stylesheet at a time.
 const KEPT: [RegExp, string][] = [
   [/(?:^|\s)\.toggle-slider::?before$/, 'left'],
   [/^\.toast-container$/, 'right'],
