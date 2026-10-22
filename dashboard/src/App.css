@@ -2,9 +2,10 @@
   --primary: #25d366;
   /* The brand green as FOREGROUND is 1.98:1 on white, far under the 4.5:1 AA needs for text.
      It stays the fill colour; anything rendering it as text or an icon uses --primary-text, the same
-     hue darkened until it clears 4.5:1 on all three light backgrounds it lands on: 4.95:1 on white,
-     4.73:1 on --bg-light, and 4.53:1 on --primary-soft, which is the tightest of the three and the
-     one the active sidebar item uses. */
+     hue darkened until it clears 4.5:1 on the three light backgrounds it lands on most: 4.95:1 on white,
+     4.73:1 on --bg-light, and 4.52:1 on --primary-soft, which is the tightest of the three and the
+     one the active sidebar item uses. On the heavier green tints some badges paint (15 to 18 percent)
+     it measures 4.3 to 4.4:1. */
   --primary-text: #17813e;
   --primary-hover: #1da851;
   --primary-soft: rgba(37, 211, 102, 0.12);
@@ -13,15 +14,16 @@
   --bg-card: #ffffff;
   --text-primary: #0f172a; /* Slate 900 */
   --text-secondary: #475569; /* Slate 600 */
-  --text-muted: #64748b; /* Slate 500; 4.76:1 on white (AA) */
+  --text-muted: #64748b; /* Slate 500; 4.76:1 on white, 4.55:1 on --bg-light, 4.35:1 on --primary-soft */
   --border: #e2e8f0; /* Slate 200 */
   --error: #ef4444;
   --success: #22c55e;
   --warning: #f59e0b;
   /* Status colours as FOREGROUND fail AA on light: error 3.76:1, success 2.28:1, warning 2.15:1.
-     They stay the fill/border colours; text and icons use these darkened twins. Each clears 4.5:1
-     against the darkest surface it actually lands on, which is not white but the 10-20% tint of its
-     own hue that the badges and callouts paint behind it. */
+     They stay the fill/border colours; text and icons use these darkened twins. Each clears 4.5:1 on
+     white and on a 10 percent tint of its own hue. The heavier 12 to 22 percent tints that some badges
+     paint behind them do not all hold: the twins measure 4.29 to 4.46:1 there (error-text 4.29:1 on the
+     15 percent red of the Failed pill, warning-text 4.34:1 on the 22 percent amber of Action required). */
   --error-text: #c63838;
   --success-text: #157c3b;
   --warning-text: #986207;
