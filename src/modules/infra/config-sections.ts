@@ -32,6 +32,24 @@ function portValue(label: string, value: string): string {
   return port;
 }
 
+// The selection a section applies to: the one sent, else the stored one, else the one the environment pins. Only a
+// sent one is written, so a save that leaves it out (the page does for a type the environment pins) never writes a
+// selection over the stored choice. With none of the three the section cannot be read, and is refused.
+function sectionType<T extends string>(
+  section: string,
+  key: string,
+  sent: T | undefined,
+  existing: Record<string, string>,
+  allowed: readonly T[],
+): T {
+  const type =
+    sent ?? [existing[key], isEnvPinned(key) ? process.env[key] : undefined].find(v => allowed.includes(v as T));
+  if (type === undefined) {
+    throw new BadRequestException(`${section}.type must be one of the following values: ${allowed.join(', ')}`);
+  }
+  return type as T;
+}
+
 // Database. NOTE: these keys must match what src/config/configuration.ts reads.
 export function applyDatabaseSection(
   database: DatabaseConfigDto,
@@ -39,7 +57,8 @@ export function applyDatabaseSection(
   ctx: ConfigSectionContext,
 ): void {
   const { updates, staleKeys, profiles } = ctx;
-  updates.DATABASE_TYPE = database.type || 'sqlite';
+  const type = sectionType('database', 'DATABASE_TYPE', database.type, existing, ['sqlite', 'postgres']);
+  if (database.type) updates.DATABASE_TYPE = database.type;
   if (database.builtIn !== undefined) {
     updates.POSTGRES_BUILTIN = database.builtIn ? 'true' : 'false';
   }
@@ -47,7 +66,7 @@ export function applyDatabaseSection(
   // is inherited so a partial payload stays in the current mode instead of silently
   // flipping to external.
   const dbBuiltIn = database.builtIn ?? existing.POSTGRES_BUILTIN === 'true';
-  if (database.type === 'postgres') {
+  if (type === 'postgres') {
     if (dbBuiltIn) {
       // Built-in PostgreSQL - use container name as host
       updates.DATABASE_HOST = 'postgres';
@@ -173,11 +192,12 @@ export function applyStorageSection(
   ctx: ConfigSectionContext,
 ): void {
   const { updates, staleKeys, profiles } = ctx;
-  updates.STORAGE_TYPE = storage.type || 'local';
+  const type = sectionType('storage', 'STORAGE_TYPE', storage.type, existing, ['local', 's3']);
+  if (storage.type) updates.STORAGE_TYPE = storage.type;
   if (storage.builtIn !== undefined) {
     updates.MINIO_BUILTIN = storage.builtIn ? 'true' : 'false';
   }
-  if (storage.type === 'local') {
+  if (type === 'local') {
     // Switching to local: drop stale S3 keys, and reset the built-in flag with them —
     // there is no bundled MinIO backing a local storage path.
     updates.MINIO_BUILTIN = 'false';
@@ -188,7 +208,7 @@ export function applyStorageSection(
     for (const k of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION']) {
       staleKeys.add(k);
     }
-  } else if (storage.type === 's3') {
+  } else {
     staleKeys.add('STORAGE_LOCAL_PATH');
     if (storage.builtIn === true) {
       // Built-in MinIO - use container name as endpoint

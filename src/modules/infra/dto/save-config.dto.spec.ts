@@ -106,3 +106,20 @@ describe('SaveConfigDto sections refuse an array', () => {
     },
   );
 });
+
+// A section without its type keeps the stored selection (applyDatabaseSection, applyStorageSection), so the page can
+// leave out a type the environment pins. A type that is sent is still held to the enum.
+describe('SaveConfigDto section types', () => {
+  it.each(['database', 'storage'])('%s may leave its type out', async section => {
+    const { errors } = await run({ [section]: { builtIn: false } });
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each([
+    ['database', 'mysql'],
+    ['storage', 'ftp'],
+  ])('%s refuses a type outside the enum (%s)', async (section, type) => {
+    const { errors } = await run({ [section]: { type } });
+    expect(errors.map(e => e.property)).toEqual([section]);
+  });
+});

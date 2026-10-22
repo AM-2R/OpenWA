@@ -315,3 +315,43 @@ test('a stored pool size outside the field range is saved as stored', () => {
 
   assert.equal(result.current.buildSavePayload().database?.poolSize, 100);
 });
+
+// /config reports a pinned selection as the effective value, so the form shows the pin. Sending it back would write the
+// pin over the stored choice and drop the stored settings of the other mode; untouched, it is left out.
+const PINNED_SELECTIONS: InfraStatus = { ...RUNNING, envPinned: ['DATABASE_TYPE', 'STORAGE_TYPE', 'REDIS_ENABLED'] };
+
+test('a selection the environment pins is left out of a save until the operator changes it', () => {
+  const { result } = renderForm({ status: PINNED_SELECTIONS, saved: SAVED });
+
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.type, redis?.enabled, storage?.type], [undefined, undefined, undefined]);
+  // The rest of each section still goes out.
+  assert.deepEqual([database?.host, redis?.host, storage?.s3Bucket], ['pg.internal', 'redis.internal', 'media']);
+});
+
+test('a pinned selection the operator changes is sent, and an unpinned one always is', () => {
+  const { result } = renderForm({ status: PINNED_SELECTIONS, saved: SAVED });
+
+  rtl.act(() => {
+    result.current.updateDbConfig('type', 'sqlite');
+    result.current.updateStorageConfig('type', 'local');
+    result.current.setRedisEnabled(false);
+  });
+  const changed = result.current.buildSavePayload();
+  assert.deepEqual([changed.database?.type, changed.redis?.enabled, changed.storage?.type], ['sqlite', false, 'local']);
+
+  const unpinned = renderForm({ status: RUNNING, saved: SAVED }).result.current.buildSavePayload();
+  assert.deepEqual(
+    [unpinned.database?.type, unpinned.redis?.enabled, unpinned.storage?.type],
+    ['postgres', true, 's3'],
+  );
+});
+
+test('one pinned selection is left out without the others', () => {
+  const { result } = renderForm({ status: { ...RUNNING, envPinned: ['STORAGE_TYPE'] }, saved: SAVED });
+
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.type, redis?.enabled, storage?.type], ['postgres', true, undefined]);
+});

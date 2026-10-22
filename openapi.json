@@ -22477,7 +22477,8 @@
             "enum": [
               "sqlite",
               "postgres"
-            ]
+            ],
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to."
           },
           "builtIn": {
             "type": "boolean"
@@ -22509,10 +22510,7 @@
           "sslRejectUnauthorized": {
             "type": "boolean"
           }
-        },
-        "required": [
-          "type"
-        ]
+        }
       },
       "RedisConfigDto": {
         "type": "object",
@@ -22550,7 +22548,8 @@
             "enum": [
               "local",
               "s3"
-            ]
+            ],
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to."
           },
           "builtIn": {
             "type": "boolean"
@@ -22573,10 +22572,7 @@
           "s3Endpoint": {
             "type": "string"
           }
-        },
-        "required": [
-          "type"
-        ]
+        }
       },
       "EngineConfigDto": {
         "type": "object",

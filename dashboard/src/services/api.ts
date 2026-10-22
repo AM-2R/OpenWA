@@ -696,7 +696,8 @@ export interface SavedConfig {
 
 export interface SaveConfigPayload {
   database?: {
-    type: 'sqlite' | 'postgres';
+    // Absent keeps the stored selection; the form leaves out a type the environment pins.
+    type?: 'sqlite' | 'postgres';
     builtIn?: boolean;
     host?: string;
     port?: string;
@@ -719,7 +720,7 @@ export interface SaveConfigPayload {
     enabled?: boolean;
   };
   storage?: {
-    type: 'local' | 's3';
+    type?: 'local' | 's3';
     builtIn?: boolean;
     localPath?: string;
     s3Bucket?: string;

@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
@@ -16,9 +16,13 @@ import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common
  * are accepted; any other spelling is rejected 400.
  */
 export class DatabaseConfigDto {
-  @ApiProperty({ enum: ['sqlite', 'postgres'] })
+  @ApiPropertyOptional({
+    enum: ['sqlite', 'postgres'],
+    description: 'Absent keeps the stored selection, which the rest of the section then applies to.',
+  })
+  @IsOptional()
   @IsIn(['sqlite', 'postgres'])
-  type!: 'sqlite' | 'postgres';
+  type?: 'sqlite' | 'postgres';
 
   @ApiPropertyOptional()
   @ToStrictBoolean()
@@ -122,9 +126,13 @@ export class QueueConfigDto {
 }
 
 export class StorageConfigDto {
-  @ApiProperty({ enum: ['local', 's3'] })
+  @ApiPropertyOptional({
+    enum: ['local', 's3'],
+    description: 'Absent keeps the stored selection, which the rest of the section then applies to.',
+  })
+  @IsOptional()
   @IsIn(['local', 's3'])
-  type!: 'local' | 's3';
+  type?: 'local' | 's3';
 
   @ApiPropertyOptional()
   @ToStrictBoolean()

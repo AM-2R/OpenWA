@@ -830,6 +830,112 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     expect(env).toContain('SESSION_DATA_PATH=./old-path');
     expect(env).toContain('PUPPETEER_ARGS=--custom-flag');
   });
+
+  // The page leaves out a type the environment pins while the operator has not touched it, so the pin is never
+  // written over the stored choice. The section then applies to the stored selection, and never rewrites it.
+  describe('a section without its type', () => {
+    const STORED_EXTERNAL =
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.example.com\nDATABASE_USERNAME=app\n' +
+      'DATABASE_PASSWORD=Str0ng!Passw0rd\nDATABASE_NAME=appdb\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+      'S3_ENDPOINT=https://s3.example.com\nS3_BUCKET=media\nS3_ACCESS_KEY_ID=ak-strong\nS3_SECRET_ACCESS_KEY=sk-strong\n';
+    const STORED_LOCAL = 'DATABASE_TYPE=sqlite\nPOSTGRES_BUILTIN=false\nSTORAGE_TYPE=local\nMINIO_BUILTIN=false\n';
+    let pinnedKeys: string[] = [];
+    const pin = (values: Record<string, string>) => {
+      Object.assign(process.env, values);
+      pinnedKeys = Object.keys(values);
+      recordPinnedEnvKeys(values);
+    };
+
+    afterEach(() => {
+      for (const key of pinnedKeys) delete process.env[key];
+      pinnedKeys = [];
+      recordPinnedEnvKeys({});
+    });
+
+    it('keeps a stored PostgreSQL and S3 choice and their settings under the opposite pins', () => {
+      pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+
+      const env = written(
+        {
+          database: { builtIn: false, host: 'db.example.com', username: 'app', database: 'appdb' },
+          storage: {
+            builtIn: false,
+            localPath: './data/media',
+            s3Bucket: 'media',
+            s3Endpoint: 'https://s3.example.com',
+          },
+        },
+        STORED_EXTERNAL,
+      );
+
+      for (const line of STORED_EXTERNAL.trim().split('\n')) expect(env).toContain(line);
+      expect(env).not.toMatch(/^STORAGE_LOCAL_PATH=/m);
+    });
+
+    it('keeps a stored SQLite and local choice under the opposite pins, with no bundled container', () => {
+      pin({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_PASSWORD: 'Str0ng!Passw0rd',
+        STORAGE_TYPE: 's3',
+        S3_ACCESS_KEY_ID: 'ak-strong',
+        S3_SECRET_ACCESS_KEY: 'sk-strong',
+      });
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(STORED_LOCAL);
+
+      const { profiles } = newController().saveConfig({
+        database: { builtIn: true, host: 'postgres' },
+        storage: { builtIn: true, s3Endpoint: 'http://minio:9000' },
+      });
+      const env = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>).at(-1)![1];
+
+      for (const line of STORED_LOCAL.trim().split('\n')) expect(env).toContain(line);
+      expect(env).not.toMatch(/^(DATABASE_HOST|S3_ENDPOINT)=/m);
+      expect(profiles).toEqual([]);
+    });
+
+    it('follows a pinned type without writing it when nothing is stored', () => {
+      pin({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_PASSWORD: 'Str0ng!Passw0rd',
+        STORAGE_TYPE: 's3',
+        S3_ACCESS_KEY_ID: 'ak-strong',
+        S3_SECRET_ACCESS_KEY: 'sk-strong',
+      });
+
+      const env = written(
+        { database: { builtIn: false, host: 'db.example.com' }, storage: { builtIn: false, s3Bucket: 'media' } },
+        'POSTGRES_BUILTIN=false\nSTORAGE_LOCAL_PATH=./data/media\n',
+      );
+
+      expect(env).toContain('DATABASE_HOST=db.example.com');
+      expect(env).toContain('S3_BUCKET=media');
+      expect(env).not.toMatch(/^(DATABASE_TYPE|STORAGE_TYPE|STORAGE_LOCAL_PATH)=/m);
+    });
+
+    it.each([
+      ['database', { database: { host: 'db.example.com' } }, /database\.type must be one of/],
+      ['storage', { storage: { s3Bucket: 'media' } }, /storage\.type must be one of/],
+    ])('is refused when no %s type is sent, stored or pinned', (_section, config, message) => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue('DATABASE_TYPE=mysql\nSTORAGE_TYPE=ftp\n');
+      (fs.writeFileSync as jest.Mock).mockClear();
+
+      expect(() => newController().saveConfig(config as never)).toThrow(BadRequestException);
+      expect(() => newController().saveConfig(config as never)).toThrow(message);
+      expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
+    });
+
+    it('still writes a type that is sent', () => {
+      pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+
+      const env = written({ database: { type: 'sqlite' }, storage: { type: 'local' } }, STORED_EXTERNAL);
+
+      expect(env).toContain('DATABASE_TYPE=sqlite');
+      expect(env).toContain('STORAGE_TYPE=local');
+      expect(env).not.toMatch(/^DATABASE_HOST=/m);
+    });
+  });
 });
 
 describe('InfraConfigController.saveConfig built-in/external mode flips and the save-time secret guard', () => {

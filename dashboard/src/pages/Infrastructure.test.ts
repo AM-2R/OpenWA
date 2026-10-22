@@ -1628,6 +1628,50 @@ test('the engine radio seeds from the effective engine when ENGINE_TYPE is pinne
   );
 });
 
+// The same for the database type, the storage type and the Redis switch: /config reports a pinned value as the
+// effective one, and sending it back would write the pin over the stored choice and drop that mode's settings.
+test('saving while the selections are pinned leaves them out so the stored choices survive', async () => {
+  const { screen, waitFor, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = { status: { ...INFRA_STATUS, envPinned: ['DATABASE_TYPE', 'REDIS_ENABLED', 'STORAGE_TYPE'] } };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.ok(findFetchCall('PUT', '/api/infra/config'), 'expected a PUT to /infra/config'));
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database: Record<string, unknown>;
+    redis: Record<string, unknown>;
+    storage: Record<string, unknown>;
+  };
+  assert.deepEqual(['type' in body.database, 'enabled' in body.redis, 'type' in body.storage], [false, false, false]);
+  assert.equal(body.database.username, 'openwa_admin', 'the rest of the section still goes out');
+});
+
+test('a pinned selection the operator changes is saved', async () => {
+  const { screen, waitFor, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = { status: { ...INFRA_STATUS, envPinned: ['DATABASE_TYPE', 'REDIS_ENABLED', 'STORAGE_TYPE'] } };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="dbType"]')[0]);
+  fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="storageType"]')[1]);
+  fireEvent.click(toggleInput(container, 'Enable Redis'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.ok(findFetchCall('PUT', '/api/infra/config'), 'expected a PUT to /infra/config'));
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+    database: { type?: string };
+    redis: { enabled?: boolean };
+    storage: { type?: string };
+  };
+  assert.deepEqual([body.database.type, body.redis.enabled, body.storage.type], ['sqlite', true, 's3']);
+});
+
 test('saving while ENGINE_TYPE is pinned omits engine.type so the stored choice survives', async () => {
   const { screen, waitFor, fireEvent } = rtl;
   resetFetchCalls();

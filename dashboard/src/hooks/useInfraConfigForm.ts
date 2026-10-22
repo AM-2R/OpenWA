@@ -137,6 +137,11 @@ export function useInfraConfigForm(
   // their selection (#735).
   const engineHydrated = useRef(false);
   const engineTouched = useRef(false);
+  // The database type, storage type and Redis switch the operator has changed here. Until then a value the
+  // environment pins is the pin, not a choice, and a save leaves it out (see buildSavePayload).
+  const dbTypeTouched = useRef(false);
+  const storageTypeTouched = useRef(false);
+  const redisEnabledTouched = useRef(false);
 
   /** Whether engineConfig.type reflects a real value (seeded from the saved config or user-picked)
    * rather than the useState default — the save payload omits `type` when it doesn't. */
@@ -211,12 +216,16 @@ export function useInfraConfigForm(
     setEngineConfig(prev => (prev.type === seed ? prev : { ...prev, type: seed }));
   }, [savedConfig]);
 
-  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) =>
+  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) => {
+    if (key === 'type') dbTypeTouched.current = true;
     setDbConfig(prev => ({ ...prev, [key]: value }));
+  };
   const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
     setRedisConfig(prev => ({ ...prev, [key]: value }));
-  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
+  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) => {
+    if (key === 'type') storageTypeTouched.current = true;
     setStorageConfig(prev => ({ ...prev, [key]: value }));
+  };
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
     if (key === 'type') engineTouched.current = true;
     setEngineConfig(prev => ({ ...prev, [key]: value }));
@@ -224,11 +233,19 @@ export function useInfraConfigForm(
 
   // Disabling Redis also disables the queue, since queue processing depends on it.
   const setRedisEnabled = (enabled: boolean) => {
+    redisEnabledTouched.current = true;
     setRedisEnabledState(enabled);
     if (!enabled) setQueueEnabled(false);
   };
 
   const setRedisConnected = (connected: boolean) => setRedisConfig(prev => ({ ...prev, connected }));
+
+  // /config reports the EFFECTIVE selection, so under a pin the form shows the pinned value. Sending it back would
+  // write the pin into data/.env.generated over the stored choice, which unsetting the variable was supposed to
+  // reveal (#1082), and drop the stored settings of the mode it replaces. Untouched, it is left out, and the
+  // gateway keeps the stored selection. Read at save time, like the engine pin below.
+  const pinnedSeed = (key: string, touched: { current: boolean }) =>
+    !touched.current && !!infraStatus?.envPinned?.includes(key);
 
   const buildSavePayload = (): SaveConfigPayload => ({
     // A bundled container never receives a typed password (the field is hidden once built-in is on,
@@ -236,20 +253,24 @@ export function useInfraConfigForm(
     // An emptied pool size is NaN, which JSON writes as null and the backend refuses: leave it out.
     database: {
       ...dbConfig,
+      type: pinnedSeed('DATABASE_TYPE', dbTypeTouched) ? undefined : dbConfig.type,
       password: dbConfig.builtIn ? '' : dbConfig.password,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
     // `connected` is runtime-only status, not persisted configuration. Keep it out of the
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {
-      enabled: redisEnabled,
+      enabled: pinnedSeed('REDIS_ENABLED', redisEnabledTouched) ? undefined : redisEnabled,
       builtIn: redisConfig.builtIn,
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.builtIn ? '' : redisConfig.password,
     },
     queue: { enabled: queueEnabled },
-    storage: { ...storageConfig },
+    storage: {
+      ...storageConfig,
+      type: pinnedSeed('STORAGE_TYPE', storageTypeTouched) ? undefined : storageConfig.type,
+    },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState
     // default, and sending that would persist ENGINE_TYPE and silently flip the engine on the next
