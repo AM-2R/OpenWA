@@ -1183,6 +1183,23 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     expect(bodies).toEqual(['hello']);
   });
 
+  // A captioned media message decrypted in place gets its thumbnail too, a change of its body attribute, which is
+  // no edit and must not stand in for the change of its caption.
+  it.each([
+    ['its thumbnail changing first', true],
+    ['its caption changing first', false],
+  ])('delivers no edit for the decryption of a captioned media message, %s', async (_, thumbnailFirst) => {
+    const { client, order } = wire();
+    ciphertextEvent(client, 'M');
+    client.emit('message', incoming('M', 'cap', { page: jest.fn() }));
+    if (thumbnailFirst) editEvent(client, 'M', 'cap', { media: true, attribute: THUMBNAIL });
+    editEvent(client, 'M', 'cap', { media: true });
+    if (!thumbnailFirst) editEvent(client, 'M', 'cap', { media: true, attribute: THUMBNAIL });
+    await flush();
+
+    expect(order).toEqual(['message M']);
+  });
+
   it.each([
     ['after the change that decrypted it', true],
     ['when its decryption raised no change', false],
