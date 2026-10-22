@@ -754,11 +754,19 @@ const SAVED_BUNDLED: SavedConfig = {
   database: { ...SAVED_CONFIG.database, builtIn: true },
   storage: { ...SAVED_CONFIG.storage, type: 's3', builtIn: true },
 };
+// The bundled containers the dashboard created, running and backing their services.
 const RUNNING_BUNDLED: InfraStatus = {
   ...INFRA_STATUS,
-  database: { connected: true, type: 'postgres', host: 'postgres', builtIn: true },
-  redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true },
-  storage: { type: 's3', bucket: 'openwa', endpoint: 'http://minio:9000', builtIn: true, s3Available: true },
+  database: { connected: true, type: 'postgres', host: 'postgres', builtIn: true, running: true },
+  redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true, running: true },
+  storage: {
+    type: 's3',
+    bucket: 'openwa',
+    endpoint: 'http://minio:9000',
+    builtIn: true,
+    running: true,
+    s3Available: true,
+  },
 };
 const SAVED_EXTERNAL: SavedConfig = {
   ...SAVED_CONFIG,
@@ -1851,7 +1859,13 @@ test('turning a running built-in Redis off asks the restart to stop its containe
   resetFetchCalls();
   // Built-in Redis is running and saved as built-in; the operator switches it to an external Redis.
   overrides = {
-    status: { ...INFRA_STATUS, redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true } },
+    // Docker answered: the server reports running on all three.
+    status: {
+      ...INFRA_STATUS,
+      database: { ...INFRA_STATUS.database, running: false },
+      redis: { enabled: true, connected: true, host: 'redis', port: 6379, builtIn: true, running: true },
+      storage: { ...INFRA_STATUS.storage, running: false },
+    },
     saved: {
       ...SAVED_CONFIG,
       redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
@@ -1885,6 +1899,34 @@ test('turning a running built-in Redis off asks the restart to stop its containe
   await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
   // The page reloads after every restart, so the first save of a page visit is the normal case: the
   // container to stop must come from what is running, not from an earlier save on this page.
+  assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: ['redis'] });
+});
+
+// With Docker unreachable the status carries no running key and builtIn is the saved flag: the server only writes a
+// signal file then, so the dialog names nothing, and the request is the one the page sent before.
+test('with Docker unreachable the restart dialog names no container to stop', async () => {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const redis = { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false };
+  overrides = {
+    status: { ...INFRA_STATUS, redis: { enabled: true, connected: false, host: 'redis', port: 6379, builtIn: true } },
+    saved: { ...SAVED_CONFIG, redis },
+    savedAfterSave: { ...SAVED_CONFIG, redis: { ...redis, builtIn: false, host: 'cache.example.com' } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitConfigHydrated(container);
+  const builtInRedis = toggleInput(container, 'Use Built-in Redis Container');
+  await waitFor(() => assert.equal(builtInRedis.checked, true));
+  fireEvent.click(builtInRedis);
+  fireEvent.change(fieldInput(card(container, 'Redis'), 'Host'), { target: { value: 'cache.example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.doesNotMatch(dialog.textContent ?? '', /openwa-/);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
   assert.deepEqual(findFetchCall('POST', '/api/infra/restart')!.body, { profiles: [], profilesToRemove: ['redis'] });
 });
 

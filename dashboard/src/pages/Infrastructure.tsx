@@ -959,7 +959,8 @@ export function Infrastructure() {
               <p className="restart-idle-desc">
                 <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
               </p>
-              {restartFlow.profilesToRemove.length > 0 && (
+              {/* Without `running` Docker did not answer the status, and the server stops nothing then. */}
+              {infraStatus.database.running !== undefined && restartFlow.profilesToRemove.length > 0 && (
                 <p className="restart-idle-desc">
                   {t('infrastructure.restart.stopsContainers', {
                     names: restartFlow.profilesToRemove.map(p => CONTAINER_OF[p] ?? p).join(', '),
