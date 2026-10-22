@@ -179,7 +179,8 @@ const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
   .replace(/\\\n/g, ' ');
 const wildcard = /[*?[]/;
 function copyInputs(source) {
-  if (/^[a-z][a-z0-9+.-]*:\/\/|^git@/i.test(source)) return [];
+  // Remote, as in BuildKit, which matches the scheme in lower case only: ADD HTTPS://x/y names a context path.
+  if (/^[a-z][a-z0-9+.-]*:\/\/|^git@/.test(source)) return [];
   // Docker resolves ./x, /x and x//y against the context root, which is the form the rules match.
   const path = posix.normalize(source).replace(/^\/+|\/+$/g, '');
   if (path === '' || path === '.') return [];

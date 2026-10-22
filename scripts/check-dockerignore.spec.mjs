@@ -181,6 +181,17 @@ test('a wildcard COPY source is expanded in its own directory, and only its matc
   assert.doesNotMatch(run.out, /rejects 'sub\/other\.txt'/);
 });
 
+test('a scheme in capitals is not a URL to BuildKit, so an ADD of it names a context path', () => {
+  // Real BuildKit fetches ADD https://host/x.tgz, and looks for the file HTTPS:/host/x.tgz in the context for
+  // ADD HTTPS://host/x.tgz, as it does for any scheme that is not in lower case.
+  const run = runGate({
+    Dockerfile: 'COPY control.txt ./\nADD HTTPS://example.com/x.tgz /opt/\n',
+    '.dockerignore': `${REAL_DOCKERIGNORE}\nHTTPS:/example.com/x.tgz\n`,
+  });
+  assert.equal(run.status, 1, run.out);
+  assert.match(run.out, /rejects 'HTTPS:\/example\.com\/x\.tgz'/);
+});
+
 test('a wildcard in a directory name is reported instead of guessed', () => {
   const run = runGate({ Dockerfile: 'COPY su*/x.txt ./\n', '.dockerignore': REAL_DOCKERIGNORE });
   assert.equal(run.status, 1, run.out);
