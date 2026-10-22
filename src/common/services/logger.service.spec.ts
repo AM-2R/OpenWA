@@ -1552,6 +1552,17 @@ describe('redactSecrets', () => {
       expect(shown(copy)).toEqual({ a: '[Truncated]', b: '[Truncated]', c: '[Truncated]', d: '[Truncated]' });
     });
 
+    it('charges the text of a Date like a string, and writes one after a cut string as [Truncated]', () => {
+      // The key names take 2 characters; the ISO text is 24 and the text of an invalid Date 12.
+      const dated = (length: number, date: Date): unknown => shown(redactSecrets({ a: text(length), d: date }));
+
+      expect(dated(LIMIT - 26, new Date(0))).toEqual({ a: LIMIT - 26, d: 24 });
+      expect(dated(LIMIT - 25, new Date(0))).toEqual({ a: LIMIT - 25, d: '[Truncated]' });
+      expect(dated(LIMIT - 14, new Date(Number.NaN))).toEqual({ a: LIMIT - 14, d: 'Invalid Date' });
+      expect(dated(LIMIT - 13, new Date(Number.NaN))).toEqual({ a: LIMIT - 13, d: '[Truncated]' });
+      expect(dated(LIMIT + 1, new Date(0))).toEqual({ a: '[Truncated]', d: '[Truncated]' });
+    });
+
     it('charges the value of a boxed string like a string', () => {
       // The key names take 2 characters.
       expect(shown(redactSecrets({ a: text(LIMIT - 4), s: new String('ab') }))).toEqual({ a: LIMIT - 4, s: 'ab' });
