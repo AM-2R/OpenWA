@@ -407,3 +407,31 @@ test('another edit in the card keeps a built-in flag beside a pinned host out', 
 
   assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [undefined, undefined, undefined]);
 });
+
+// Choosing the service in the form is a new selection, and its built-in mode is part of it: the stored flag belongs to
+// the selection being left (the first boot writes it false next to SQLite), so the flag the toggle shows is sent.
+test('a built-in flag beside a pinned host is sent with a selection the form changes', () => {
+  const sqliteSaved: SavedConfig = {
+    ...SAVED,
+    database: { ...SAVED.database, type: 'sqlite', builtIn: true, builtInSet: false },
+    redis: { ...SAVED.redis, enabled: false, builtIn: true, builtInSet: false },
+    storage: { ...SAVED.storage, type: 'local', builtIn: true, builtInSet: false },
+  };
+  // The bundled containers run on the pinned hosts, so the toggles read on.
+  const status: InfraStatus = {
+    ...PINNED_HOSTS,
+    database: { ...PINNED_HOSTS.database, host: 'postgres', builtIn: true },
+    redis: { ...PINNED_HOSTS.redis, host: 'redis', builtIn: true },
+    storage: { ...PINNED_HOSTS.storage, builtIn: true },
+  };
+  const { result } = renderForm({ status, saved: sqliteSaved });
+
+  rtl.act(() => {
+    result.current.updateDbConfig('type', 'postgres');
+    result.current.setRedisEnabled(true);
+    result.current.updateStorageConfig('type', 's3');
+  });
+  const { database, redis, storage } = result.current.buildSavePayload();
+
+  assert.deepEqual([database?.builtIn, redis?.builtIn, storage?.builtIn], [true, true, true]);
+});

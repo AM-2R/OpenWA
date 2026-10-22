@@ -255,7 +255,8 @@ export function useInfraConfigForm(
   // to the mode the card shows, and a stored selection of the other mode would drop them. Read at save time, like
   // the engine pin below. A pinned host decides the built-in mode the same way, and a flag of true sent beside it
   // writes the bundled credentials over stored ones the pinned host may still need, so an unused toggle there is
-  // left out too and the gateway keeps the stored flag.
+  // left out too and the gateway keeps the stored flag, unless the form changes the selection the flag belongs to:
+  // the stored flag is the one of the selection being left then (the first boot writes it false beside SQLite).
   const pinnedSeed = (key: string, touched: { current: boolean }) =>
     !touched.current && !!infraStatus?.envPinned?.includes(key);
 
@@ -266,7 +267,10 @@ export function useInfraConfigForm(
     database: {
       ...dbConfig,
       type: pinnedSeed('DATABASE_TYPE', dbTouched) ? undefined : dbConfig.type,
-      builtIn: pinnedSeed('DATABASE_HOST', dbBuiltInTouched) ? undefined : dbConfig.builtIn,
+      builtIn:
+        pinnedSeed('DATABASE_HOST', dbBuiltInTouched) && dbConfig.type === savedConfig?.database.type
+          ? undefined
+          : dbConfig.builtIn,
       password: dbConfig.builtIn ? '' : dbConfig.password,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
@@ -274,7 +278,10 @@ export function useInfraConfigForm(
     // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
     redis: {
       enabled: pinnedSeed('REDIS_ENABLED', redisEnabledTouched) ? undefined : redisEnabled,
-      builtIn: pinnedSeed('REDIS_HOST', redisBuiltInTouched) ? undefined : redisConfig.builtIn,
+      builtIn:
+        pinnedSeed('REDIS_HOST', redisBuiltInTouched) && redisEnabled === savedConfig?.redis.enabled
+          ? undefined
+          : redisConfig.builtIn,
       host: redisConfig.host,
       port: redisConfig.port,
       password: redisConfig.builtIn ? '' : redisConfig.password,
@@ -283,7 +290,10 @@ export function useInfraConfigForm(
     storage: {
       ...storageConfig,
       type: pinnedSeed('STORAGE_TYPE', storageTouched) ? undefined : storageConfig.type,
-      builtIn: pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) ? undefined : storageConfig.builtIn,
+      builtIn:
+        pinnedSeed('S3_ENDPOINT', storageBuiltInTouched) && storageConfig.type === savedConfig?.storage.type
+          ? undefined
+          : storageConfig.builtIn,
     },
     // Only send `type` once we actually know it — either the radio seeded from /config or the
     // operator picked one. If /config never resolved, engineConfig.type still holds its useState
