@@ -59,6 +59,8 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
   const { isSecretKey = isSecretName, marker = '[REDACTED]', errors = false } = options;
   const budget = { nodes: REDACT_DEEP_NODES };
   const walk = (node: unknown, path: object[]): unknown => {
+    // A function is not data: it is left out, as JSON.stringify leaves it out of an object and writes null in an array.
+    if (typeof node === 'function') return undefined;
     if (node === null || typeof node !== 'object') return node;
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;

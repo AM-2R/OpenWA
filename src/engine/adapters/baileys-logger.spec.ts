@@ -247,6 +247,39 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line.entity).toEqual({ id: 1 });
   });
 
+  // A function is not data: it is left out of the record, so nothing it has or returns is written.
+  describe('a function in the record', () => {
+    class WithStaticToJson {
+      static toJSON(): Record<string, string> {
+        return { password: 'value-fn' };
+      }
+    }
+    const functions: Array<[string, () => unknown]> = [
+      [
+        'a function with a toJSON of its own',
+        () => Object.assign(() => 1, { toJSON: () => ({ password: 'value-fn' }) }),
+      ],
+      ['a class with a static toJSON', () => WithStaticToJson],
+      ['a function with properties of its own', () => Object.assign(() => 1, { note: 'value-fn', nested: { id: 7 } })],
+    ];
+
+    it.each(functions)('leaves out %s found in the record', (_name, make) => {
+      const line = write({ id: 1, handler: make(), list: [make()], deep: nest(6, make()) }, 'x');
+
+      expect(JSON.stringify(line)).not.toContain('value-fn');
+      expect(line).toMatchObject({ id: 1, msg: 'x', list: [null] });
+      expect(line).not.toHaveProperty('handler');
+    });
+
+    it.each(functions)('writes the message alone when the record is %s', (_name, make) => {
+      const line = write(make(), 'x');
+
+      expect(JSON.stringify(line)).not.toContain('value-fn');
+      expect(Object.keys(line).sort()).toEqual(['context', 'level', 'msg', 'ts']);
+      expect(line).toMatchObject({ level: 'debug', context: 'baileys-wire', msg: 'x' });
+    });
+  });
+
   it.each([
     [
       'a getter that throws',

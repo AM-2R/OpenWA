@@ -287,6 +287,63 @@ describe('LoggerService', () => {
       expect(parsed().entity).toEqual({ id: 1 });
     });
 
+    // A function is not data: the copy leaves it out, as JSON.stringify leaves it out of an object and writes null
+    // for it in an array, so nothing a function has or returns reaches the line.
+    describe('a function in the metadata, the message or the trace', () => {
+      const credentials = (): Record<string, string> => ({ password: 'value-fn', other: 'value-fn-other' });
+      class WithStaticToJson {
+        static toJSON(): Record<string, string> {
+          return credentials();
+        }
+      }
+      const functions: Array<[string, () => unknown]> = [
+        ['a function with a toJSON of its own', () => Object.assign(() => 1, { toJSON: credentials })],
+        ['a class with a static toJSON', () => WithStaticToJson],
+        ['a function with properties of its own', () => Object.assign(() => 1, { password: 'value-fn', id: 7 })],
+      ];
+      const nested = (leaf: unknown, levels: number): unknown => {
+        let value = leaf;
+        for (let i = 0; i < levels; i++) value = { level: value };
+        return value;
+      };
+
+      it.each(functions)('is left out of the copy at every depth: %s', (_name, make) => {
+        const fn = make();
+
+        expect(JSON.stringify(redactSecrets({ handler: fn, id: 1 }))).toBe('{"id":1}');
+        expect(JSON.stringify(redactSecrets([fn, 1]))).toBe('[null,1]');
+        for (const depth of [0, 1, 4, 5, 6, 8]) {
+          expect(JSON.stringify(redactSecrets(nested(fn, depth))) ?? '').not.toContain('value-fn');
+        }
+        expect(redactSecrets(fn)).toBeUndefined();
+      });
+
+      describe.each([LogFormat.JSON, LogFormat.PRETTY])('in %s output', format => {
+        beforeEach(() => {
+          LoggerService.setLogFormat(format);
+        });
+
+        it.each(functions)('writes nothing of %s given as metadata', (_name, make) => {
+          logger.log('saved', { handler: make(), list: [make()], deep: nested(make(), 6) });
+
+          expect(getRawOutput(consoleSpy)).toContain('saved');
+          expect(getRawOutput(consoleSpy)).not.toContain('value-fn');
+        });
+
+        it.each(functions)('writes %s given as the message or as the trace as [Unprintable]', (_name, make) => {
+          const errorSpy = jest.spyOn(console, 'error');
+
+          logger.log(make());
+          logger.error('failed', make());
+
+          for (const line of [getRawOutput(consoleSpy), getRawOutput(errorSpy)]) {
+            expect(line).toContain('[Unprintable]');
+            expect(line).not.toContain('value-fn');
+          }
+        });
+      });
+    });
+
     describe.each([LogFormat.JSON, LogFormat.PRETTY])('in %s output', format => {
       beforeEach(() => {
         LoggerService.setLogFormat(format);
