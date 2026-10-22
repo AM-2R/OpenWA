@@ -20,7 +20,8 @@ import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } fro
 import { SessionOwnershipService } from './session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import {
-  SESSION_DELETE_BATCH_SIZE,
+  SESSION_DELETE_BATCH_SIZE_POSTGRES,
+  SESSION_DELETE_BATCH_SIZE_SQLITE,
   ServerShuttingDownException,
   SessionStoppedException,
 } from './session-engine-controls';
@@ -170,6 +171,7 @@ describe('SessionService', () => {
     failureRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
 
     dataSource = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
       // Session delete removes the messages, the outbox records and the delivery failures in batches through the
       // data source's own repositories.
       getRepository: jest
@@ -1397,7 +1399,7 @@ describe('SessionService', () => {
     });
 
     describe('messages', () => {
-      const BATCH = SESSION_DELETE_BATCH_SIZE;
+      const BATCH = SESSION_DELETE_BATCH_SIZE_SQLITE;
       const ids = (from: number, count: number): Array<{ id: string }> =>
         Array.from({ length: count }, (_, i) => ({ id: `m${from + i}` }));
 
@@ -1425,6 +1427,36 @@ describe('SessionService', () => {
         // Every batch is out before the transaction that removes the rest and the session row.
         const transaction = dataSource.transaction as jest.Mock;
         expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder[0]);
+      });
+
+      // PostgreSQL's statement time follows the bytes of the rows (inline media payloads), so it keeps the smaller
+      // batch; SQLite pays per batch and keeps the larger one. Both values are pinned here on purpose.
+      it.each([
+        ['better-sqlite3', 2000],
+        ['postgres', 500],
+      ])('takes %s batches of %i rows', async (type: string, size: number) => {
+        (dataSource as { options: unknown }).options = { type };
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (messageRepository.find as jest.Mock).mockResolvedValueOnce(ids(0, size)).mockResolvedValueOnce(ids(size, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(SESSION_DELETE_BATCH_SIZE_SQLITE).toBe(2000);
+        expect(SESSION_DELETE_BATCH_SIZE_POSTGRES).toBe(500);
+        expect(messageRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: size,
+        });
+        expect(messageRepository.find).toHaveBeenCalledTimes(2);
+        expect(messageRepository.delete).toHaveBeenCalledTimes(2);
+        for (const repo of [outboxRepository, failureRepository]) {
+          expect(repo.find).toHaveBeenCalledWith({
+            select: { id: true },
+            where: { sessionId: 'sess-uuid-1' },
+            take: size,
+          });
+        }
       });
 
       it.each([

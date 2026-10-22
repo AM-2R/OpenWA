@@ -83,6 +83,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
     const messageRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn() };
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
       getRepository: jest.fn(() => messageRepository) as unknown as DataSource['getRepository'],
       transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
         cb(manager),
@@ -269,6 +270,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
   it('old-name teardown still pending past 10s: delete rejects 409, transaction parent removal and purgeSessionData not called (unique name still reserved)', async () => {
     const manager = { delete: jest.fn().mockResolvedValue({ affected: 1 }), remove: jest.fn() };
     const dataSource: Partial<DataSource> = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
       getRepository: jest.fn(() => ({
         find: jest.fn().mockResolvedValue([]),
         delete: jest.fn(),

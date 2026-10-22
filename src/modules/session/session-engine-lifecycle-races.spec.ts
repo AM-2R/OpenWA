@@ -266,7 +266,11 @@ describe('SessionEngineLifecycle races', () => {
       const rows = { find: jest.fn(() => gates.shift()?.promise ?? Promise.resolve([])), delete: jest.fn() };
       const manager = { delete: jest.fn().mockResolvedValue({ affected: 0 }), remove: jest.fn() };
       transaction = jest.fn((work: (m: unknown) => Promise<void>) => work(manager));
-      Object.assign(dataSource, { getRepository: jest.fn(() => rows), transaction });
+      Object.assign(dataSource, {
+        options: { type: 'better-sqlite3' },
+        getRepository: jest.fn(() => rows),
+        transaction,
+      });
     });
 
     it.each([

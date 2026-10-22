@@ -17,7 +17,12 @@ import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
-import { SESSION_DELETE_BATCH_SIZE, SessionEngineControls, StopMarks } from './session-engine-controls';
+import {
+  SESSION_DELETE_BATCH_SIZE_POSTGRES,
+  SESSION_DELETE_BATCH_SIZE_SQLITE,
+  SessionEngineControls,
+  StopMarks,
+} from './session-engine-controls';
 import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionEngineLeafEvents } from './session-engine-leaf-events';
 import { MessageSendService } from '../message/message-send.service';
@@ -354,7 +359,9 @@ describe('Session content lifetime', () => {
     const messages = db.getRepository(Message);
     const outbox = db.getRepository(WebhookOutboxEvent);
     const failures = db.getRepository(WebhookDeliveryFailure);
-    const count = SESSION_DELETE_BATCH_SIZE * 2 + 50;
+    const batch =
+      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const count = batch * 2 + 50;
     const seed = async (sessionId: string, rows: number): Promise<void> => {
       for (let from = 0; from < rows; from += 200) {
         const size = Math.min(200, rows - from);

@@ -45,15 +45,23 @@ import {
 
 /**
  * Rows of the tables that grow with traffic (messages, webhook outbox events, webhook delivery failures)
- * removed per statement when a session is deleted. Small enough to stay under PostgreSQL's statement timeout,
- * far below either dialect's bind-parameter limit and short enough on SQLite (one writer, and each message
- * row also fires the full-text index trigger) that other sessions are not stalled behind it. A larger batch
- * costs a little less per row but stalls longer: a 300k-message session on SQLite deletes 1.2 to 1.7 times
- * faster at 2000 rows than at 500 (it depends on the load of the host), with a longer worst statement. Most of
- * the gain over the first batched delete comes from leaving the session out of the delete's condition, see
- * deleteTrafficRowsInBatches.
+ * removed per statement when a session is deleted. On SQLite: far below the bind-parameter limit and short
+ * enough (one writer, and each message row also fires the full-text index trigger) that other sessions are not
+ * stalled behind a batch. A larger batch costs a little less per row but stalls longer: a 300k-message session
+ * deletes 1.2 to 1.7 times faster at 2000 rows than at 500 (it depends on the load of the host), with a longer
+ * worst statement. Most of the gain over the first batched delete comes from leaving the session out of the
+ * delete's condition, see deleteTrafficRowsInBatches.
  */
-export const SESSION_DELETE_BATCH_SIZE = 2000;
+export const SESSION_DELETE_BATCH_SIZE_SQLITE = 2000;
+
+/**
+ * The same on PostgreSQL, where a statement does not hold the process and a larger batch buys little (a million
+ * small rows on an analyzed table delete in about the same few seconds at 500 or 2000 rows; without statistics
+ * 2000 rows is about 2.5 times faster). What bounds a statement there is its time under the statement timeout,
+ * and that follows the bytes of the rows it deletes: a message that keeps its media inline stores megabytes per
+ * row. So it keeps the smaller batch and its headroom.
+ */
+export const SESSION_DELETE_BATCH_SIZE_POSTGRES = 500;
 
 /** A start refused because an operator stopped the session. Same 409 on the wire as any conflict. */
 export class SessionStoppedException extends ConflictException {}
@@ -951,13 +959,17 @@ export class SessionEngineControls {
    * statistics are missing or stale), which made a long history take longer than linear.
    */
   private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
+    const size =
+      this.host.dataSource().options.type === 'postgres'
+        ? SESSION_DELETE_BATCH_SIZE_POSTGRES
+        : SESSION_DELETE_BATCH_SIZE_SQLITE;
     for (const entity of [Message, WebhookOutboxEvent, WebhookDeliveryFailure]) {
       const rows = this.host.dataSource().getRepository<{ id: string; sessionId: string }>(entity);
       for (;;) {
-        const batch = await rows.find({ select: { id: true }, where: { sessionId }, take: SESSION_DELETE_BATCH_SIZE });
+        const batch = await rows.find({ select: { id: true }, where: { sessionId }, take: size });
         if (batch.length === 0) break;
         await rows.delete({ id: In(batch.map(row => row.id)) });
-        if (batch.length < SESSION_DELETE_BATCH_SIZE) break;
+        if (batch.length < size) break;
         await new Promise<void>(resolve => setImmediate(resolve));
       }
     }
