@@ -181,7 +181,7 @@ const CASES: Case[] = [
     run: adapter => adapter.muteChat(CHAT, Date.now() + 60_000),
   },
   {
-    // The phone behind the lid is read after the lookup; contacts has no other read after an await.
+    // The phone behind the lid is read after the lookup.
     name: 'a number check of a migrated contact',
     build: parked => {
       const getContactLidAndPhone = jest.fn();
@@ -191,6 +191,18 @@ const CASES: Case[] = [
       };
     },
     run: adapter => adapter.getNumberId('5511987654321'),
+  },
+  {
+    // A picture lookup by phone id that came back empty is retried by the LID the page holds.
+    name: 'a profile picture read retried by its LID',
+    build: parked => {
+      const evaluate = jest.fn();
+      return {
+        client: { getProfilePicUrl: () => parked.park().then(() => undefined), pupPage: { evaluate } },
+        unreached: evaluate,
+      };
+    },
+    run: adapter => adapter.getProfilePicture(CHAT),
   },
   {
     // The client is read again after the lookup, inside a catch that answers a missing group with null.

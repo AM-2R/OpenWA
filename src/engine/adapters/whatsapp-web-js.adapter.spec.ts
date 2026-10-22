@@ -43,6 +43,7 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
 import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { readCurrentLid } from './wwebjs-contacts';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
@@ -9588,6 +9589,136 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
     const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'throws' });
     await expect(adapter.getNumberId('5511987654321')).resolves.toBe('5511987654321@c.us');
     expect(queryWidExists).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * WhatsApp Web keys a migrated contact's chat by its LID, so the picture lookup by its phone id can come back
+ * empty or fail where the LID form answers. The lookup is retried once by the LID the page already holds.
+ */
+describe('WhatsAppWebJsAdapter profile picture of a migrated contact', () => {
+  const PHONE = '628111@c.us';
+  const LID = '159442138038327@lid';
+  const URL = 'https://pps.whatsapp.net/v/avatar.jpg';
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  /** A client whose picture lookup answers per id (a value, or an Error to throw), on a page holding `lid`. */
+  const clientWith = (answers: Record<string, string | undefined | Error>, lid: string | null = LID) => {
+    const getProfilePicUrl = jest.fn((id: string) => {
+      const answer = answers[id];
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    });
+    const evaluate = jest.fn().mockResolvedValue(lid);
+    return { getProfilePicUrl, pupPage: { evaluate } };
+  };
+
+  it('answers the phone form without reading the LID when it works', async () => {
+    const client = clientWith({ [PHONE]: URL });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(URL);
+    expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['answers nothing', undefined],
+    ['fails in the page', new Error("Cannot read properties of undefined (reading 'id')")],
+  ])('retries by the LID when the phone form %s', async (_label, phoneAnswer) => {
+    const client = clientWith({ [PHONE]: phoneAnswer, [LID]: URL });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(URL);
+    expect(client.pupPage.evaluate).toHaveBeenCalledWith(expect.any(Function), PHONE);
+    expect(client.getProfilePicUrl.mock.calls).toEqual([[PHONE], [LID]]);
+  });
+
+  it.each([
+    ['nothing, then nothing', undefined, undefined, null],
+    ['nothing, then a failure', undefined, new Error('lid lookup failed'), null],
+  ])('answers as before when both forms give %s', async (_label, phoneAnswer, lidAnswer, expected) => {
+    const client = clientWith({ [PHONE]: phoneAnswer, [LID]: lidAnswer });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(expected);
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['nothing', undefined],
+    ['a failure', new Error('lid lookup failed')],
+  ])('answers 503 as before when the phone form fails and the LID form gives %s', async (_label, lidAnswer) => {
+    const client = clientWith({ [PHONE]: new Error('phone lookup failed'), [LID]: lidAnswer });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).rejects.toBeInstanceOf(EngineTransportError);
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a page that dies during the retry and keeps the first answer', async () => {
+    const client = clientWith({
+      [PHONE]: undefined,
+      [LID]: new Error('Protocol error (Runtime.callFunctionOn): Target closed.'),
+    });
+    const adapter = readyAdapter(client);
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+    await expect(adapter.getProfilePicture(PHONE)).resolves.toBeNull();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when the page holds no LID for the phone', async () => {
+    const client = clientWith({ [PHONE]: undefined }, null);
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBeNull();
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry after a dead page or a protocol timeout', async () => {
+    for (const failure of [
+      new Error('Protocol error: Connection closed. Target closed'),
+      new Error("Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls"),
+    ]) {
+      const client = clientWith({ [PHONE]: failure, [LID]: URL });
+      await expect(readyAdapter(client).getProfilePicture(PHONE)).rejects.toBeInstanceOf(EngineTransportError);
+      expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['a group', '120363000000000001@g.us'],
+    ['a LID', LID],
+  ])('does not retry for %s', async (_label, id) => {
+    const client = clientWith({ [id]: undefined });
+    await expect(readyAdapter(client).getProfilePicture(id)).resolves.toBeNull();
+    expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+  });
+
+  describe('readCurrentLid, the in-page read', () => {
+    const g = globalThis as unknown as { window?: unknown };
+    afterEach(() => {
+      delete g.window;
+    });
+    const pageHolding = (lid: { _serialized?: string; $1?: string } | null) => {
+      const queryWidExists = jest.fn();
+      const getCurrentLid = jest.fn(() => lid);
+      const modules: Record<string, unknown> = {
+        WAWebWidFactory: { createWid: (id: string) => ({ _serialized: id }) },
+        WAWebApiContact: { getCurrentLid },
+        WAWebQueryExistsJob: { queryWidExists },
+      };
+      g.window = { require: (name: string) => modules[name] };
+      return { getCurrentLid, queryWidExists };
+    };
+
+    it('reads the LID the page holds for a phone id, in either property name, and queries nothing', () => {
+      const page = pageHolding({ _serialized: LID });
+      expect(readCurrentLid(PHONE)).toBe(LID);
+      expect(page.getCurrentLid).toHaveBeenCalledWith({ _serialized: PHONE });
+      expect(page.queryWidExists).not.toHaveBeenCalled();
+      pageHolding({ $1: LID });
+      expect(readCurrentLid(PHONE)).toBe(LID);
+    });
+
+    it('answers null when the page holds none', () => {
+      pageHolding(null);
+      expect(readCurrentLid(PHONE)).toBeNull();
+    });
   });
 });
 
