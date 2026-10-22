@@ -217,6 +217,29 @@ test('the focus ring clears 3:1 on every surface it is drawn on, in both themes'
   }
 });
 
+// The enabled badge of a plugin instance paints --primary-soft, so its text is the brand green twin: --success-text is
+// a different green, and on the 18 percent tint of the dark theme it measured 4.48:1.
+test('the enabled badge of a plugin instance clears 4.5:1 on its tint in every theme', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/PluginInstances.css'), 'utf8');
+  const rule =
+    /\.plugin-instances \.pi-badge\.on\s*\{[^}]*background:\s*var\(--primary-soft\);[^}]*color:\s*var\((--[\w-]+)\)/.exec(
+      css,
+    );
+  assert.ok(rule, 'PluginInstances.css no longer paints the enabled badge on --primary-soft');
+  for (const [anchor, alpha] of [
+    [LIGHT, 0.12],
+    [DARK, 0.18],
+    [DARK_MEDIA, 0.18],
+  ] as const) {
+    const block = blockAfter(anchor);
+    for (const surface of ['--bg-white', '--bg-light']) {
+      const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--primary')), alpha, rgb(hexOf(block, surface)));
+      const ratio = contrast(rgb(hexOf(block, rule[1])), tint);
+      assert.ok(ratio >= 4.5, `${anchor} ${rule[1]} on the badge over ${surface} is ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
 test('the search match and the Number Checker highlight pill clear AA in both themes', () => {
   const search = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/GlobalSearch.css'), 'utf8');
   const mark =

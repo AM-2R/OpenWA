@@ -74,7 +74,7 @@
 }
 .plugin-instances .pi-badge.on {
   background: var(--primary-soft);
-  color: var(--success-text);
+  color: var(--primary-text);
 }
 .plugin-instances .pi-badge.off {
   background: var(--bg-light);
