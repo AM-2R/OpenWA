@@ -150,33 +150,25 @@ describe('exceedsJsonNesting', () => {
     }
   });
 
-  // The scan runs on every JSON body before authentication, so it has to cost a small fraction of the parse
-  // that follows it. A walk over the parsed value cost 0.4 to 1.8 times the parse on these shapes.
+  // The scan runs on every JSON body before authentication. What made the walk over the parsed value expensive
+  // was an allocation for every container, so what keeps the scan cheap is that it allocates nothing that grows
+  // with the body. That is asserted on the heap and not on a clock: a time ratio against JSON.parse fails
+  // intermittently under the coverage instrumentation the test job runs with, which slows the byte loop and
+  // leaves the native parse alone. Parsing and walking these bodies takes hundreds of megabytes of heap.
   it.each([
     ['many keys', (bytes: number) => `{${Array.from({ length: bytes / 10 }, (_, i) => `"k${i}":0`).join(',')}}`],
     ['many small containers', (bytes: number) => `[${'[0],'.repeat(bytes / 4 - 1)}[0]]`],
     ['many empty arrays', (bytes: number) => `[${'[],'.repeat(bytes / 3 - 1)}[]]`],
-  ])(
-    'reads a body of %s in under half the time JSON.parse takes',
-    (_shape, make) => {
-      const body = make(12_000_000);
-      const bytes = Buffer.from(body);
-      const since = (start: bigint): number => Number(process.hrtime.bigint() - start) / 1e6;
+  ])('allocates nothing that grows with a body of %s', (_shape, make) => {
+    const bytes = Buffer.from(make(12_000_000));
 
-      const parseStart = process.hrtime.bigint();
-      JSON.parse(body);
-      const parseMs = since(parseStart);
+    const before = process.memoryUsage().heapUsed;
+    const exceeds = exceedsJsonNesting(bytes);
+    const grown = process.memoryUsage().heapUsed - before;
 
-      let scanMs = Infinity;
-      for (let run = 0; run < 3; run++) {
-        const start = process.hrtime.bigint();
-        expect(exceedsJsonNesting(bytes)).toBe(false);
-        scanMs = Math.min(scanMs, since(start));
-      }
-      expect(scanMs).toBeLessThan(parseMs / 2);
-    },
-    60_000,
-  );
+    expect(exceeds).toBe(false);
+    expect(grown).toBeLessThan(8 * 1024 * 1024);
+  });
 });
 
 describe('isUtf8Charset', () => {
