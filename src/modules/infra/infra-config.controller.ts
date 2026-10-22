@@ -30,6 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { encodeGeneratedEnvValue, generatedEnvPath, readGeneratedEnv } from './generated-env';
+import { savedBuiltInMode } from './saved-builtin-mode';
 import {
   applyDatabaseSection,
   applyEngineSection,
@@ -143,8 +144,7 @@ export class InfraConfigController {
     return {
       database: {
         type: effective('DATABASE_TYPE') === 'postgres' ? 'postgres' : 'sqlite',
-        builtIn: effective('POSTGRES_BUILTIN') === 'true',
-        builtInSet: Boolean(effective('POSTGRES_BUILTIN')),
+        ...savedBuiltInMode('database', saved),
         host: effective('DATABASE_HOST') || '',
         port: effective('DATABASE_PORT') || '',
         username: effective('DATABASE_USERNAME') || '',
@@ -157,8 +157,7 @@ export class InfraConfigController {
       },
       redis: {
         enabled: effective('REDIS_ENABLED') === 'true',
-        builtIn: effective('REDIS_BUILTIN') === 'true',
-        builtInSet: Boolean(effective('REDIS_BUILTIN')),
+        ...savedBuiltInMode('redis', saved),
         host: effective('REDIS_HOST') || '',
         port: effective('REDIS_PORT') || '',
         passwordSet: Boolean(effective('REDIS_PASSWORD')),
@@ -166,8 +165,7 @@ export class InfraConfigController {
       queue: { enabled: effective('QUEUE_ENABLED') === 'true' },
       storage: {
         type: effective('STORAGE_TYPE') === 's3' ? 's3' : 'local',
-        builtIn: effective('MINIO_BUILTIN') === 'true',
-        builtInSet: Boolean(effective('MINIO_BUILTIN')),
+        ...savedBuiltInMode('storage', saved),
         localPath: effective('STORAGE_LOCAL_PATH') || '',
         s3Bucket: effective('S3_BUCKET') || '',
         s3Region: effective('S3_REGION') || '',

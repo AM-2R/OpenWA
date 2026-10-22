@@ -34,6 +34,19 @@ import { SaveConfigDto } from './dto/save-config.dto';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { resolveStorageRoot } from '../../config/storage-root';
+import {
+  EXPECTED_MODE,
+  FILE_STATES,
+  PIN_STATES,
+  SERVICES,
+  SERVICE_NAMES,
+  fileLines,
+  pinnedHost,
+  type FileState,
+  type PinState,
+  type SavedMode,
+  type ServiceName,
+} from '../../../test/fixtures/builtin-mode-cases';
 
 // With no boot snapshot every process.env key counts as host-supplied, so a shell exporting the
 // CI Postgres or compose Redis settings would otherwise feed the save guard and the pin checks.
@@ -1401,54 +1414,96 @@ describe('InfraConfigController.getConfig reflects environment-pinned values (#1
   });
 });
 
-// A Compose deployment that pins DATABASE_HOST=postgres, REDIS_HOST=redis or S3_ENDPOINT in .env never writes the
-// *_BUILTIN keys, so a false flag there only means nothing says otherwise: the form must tell it from a flag
-// that was saved as false.
-describe('InfraConfigController.getConfig reports whether each built-in flag is stored', () => {
+// The saved built-in mode, for every state of the saved file and of what the environment pins for the service's host
+// key (the rule is in test/fixtures/builtin-mode-cases.ts). Each case also fills the OTHER two services with the
+// opposite state and pin, so a service reading another one's keys gets the wrong answer.
+describe('InfraConfigController.getConfig answers the saved built-in mode for every file and pin state', () => {
   const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
-  const withFile = (contents: string) => {
+  const otherState = (state: FileState): FileState => (state === 'stored-true' ? 'stored-false' : 'stored-true');
+  const otherPin = (pin: PinState): PinState => (pin === 'external' ? 'bundled' : 'external');
+  let pinnedKeys: string[] = [];
+
+  const arrange = (service: ServiceName, state: FileState, pin: PinState) => {
+    const lines: string[] = [];
+    const pins: Record<string, string> = {};
+    for (const name of SERVICE_NAMES) {
+      const own = name === service;
+      lines.push(...fileLines(name, own ? state : otherState(state)));
+      const host = pinnedHost(name, own ? pin : otherPin(pin));
+      if (host !== undefined) pins[SERVICES[name].host] = host;
+    }
+    recordPinnedEnvKeys(pins);
+    for (const [key, value] of Object.entries(pins)) process.env[key] = value;
+    pinnedKeys = Object.keys(pins);
     (fs.existsSync as jest.Mock).mockReturnValue(true);
-    (fs.readFileSync as jest.Mock).mockReturnValue(contents);
+    (fs.readFileSync as jest.Mock).mockReturnValue(`${lines.join('\n')}\n`);
   };
-  const flags = (cfg: ReturnType<InfraConfigController['getConfig']>) => ({
-    database: [cfg.database.builtIn, cfg.database.builtInSet],
-    redis: [cfg.redis.builtIn, cfg.redis.builtInSet],
-    storage: [cfg.storage.builtIn, cfg.storage.builtInSet],
-  });
 
   afterEach(() => {
+    for (const key of pinnedKeys) delete process.env[key];
+    pinnedKeys = [];
+    delete process.env.POSTGRES_BUILTIN;
+    delete process.env.REDIS_BUILTIN;
+    delete process.env.MINIO_BUILTIN;
+    recordPinnedEnvKeys({});
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.readFileSync as jest.Mock).mockReturnValue('');
-    delete process.env.POSTGRES_BUILTIN;
-    recordPinnedEnvKeys({});
   });
 
-  it('a file that holds no flag reports every flag as not stored', () => {
-    withFile('DATABASE_TYPE=postgres\nDATABASE_HOST=postgres\nREDIS_HOST=redis\nS3_ENDPOINT=http://minio:9000\n');
+  const modeOf = (cfg: ReturnType<InfraConfigController['getConfig']>, service: ServiceName): SavedMode => {
+    const section = cfg[service];
+    return { builtIn: section.builtIn, builtInSet: section.builtInSet };
+  };
 
-    expect(flags(newController().getConfig())).toEqual({
-      database: [false, false],
-      redis: [false, false],
-      storage: [false, false],
+  describe.each(SERVICE_NAMES)('%s', service => {
+    for (const state of FILE_STATES) {
+      for (const pin of PIN_STATES) {
+        it(`a ${state} file with ${pin === 'none' ? 'no host pin' : `the host pinned ${pin}`}`, () => {
+          arrange(service, state, pin);
+
+          expect(modeOf(newController().getConfig(), service)).toEqual(EXPECTED_MODE[state][pin]);
+        });
+      }
+    }
+  });
+
+  // The first boot writes every flag false next to a service that is not selected. With the compose .env pinning
+  // the bundled hosts and the containers running, that file must not read as three saved external services.
+  it('the first-boot file under the compose .env pins reads as bundled, never as a saved external choice', () => {
+    for (const service of SERVICE_NAMES) {
+      arrange(service, 'template', 'bundled');
+      expect(modeOf(newController().getConfig(), service)).toEqual({ builtIn: true, builtInSet: false });
+    }
+  });
+
+  it('an external pin over a flag saved true reads as external, not as a pending switch to built-in', () => {
+    for (const service of SERVICE_NAMES) {
+      arrange(service, 'stored-true', 'external');
+      expect(modeOf(newController().getConfig(), service)).toEqual({ builtIn: false, builtInSet: false });
+    }
+  });
+
+  // An operator who pins the flag itself has decided it, whatever the file or the hosts say, unless a host pin does.
+  it('a flag pinned by the environment counts as stored, and a pinned host still outranks it', () => {
+    recordPinnedEnvKeys({
+      POSTGRES_BUILTIN: 'true',
+      REDIS_BUILTIN: 'false',
+      MINIO_BUILTIN: 'true',
+      S3_ENDPOINT: 'https://s3.external.example',
     });
-  });
-
-  it('a flag saved as false is stored, as is one saved as true', () => {
-    withFile('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\n');
-
-    expect(flags(newController().getConfig())).toEqual({
-      database: [false, true],
-      redis: [true, true],
-      storage: [false, false],
-    });
-  });
-
-  it('a flag only the environment pins is stored', () => {
-    recordPinnedEnvKeys({ POSTGRES_BUILTIN: 'true' });
     process.env.POSTGRES_BUILTIN = 'true';
-    withFile('');
+    process.env.REDIS_BUILTIN = 'false';
+    process.env.MINIO_BUILTIN = 'true';
+    process.env.S3_ENDPOINT = 'https://s3.external.example';
+    pinnedKeys = ['S3_ENDPOINT'];
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\nMINIO_BUILTIN=false\n');
 
-    expect(flags(newController().getConfig()).database).toEqual([true, true]);
+    const cfg = newController().getConfig();
+
+    expect(modeOf(cfg, 'database')).toEqual({ builtIn: true, builtInSet: true });
+    expect(modeOf(cfg, 'redis')).toEqual({ builtIn: false, builtInSet: true });
+    expect(modeOf(cfg, 'storage')).toEqual({ builtIn: false, builtInSet: false });
   });
 });
 

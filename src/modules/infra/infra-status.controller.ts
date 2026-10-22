@@ -23,6 +23,7 @@ import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
 import { readGeneratedEnv } from './generated-env';
+import { savedBuiltInMode } from './saved-builtin-mode';
 import { isEnvPinned } from '../../config/env-precedence';
 import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { checkForUpdate, type UpdateCheck } from './update-check';
@@ -242,14 +243,17 @@ export class InfraStatusController {
     };
   }
 
-  /** Saved built-in intent flags from data/.env.generated — the fallback when Docker isn't reachable. */
+  /**
+   * The saved built-in mode, the fallback when Docker isn't reachable. The same answer GET /infra/config gives,
+   * so a host the environment pins decides here too and the page never claims a switch no restart makes.
+   */
   private readSavedBuiltinFlags(): { database: boolean; cache: boolean; storage: boolean } {
     try {
       const saved = readGeneratedEnv();
       return {
-        database: saved.POSTGRES_BUILTIN === 'true',
-        cache: saved.REDIS_BUILTIN === 'true',
-        storage: saved.MINIO_BUILTIN === 'true',
+        database: savedBuiltInMode('database', saved).builtIn,
+        cache: savedBuiltInMode('redis', saved).builtIn,
+        storage: savedBuiltInMode('storage', saved).builtIn,
       };
     } catch {
       return { database: false, cache: false, storage: false };

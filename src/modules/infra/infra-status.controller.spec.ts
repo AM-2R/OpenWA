@@ -18,6 +18,18 @@ jest.mock('fs', () => {
 import { InfraStatusController } from './infra-status.controller';
 import { recordPinnedEnvKeys } from '../../config/env-precedence';
 import { producerConnectWaitMs } from '../queue/redis-connection';
+import * as fs from 'fs';
+import {
+  EXPECTED_MODE,
+  FILE_STATES,
+  PIN_STATES,
+  SERVICES,
+  SERVICE_NAMES,
+  fileLines,
+  pinnedHost,
+  type FileState,
+  type PinState,
+} from '../../../test/fixtures/builtin-mode-cases';
 
 describe('InfraStatusController.getStatus DB health (active SELECT 1 probe, not just isInitialized)', () => {
   const build = (query: jest.Mock) => {
@@ -280,4 +292,60 @@ describe('InfraStatusController.getStatus envPinned', () => {
 
     expect((await buildController().getStatus()).envPinned).toEqual([]);
   });
+});
+
+// With Docker unreachable the status falls back to the saved built-in mode, and it must be the one GET /infra/config
+// answers with, or the page claims a switch that no restart makes. Every file and pin state, each service.
+describe('InfraStatusController.getStatus built-in fallback agrees with the saved mode when Docker is unreachable', () => {
+  const build = () => {
+    const config = { get: (k: string, def?: unknown) => (k === 'engine.type' ? 'baileys' : def) };
+    const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
+    return new InfraStatusController(
+      config as never,
+      ds as never,
+      ds as never,
+      { create: jest.fn() } as never,
+      { isDockerAvailable: () => false, getRunningBuiltinServices: jest.fn() } as never,
+      { isAvailable: jest.fn().mockResolvedValue(false) } as never,
+      { refreshS3Availability: jest.fn() } as never,
+      undefined as never,
+    );
+  };
+  const otherState = (state: FileState): FileState => (state === 'stored-true' ? 'stored-false' : 'stored-true');
+  const otherPin = (pin: PinState): PinState => (pin === 'external' ? 'bundled' : 'external');
+  let pinnedKeys: string[] = [];
+
+  afterEach(() => {
+    for (const key of pinnedKeys) delete process.env[key];
+    pinnedKeys = [];
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+  });
+
+  for (const service of SERVICE_NAMES) {
+    for (const state of FILE_STATES) {
+      for (const pin of PIN_STATES) {
+        it(`${service}: a ${state} file with ${pin === 'none' ? 'no host pin' : `the host pinned ${pin}`}`, async () => {
+          const lines: string[] = [];
+          const pins: Record<string, string> = {};
+          for (const name of SERVICE_NAMES) {
+            const own = name === service;
+            lines.push(...fileLines(name, own ? state : otherState(state)));
+            const host = pinnedHost(name, own ? pin : otherPin(pin));
+            if (host !== undefined) pins[SERVICES[name].host] = host;
+          }
+          recordPinnedEnvKeys(pins);
+          for (const [key, value] of Object.entries(pins)) process.env[key] = value;
+          pinnedKeys = Object.keys(pins);
+          (fs.existsSync as jest.Mock).mockReturnValue(true);
+          (fs.readFileSync as jest.Mock).mockReturnValue(`${lines.join('\n')}\n`);
+
+          const status = await build().getStatus();
+
+          expect(status[service].builtIn).toBe(EXPECTED_MODE[state][pin].builtIn);
+        });
+      }
+    }
+  }
 });

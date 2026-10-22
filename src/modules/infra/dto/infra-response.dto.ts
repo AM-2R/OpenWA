@@ -236,9 +236,10 @@ export class InfraUpdateCheckResponseDto {
 // ---------- GET /infra/config ----------
 
 const BUILT_IN_SET_DESCRIPTION =
-  'Whether the built-in flag is stored, in the saved file or pinned by the environment. When false, builtIn is ' +
-  'false only because nothing says otherwise (a Compose deployment that pins the bundled host never writes it): ' +
-  'read what runs from /infra/status.';
+  'Whether the saved configuration states the built-in mode of this service. False when a host pinned by the ' +
+  'environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not ' +
+  'select the service (the first boot writes every flag as false next to a service that is not in use), and when ' +
+  'nothing is saved. When false, read what runs from /infra/status.';
 
 export class InfraConfigDatabaseDto {
   @ApiProperty({ enum: ['sqlite', 'postgres'], example: 'postgres' })
