@@ -389,7 +389,7 @@
    wider); below that they stack. */
 @media (max-width: 1200px) {
   .infrastructure-page .infra-sections {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -479,6 +479,7 @@
 
   .infrastructure-page .stat-values {
     gap: 1rem;
+    flex-wrap: wrap;
   }
 
   .infrastructure-page .stat-item .value {
@@ -562,6 +563,7 @@
 }
 .infrastructure-page .data-migration-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 .infrastructure-page .data-migration-actions .btn-sm,
