@@ -22478,7 +22478,7 @@
               "sqlite",
               "postgres"
             ],
-            "description": "Absent keeps the stored selection, which the rest of the section then applies to."
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins another selection than the stored one, a section without it writes nothing."
           },
           "builtIn": {
             "type": "boolean"
@@ -22549,7 +22549,7 @@
               "local",
               "s3"
             ],
-            "description": "Absent keeps the stored selection, which the rest of the section then applies to."
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins another selection than the stored one, a section without it writes nothing."
           },
           "builtIn": {
             "type": "boolean"

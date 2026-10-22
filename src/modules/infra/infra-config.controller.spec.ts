@@ -34,6 +34,7 @@ import { SaveConfigDto } from './dto/save-config.dto';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { resolveStorageRoot } from '../../config/storage-root';
+import { validateEnv } from '../../config/env.validation';
 import {
   EXPECTED_MODE,
   FILE_STATES,
@@ -852,6 +853,26 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       recordPinnedEnvKeys({});
     });
 
+    // The page sends every field of a card, seeded with defaults for keys nothing stores. Applied to the stored
+    // PostgreSQL while SQLite is pinned, that writes DATABASE_NAME=openwa, a bare name the pinned SQLite boot refuses.
+    it('writes nothing of a section whose pinned selection differs from the stored one', () => {
+      pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+      const stored = STORED_EXTERNAL.replace('DATABASE_NAME=appdb\n', '');
+
+      const env = written(
+        {
+          database: { builtIn: false, host: 'db.example.com', port: '5432', database: 'openwa', poolSize: 10 },
+          storage: { builtIn: false, localPath: './data/media', s3Region: 'ap-southeast-1' },
+        },
+        stored,
+      );
+
+      expect(env).not.toMatch(/^(DATABASE_NAME|DATABASE_PORT|DATABASE_POOL_SIZE|S3_REGION|STORAGE_LOCAL_PATH)=/m);
+      for (const line of stored.trim().split('\n')) expect(env).toContain(line);
+      const parsed = jest.requireActual<typeof import('dotenv')>('dotenv').parse(env);
+      expect(() => validateEnv({ ...parsed, DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' })).not.toThrow();
+    });
+
     it('keeps a stored PostgreSQL and S3 choice and their settings under the opposite pins', () => {
       pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
 
@@ -924,6 +945,25 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       expect(() => newController().saveConfig(config as never)).toThrow(BadRequestException);
       expect(() => newController().saveConfig(config as never)).toThrow(message);
       expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
+    });
+
+    it('applies a section whose pinned selection is the stored one', () => {
+      pin({ DATABASE_TYPE: 'postgres', STORAGE_TYPE: 's3' });
+
+      const env = written({ database: { poolSize: 25 }, storage: { s3Bucket: 'media-2' } }, STORED_EXTERNAL);
+
+      expect(env).toContain('DATABASE_POOL_SIZE=25');
+      expect(env).toContain('S3_BUCKET=media-2');
+    });
+
+    it('applies a section to the stored selection when nothing pins one', () => {
+      const env = written(
+        { database: { host: 'db.example.com' }, storage: { localPath: './data/media-2' } },
+        'DATABASE_TYPE=sqlite\nPOSTGRES_BUILTIN=false\nSTORAGE_TYPE=local\nSTORAGE_LOCAL_PATH=./data/media\n',
+      );
+
+      expect(env).toContain('STORAGE_LOCAL_PATH=./data/media-2');
+      expect(env).not.toMatch(/^DATABASE_HOST=/m);
     });
 
     it('still writes a type that is sent', () => {

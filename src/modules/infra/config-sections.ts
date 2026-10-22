@@ -33,21 +33,27 @@ function portValue(label: string, value: string): string {
 }
 
 // The selection a section applies to: the one sent, else the stored one, else the one the environment pins. Only a
-// sent one is written, so a save that leaves it out (the page does for a type the environment pins) never writes a
-// selection over the stored choice. With none of the three the section cannot be read, and is refused.
+// sent one is written, so a save that leaves it out (the page does for a pinned type in a card left untouched) never
+// writes a selection over the stored choice. When the environment pins another selection than the stored one, the
+// section's fields belong to neither boot: applied to the stored mode they reach the pinned boot now (a PostgreSQL
+// DATABASE_NAME refuses a SQLite boot), applied to the pinned mode they reach the stored one once the pin is
+// removed. Nothing of the section is written then (null). With no selection at all it cannot be read, and is refused.
 function sectionType<T extends string>(
   section: string,
   key: string,
   sent: T | undefined,
   existing: Record<string, string>,
   allowed: readonly T[],
-): T {
-  const type =
-    sent ?? [existing[key], isEnvPinned(key) ? process.env[key] : undefined].find(v => allowed.includes(v as T));
+): T | null {
+  if (sent) return sent;
+  const stored = allowed.find(v => v === existing[key]);
+  const pinned = isEnvPinned(key) ? allowed.find(v => v === process.env[key]) : undefined;
+  if (stored && pinned && stored !== pinned) return null;
+  const type = stored ?? pinned;
   if (type === undefined) {
     throw new BadRequestException(`${section}.type must be one of the following values: ${allowed.join(', ')}`);
   }
-  return type as T;
+  return type;
 }
 
 // Database. NOTE: these keys must match what src/config/configuration.ts reads.
@@ -58,6 +64,7 @@ export function applyDatabaseSection(
 ): void {
   const { updates, staleKeys, profiles } = ctx;
   const type = sectionType('database', 'DATABASE_TYPE', database.type, existing, ['sqlite', 'postgres']);
+  if (type === null) return;
   if (database.type) updates.DATABASE_TYPE = database.type;
   if (database.builtIn !== undefined) {
     updates.POSTGRES_BUILTIN = database.builtIn ? 'true' : 'false';
@@ -195,6 +202,7 @@ export function applyStorageSection(
 ): void {
   const { updates, staleKeys, profiles } = ctx;
   const type = sectionType('storage', 'STORAGE_TYPE', storage.type, existing, ['local', 's3']);
+  if (type === null) return;
   if (storage.type) updates.STORAGE_TYPE = storage.type;
   if (storage.builtIn !== undefined) {
     updates.MINIO_BUILTIN = storage.builtIn ? 'true' : 'false';

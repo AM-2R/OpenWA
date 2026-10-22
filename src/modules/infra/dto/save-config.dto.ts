@@ -18,7 +18,9 @@ import { ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common
 export class DatabaseConfigDto {
   @ApiPropertyOptional({
     enum: ['sqlite', 'postgres'],
-    description: 'Absent keeps the stored selection, which the rest of the section then applies to.',
+    description:
+      'Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins ' +
+      'another selection than the stored one, a section without it writes nothing.',
   })
   @IsOptional()
   @IsIn(['sqlite', 'postgres'])
@@ -128,7 +130,9 @@ export class QueueConfigDto {
 export class StorageConfigDto {
   @ApiPropertyOptional({
     enum: ['local', 's3'],
-    description: 'Absent keeps the stored selection, which the rest of the section then applies to.',
+    description:
+      'Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins ' +
+      'another selection than the stored one, a section without it writes nothing.',
   })
   @IsOptional()
   @IsIn(['local', 's3'])
