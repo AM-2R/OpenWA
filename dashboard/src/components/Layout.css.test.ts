@@ -108,6 +108,9 @@ test('the full-height sidebar and mobile scroller follow the dynamic viewport', 
   const scroller = find('.main-content.mobile').find(r => r.media);
   assert.ok(scroller, 'no mobile .main-content rule');
   assert.deepEqual(valuesOf(scroller.body, 'height'), ['100vh', '100dvh']);
+  // .main-content keeps min-height: 100vh, which beats a smaller height: unless the scroller resets it, the dvh line
+  // above never takes effect and the scroller stays as tall as the large viewport.
+  assert.deepEqual(valuesOf(scroller.body, 'min-height'), ['0']);
 });
 
 test('the language menu is bounded by the dynamic viewport too, since it hangs off the sidebar bottom', () => {
