@@ -173,13 +173,15 @@ export function applyRedisSection(
   const redisBuiltIn = redis.builtIn ?? existing.REDIS_BUILTIN === 'true';
   // What the next boot reads: a value the environment pins, else this save's, else the stored one. The queue
   // section is applied first, so its switch is in `updates` already.
-  if (datastoreInUse('redis', key => (isEnvPinned(key) ? process.env[key] : (updates[key] ?? existing[key])))) {
+  const saved = (key: string): string | undefined => updates[key] ?? existing[key];
+  if (datastoreInUse('redis', key => (isEnvPinned(key) ? process.env[key] : saved(key)))) {
     if (redisBuiltIn) profiles.push('redis');
-  } else {
-    // Nothing the next boot runs reaches Redis, so no bundled container may be started for it at boot or kept by
-    // the restart, which keeps a container while the saved host still names it.
+  } else if (!datastoreInUse('redis', saved)) {
+    // Nothing the next boot runs reaches Redis, and the file does not either once a pin is removed, so no
+    // bundled container may be started for it at boot or kept by the restart, which keeps a container while the
+    // saved host still names it. A Redis only a pin switches off keeps the stored choice.
     updates.REDIS_BUILTIN = 'false';
-    if ((updates.REDIS_HOST ?? existing.REDIS_HOST) === 'redis') staleKeys.add('REDIS_HOST');
+    if (saved('REDIS_HOST') === 'redis') staleKeys.add('REDIS_HOST');
   }
 }
 

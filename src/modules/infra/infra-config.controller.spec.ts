@@ -1161,6 +1161,21 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('REDIS_HOST=redis');
     });
 
+    // The stored choice is kept for the day the pin is removed: the file still uses Redis then.
+    it('keeps a stored bundled Redis while the environment pins REDIS_ENABLED off', () => {
+      process.env.REDIS_ENABLED = 'false';
+      recordPinnedEnvKeys({ REDIS_ENABLED: 'false' });
+
+      const env = written(
+        { redis: { builtIn: true, host: 'redis', port: '6379' }, queue: { enabled: false } },
+        BUILTIN_REDIS_ENV,
+      );
+
+      expect(env).toContain('REDIS_ENABLED=true');
+      expect(env).toContain('REDIS_BUILTIN=true');
+      expect(env).toContain('REDIS_HOST=redis');
+    });
+
     it('asks for the redis profile only while something uses Redis', () => {
       const profilesOf = (config: unknown) => {
         (fs.existsSync as jest.Mock).mockReturnValue(true);
