@@ -80,11 +80,11 @@ button {
   transition: border-color 0.25s;
 }
 /* Visible keyboard focus — cross-browser and keyboard-only, so the ring guides Tab navigation
-   without flashing on every mouse click. */
+   without flashing on every mouse click. Every ring is drawn in --focus-ring (App.css, which has the contrast). */
 button:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--primary, #25d366);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 button:focus:not(:focus-visible) {

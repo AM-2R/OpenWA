@@ -186,6 +186,31 @@ test('every status text twin clears 4.5:1 on the translucent fill its own rule p
   assert.deepEqual(offenders, []);
 });
 
+// WCAG 2.2 SC 1.4.11 asks 3:1 of a keyboard focus indicator against what it is drawn on: the page and card surfaces
+// and the soft brand tint of a focused menu entry or search hit. The brand fill measured 1.98:1 on white.
+test('the focus ring clears 3:1 on every surface it is drawn on, in both themes', () => {
+  assert.match(CSS, /--focus-ring:\s*var\(--primary-text\)/);
+  for (const [anchor, tint] of [
+    [LIGHT, 0.12],
+    [DARK, 0.18],
+    [DARK_MEDIA, 0.18],
+  ] as const) {
+    const block = blockAfter(anchor);
+    const ring = rgb(hexOf(block, '--primary-text'));
+    for (const surface of ['--bg-white', '--bg-light']) {
+      const bg = rgb(hexOf(block, surface));
+      const soft = mix(rgb(hexOf(blockAfter(LIGHT), '--primary')), tint, bg);
+      for (const [name, fill] of [
+        ['the surface', bg],
+        ['the soft tint over it', soft],
+      ] as const) {
+        const ratio = contrast(ring, fill);
+        assert.ok(ratio >= 3, `${anchor} ring on ${name} of ${surface} is ${ratio.toFixed(2)}:1`);
+      }
+    }
+  }
+});
+
 test('the search match and the Number Checker highlight pill clear AA in both themes', () => {
   const search = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/GlobalSearch.css'), 'utf8');
   const mark =

@@ -52,8 +52,26 @@ test('chat menu entries and search hits draw a ring on keyboard focus', () => {
   ]) {
     const rule = all.find(r => r.selectors.includes(selector));
     assert.ok(rule, `no rule for ${selector}`);
-    assert.match(rule.body, /outline:\s*2px solid var\(--primary\)/, selector);
+    assert.match(rule.body, /outline:\s*2px solid var\(--focus-ring\)/, selector);
   }
+});
+
+// The brand fill (#25d366) is 1.98:1 on white, under the 3:1 WCAG 2.2 SC 1.4.11 asks of a focus indicator. Every ring
+// is drawn in the --focus-ring token (App.css, where its contrast is checked), so one value moves them all.
+test('every keyboard focus ring is drawn in the --focus-ring token', () => {
+  const drawn = all.flatMap(r =>
+    [...r.body.matchAll(/(?:^|;)\s*outline(?:-color)?\s*:\s*([^;]+)/g)]
+      .map(m => ({ at: `${r.file}: ${r.selectors.join(', ')}`, value: m[1].trim() }))
+      .filter(({ value }) => !/^(?:none|0)$/.test(value)),
+  );
+  assert.ok(
+    drawn.some(({ at }) => at.startsWith('index.css')),
+    'the global ring is not seen',
+  );
+  assert.deepEqual(
+    drawn.filter(({ value }) => !/\bvar\(--focus-ring\)/.test(value)).map(({ at, value }) => `${at} => ${value}`),
+    [],
+  );
 });
 
 // The soft brand fill a focused hit paints is a tint: the muted meta line (the chat id and the time) measures 4.35:1

@@ -896,7 +896,7 @@
 }
 
 .sessions-page .toggle-switch input:focus-visible + .toggle-slider {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 

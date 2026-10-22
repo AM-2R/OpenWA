@@ -80,7 +80,7 @@
 
 .global-search-hit:focus-visible {
   background: var(--primary-soft);
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 

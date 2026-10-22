@@ -6,6 +6,11 @@
      --bg-light, and 4.82:1 on --primary-soft (4.63:1 over --bg-light), the tint the active sidebar item
      uses. On the heaviest green tint a badge paints (18 percent over white) it measures 4.61:1. */
   --primary-text: #167c3b;
+  /* The keyboard focus ring. WCAG 2.2 SC 1.4.11 asks 3:1 of a focus indicator; the brand fill measures 1.98:1 on white
+     and 1.74:1 on --primary-soft over --bg-light. --primary-text clears it on every surface a ring is drawn on: 5.28:1
+     on white, 5.04:1 on --bg-light and 4.63:1 on --primary-soft over --bg-light. In the dark theme it is the brand
+     green itself, 7.38:1 on --bg-white and 5.15:1 on --primary-soft over it. */
+  --focus-ring: var(--primary-text);
   --primary-hover: #1da851;
   --primary-soft: rgba(37, 211, 102, 0.12);
   --bg-light: #f8fafc;

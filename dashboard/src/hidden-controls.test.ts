@@ -32,7 +32,7 @@ test('the Infrastructure radio inputs stay focusable and the card shows the focu
   for (const r of inputs) assert.doesNotMatch(r.body, /display:\s*none/, `${r.selectors.join(', ')} removes the radio`);
   const ring = all.find(r => r.selectors.some(s => /\.radio-option:has\(input:focus-visible\)$/.test(s)));
   assert.ok(ring, 'no focus ring for the focused radio card');
-  assert.match(ring.body, /outline:\s*2px solid var\(--primary\)/);
+  assert.match(ring.body, /outline:\s*2px solid var\(--focus-ring\)/);
 });
 
 /** Every stylesheet under src/, as a path relative to src/. */
@@ -54,7 +54,7 @@ test('every stylesheet that hides a toggle checkbox rings its slider on keyboard
     const ring = rules(file).find(r =>
       r.selectors.some(s => /\.toggle-switch input:focus-visible \+ \.toggle-slider$/.test(s)),
     );
-    return !ring || !/outline:\s*2px solid var\(--primary\)/.test(ring.body);
+    return !ring || !/outline:\s*2px solid var\(--focus-ring\)/.test(ring.body);
   });
   assert.deepEqual(missing, []);
 });

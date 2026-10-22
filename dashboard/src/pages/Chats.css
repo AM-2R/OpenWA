@@ -1288,7 +1288,7 @@
 
 /* A bubble is a keyboard stop (ChatThread): the ring says which message the arrow keys act on. */
 .chats-page .message-bubble-container:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 12px;
 }
@@ -1915,7 +1915,7 @@
 }
 
 .chats-page .icon-btn:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -2067,7 +2067,7 @@
 }
 
 .chats-page .chat-row-menu-trigger:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -2140,7 +2140,7 @@
 .chats-page .chat-row-menu-popover button:focus-visible,
 .chats-page .room-menu-popover button:focus-visible {
   background: var(--primary-soft);
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -2225,7 +2225,7 @@
 }
 
 .chats-page .search-clear:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
