@@ -67,10 +67,12 @@ describe('Session content lifetime', () => {
   let controls: SessionEngineControls;
   let engines: EngineRegistry;
   let hooks: HookManager;
+  let purgeSessionData: jest.Mock;
   const config = new ConfigService({});
   const logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
   beforeEach(async () => {
+    purgeSessionData = jest.fn().mockResolvedValue(undefined);
     db = new DataSource(
       process.env.DATABASE_TYPE === 'postgres'
         ? {
@@ -102,7 +104,7 @@ describe('Session content lifetime', () => {
     });
     controls = new SessionEngineControls({
       sessionRepository: db.getRepository(Session),
-      engineFactory: { purgeSessionData: () => Promise.resolve() },
+      engineFactory: { purgeSessionData },
       engines,
       sessionErrors: state,
       sessionRestrictions: state,
@@ -557,6 +559,36 @@ describe('Session content lifetime', () => {
     const ordered = stamps.slice(0, firstUnstamped) as number[];
     expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
   }, 60000);
+
+  // The auth directories a session's name keyed before 0.23.5 go with it, unless that name is another session's id.
+  it('purges the directories its name keyed and withholds a name that is another session id', async () => {
+    const repo = db.getRepository(Session);
+    const plain = await repo.save({ name: 'legacy-name', config: {} });
+    const other = await repo.save({ name: 'other', config: {} });
+    const namedAfterOther = await repo.save({ name: other.id, config: {} });
+
+    await controls.delete(plain.id);
+    await controls.delete(namedAfterOther.id);
+
+    expect(purgeSessionData.mock.calls).toEqual([
+      [plain.id, 'legacy-name'],
+      [namedAfterOther.id, undefined],
+    ]);
+  });
+
+  // An import accepts any safe key as a session id, which only SQLite can store.
+  (process.env.DATABASE_TYPE === 'postgres' ? it.skip : it)(
+    'withholds a name that is the id an import gave another session',
+    async () => {
+      const repo = db.getRepository(Session);
+      await repo.insert({ id: 'imported-key', name: 'imported', config: {} });
+      const namedAfterKey = await repo.save({ name: 'imported-key', config: {} });
+
+      await controls.delete(namedAfterKey.id);
+
+      expect(purgeSessionData.mock.calls).toEqual([[namedAfterKey.id, undefined]]);
+    },
+  );
 
   // The SQLite driver resolves every statement within the same tick, so the yield between the batches is the
   // only thing that lets timers, requests and engine callbacks run during a long delete. Each batch statement
