@@ -1107,9 +1107,10 @@ replaced with `[REDACTED]` before the line is written, at any depth. A log call 
 metadata: an object that contains itself is written with `[Circular]` in its place, and below the fifth
 level at most 1000 more objects and arrays are copied, the rest written as `[Truncated]`. So is an array,
 typed array or object with more entries than that allowance has left (a list of 1000 numbers at the sixth
-level), and, at any level, an array or typed array of more than a million entries. At every level the metadata
-is copied in at most two million entries in all (the keys of its objects plus the lengths of its arrays, a value
-referenced again counted again at each use); an object or array that no longer fits is written as `[Truncated]`.
+level), and, at any level, an array or typed array of more than a million entries. At every level one call
+copies at most two million entries in all (the keys of its objects plus the lengths of its arrays) and writes at
+most 2^26 (about 67 million) characters of string values, key names and BigInt text (sixteen to the digit); a
+value referenced again is counted again at each use, and what no longer fits is written as `[Truncated]`.
 
 The same logger is installed as Nest's framework logger, so framework lines (route mapping, unhandled
 exception stacks from the exception handler) follow `LOG_LEVEL` and `LOG_FORMAT` and carry the

@@ -1283,6 +1283,116 @@ describe('redactSecrets', () => {
     });
   });
 
+  // One copy writes at most 2**26 characters of string values, BigInt text and key names, a shared one charged again at
+  // every use. A string is not copied, so the entries above cannot see a long one referenced many times.
+  describe('the characters one copy may write', () => {
+    const LIMIT = 2 ** 26;
+    const text = (length: number): string => 'x'.repeat(length);
+    // What a failing comparison prints: the length of a long string or key name, never the text.
+    const shown = (value: unknown): unknown => {
+      if (typeof value === 'string') return value.length > 20 ? value.length : value;
+      if (value === null || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [shown(key), shown(child)]));
+    };
+
+    // The key name counts with the value, so the key `a` leaves room for 2**26 - 1 characters.
+    it('keeps a copy of exactly 2**26 characters and writes one character more as [Truncated]', () => {
+      expect(shown(redactSecrets({ a: text(LIMIT - 1) }))).toEqual({ a: LIMIT - 1 });
+      expect(shown(redactSecrets({ a: text(LIMIT) }))).toEqual({ a: '[Truncated]' });
+    });
+
+    it('charges every use of a shared string', () => {
+      const shared = text(2 ** 24 - 1);
+      const { list } = redactSecrets({ list: [shared, shared, shared, shared, shared] }) as { list: unknown[] };
+
+      expect(list.map(shown)).toEqual([2 ** 24 - 1, 2 ** 24 - 1, 2 ** 24 - 1, 2 ** 24 - 1, '[Truncated]']);
+    });
+
+    it('charges the key names of an object at every use', () => {
+      const shared = { [text(2 ** 24 - 1)]: 1 };
+      const { list } = redactSecrets({ list: [shared, shared, shared, shared, shared] }) as { list: unknown[] };
+
+      expect(list.map(shown)).toEqual([
+        { [2 ** 24 - 1]: 1 },
+        { [2 ** 24 - 1]: 1 },
+        { [2 ** 24 - 1]: 1 },
+        { [2 ** 24 - 1]: 1 },
+        '[Truncated]',
+      ]);
+    });
+
+    it('does not write an object whose key name does not fit, and cuts what follows it, not the object around it', () => {
+      const copy = redactSecrets({ a: { [text(LIMIT + 1)]: 1 }, b: 'after', c: {}, d: [] });
+
+      expect(shown(copy)).toEqual({ a: '[Truncated]', b: '[Truncated]', c: '[Truncated]', d: '[Truncated]' });
+    });
+
+    it('charges the text of a BigInt sixteen characters to the digit', () => {
+      const big = 10n ** 999n;
+      // The two key names take 2 characters, and `left` is what the BigInt finds when its turn comes.
+      const withRoom = (left: number): unknown => shown(redactSecrets({ a: text(LIMIT - 2 - left), b: big }));
+
+      expect(withRoom(16_000)).toEqual({ a: LIMIT - 2 - 16_000, b: 1000 });
+      expect(withRoom(15_999)).toEqual({ a: LIMIT - 2 - 15_999, b: '[Truncated]' });
+    });
+
+    it('builds no more BigInt text once the characters are spent', () => {
+      const big = 10n ** 999n;
+      const toString = jest.spyOn(BigInt.prototype, 'toString');
+      try {
+        // Three uses of 1000 digits fit, 16,000 characters each; the fourth is built and found not to fit.
+        const { list } = redactSecrets({
+          a: text(LIMIT - 3 * 16_000 - 100),
+          list: Array.from({ length: 10 }, () => big),
+        }) as {
+          list: unknown[];
+        };
+
+        expect(list.map(shown)).toEqual([1000, 1000, 1000, ...new Array<string>(7).fill('[Truncated]')]);
+        expect(toString).toHaveBeenCalledTimes(4);
+      } finally {
+        toString.mockRestore();
+      }
+    });
+
+    it('does not charge the value of a secret-named key, which is not written', () => {
+      expect(shown(redactSecrets({ password: text(LIMIT), after: 'ok' }))).toEqual({
+        password: '[REDACTED]',
+        after: 'ok',
+      });
+    });
+
+    it('still redacts a secret-named key beside a string that is cut, and does not charge its value', () => {
+      const copy = redactSecrets({ big: text(LIMIT + 1), password: text(LIMIT) });
+
+      expect(shown(copy)).toEqual({ big: '[Truncated]', password: '[REDACTED]' });
+    });
+
+    it('keeps the rest of a line whose second string is cut', () => {
+      const logger = new LoggerService();
+      const log = jest.spyOn(console, 'log').mockImplementation();
+      LoggerService.setLogFormat(LogFormat.JSON);
+      try {
+        logger.log('saved', { sessionId: 's1', first: text(LIMIT / 2 + 1), second: text(LIMIT / 2), after: 3 });
+
+        const line = JSON.parse((log.mock.calls as string[][])[0][0]) as Record<string, unknown>;
+        expect(shown({ ...line, timestamp: 0 })).toEqual({
+          timestamp: 0,
+          level: 'info',
+          context: 'Application',
+          message: 'saved',
+          sessionId: 's1',
+          first: LIMIT / 2 + 1,
+          second: '[Truncated]',
+          after: 3,
+        });
+      } finally {
+        log.mockRestore();
+        LoggerService.setLogFormat(null);
+      }
+    });
+  });
+
   describe('the bounds of the copy', () => {
     // `rows` ends up `above` objects below the top, so its entries sit one level lower: with 3 above they are in
     // the fifth level, the last one copied whole, and with 4 above they are in the sixth, the first one that costs.

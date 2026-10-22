@@ -44,6 +44,13 @@ const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 // array limit, so a structure of that size is written whole; an object or array that does not fit in what is left of
 // it is written as [Truncated], which is what keeps a few shared references from expanding into an unbounded copy.
 const REDACT_MAX_ENTRIES = 2_000_000;
+// A string is written whole and is not copied, so a long one referenced many times, or a long key name of a shared
+// object, expands past what the entries count. One copy writes at most this many characters of string values, BigInt
+// text (each digit charged REDACT_BIGINT_WEIGHT times) and key names, each charged again at every use; one that does
+// not fit is written as [Truncated]. It is far above any line a caller writes on purpose (a million entries of 64
+// characters fit), and below what V8 can build.
+const REDACT_MAX_CHARS = 2 ** 26;
+const REDACT_BIGINT_WEIGHT = 16;
 
 export interface RedactOptions {
   /** Whether the value under this key is a credential. Defaults to the secret-name pattern above. */
@@ -70,21 +77,29 @@ function elementCount(view: ArrayBufferView): number {
 /**
  * Return a copy of `value` with credential keys' values replaced by `[REDACTED]` (recursive). The copy always
  * serializes: an object met again inside itself becomes `[Circular]`, a nested BigInt its decimal text, and
- * whatever lies beyond the deep node budget or the entry budget `[Truncated]`. Shared with the Baileys wire logger.
+ * whatever lies beyond the deep node, entry or character budget `[Truncated]`. Shared with the Baileys wire logger.
  */
 export function redactSecrets(value: unknown, options: RedactOptions = {}): unknown {
   const { isSecretKey = isSecretName, marker = '[REDACTED]', errors = false } = options;
-  const budget = { nodes: REDACT_DEEP_NODES, entries: REDACT_MAX_ENTRIES };
+  const budget = { nodes: REDACT_DEEP_NODES, entries: REDACT_MAX_ENTRIES, chars: REDACT_MAX_CHARS };
   const walk = (node: unknown, path: object[]): unknown => {
     // A function is not data: it is left out, as JSON.stringify leaves it out of an object and writes null in an array.
     if (typeof node === 'function') return undefined;
+    if (typeof node === 'string') return (budget.chars -= node.length) < 0 ? '[Truncated]' : node;
     if (node === null || typeof node !== 'object') return node;
     if (path.includes(node)) return '[Circular]';
     const deep = path.length >= REDACT_FULL_DEPTH;
-    // A negative entry budget means an object that did not fit was listed: nothing else is copied or listed after it.
-    if ((deep && --budget.nodes < 0) || budget.entries < 0) return '[Truncated]';
+    // A negative budget means something that did not fit was met: nothing else is copied or listed after it.
+    if ((deep && --budget.nodes < 0) || budget.entries < 0 || budget.chars < 0) return '[Truncated]';
     const parents = [...path, node];
-    const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
+    const copy = (child: unknown): unknown => {
+      if (typeof child !== 'bigint') return walk(child, parents);
+      // Its text costs far more to build than a string of that length costs to write (ten times or more), and
+      // none is built once the budget is spent.
+      if (budget.chars < 0) return '[Truncated]';
+      const text = child.toString();
+      return (budget.chars -= text.length * REDACT_BIGINT_WEIGHT) < 0 ? '[Truncated]' : text;
+    };
     const left = Math.min(budget.entries, deep ? budget.nodes : Infinity);
     const room = Math.min(left, REDACT_MAX_ARRAY_LENGTH);
     if (Array.isArray(node)) {
@@ -111,6 +126,8 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     budget.entries -= keys.length;
     const out: Record<string, unknown> = {};
     for (const key of keys) {
+      // The key that does not fit turns its object into the marker; keys after the budget is spent are only listed.
+      if (budget.chars >= 0 && (budget.chars -= key.length) < 0) return '[Truncated]';
       const val = source[key];
       // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
       if (key === 'toJSON' && typeof val === 'function') continue;
