@@ -20,12 +20,33 @@ test('the infrastructure cards stack before the columns overflow', () => {
 
 // A plain 1fr track never shrinks below the widest content in it, and the three queue counters are a nowrap row: in
 // German on a phone they widened the single card track to 392px, so every card ran past the right edge of a 390px
-// window (84px of page overflow at 320px). The track may shrink, and the counters wrap onto a second line.
-test('the queue counters wrap on a phone', () => {
+// window (84px of page overflow at 320px). The track may shrink, and the counters wrap onto a second line. The same
+// held for the two-column layout above 1200px: the Redis card's counters were its widest content, so in German the
+// two columns came out 440px and 413px instead of equal (456px and 402px with a counter of 987,654,321).
+test('the two columns of cards stay equal whatever their content', () => {
+  const columns = rules.filter(
+    r =>
+      !r.media && r.selectors.includes('.infrastructure-page .infra-sections') && decl(r.body, 'grid-template-columns'),
+  );
+  assert.equal(columns.length, 1, 'expected one base rule for the card columns');
+  assert.equal(decl(columns[0].body, 'grid-template-columns'), 'repeat(2, minmax(0, 1fr))');
+});
+
+// The counters sit in a grid of two columns that holds the one queue card. A track of 1fr would be half of the Redis
+// card, so counters that are allowed to wrap would wrap at every desktop width; sized to the card's own content the
+// track lets them stay on one line, and only a card narrower than that squeezes them.
+test('the queue card keeps its natural width until the Redis card is narrower than that', () => {
+  const row = rules.filter(r => !r.media && r.selectors.includes('.infrastructure-page .stats-row'));
+  assert.equal(row.length, 1, 'expected one base rule for the stats row');
+  assert.equal(decl(row[0].body, 'grid-template-columns'), 'repeat(2, minmax(0, max-content))');
+});
+
+test('the queue counters wrap in a card too narrow for all three', () => {
   const wrap = rules.filter(
     r => r.selectors.includes('.infrastructure-page .stat-values') && decl(r.body, 'flex-wrap'),
   );
   assert.equal(wrap.length, 1, 'expected one rule that lets the counters wrap');
+  assert.equal(wrap[0].media, '', 'the counters wrap only inside a media query');
   assert.equal(decl(wrap[0].body, 'flex-wrap'), 'wrap');
 });
 
