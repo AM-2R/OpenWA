@@ -11,9 +11,25 @@ describe('countMetaValues', () => {
   };
 
   it('counts every value, containers included', () => {
-    expect(countMetaValues('text', NO_LIMIT)).toBe(1);
     expect(countMetaValues(null, NO_LIMIT)).toBe(1);
-    expect(countMetaValues({ a: 1, b: [1, 2], c: { d: 'x' } }, NO_LIMIT)).toBe(1 + 1 + 1 + 2 + 1 + 1);
+    expect(countMetaValues({ a: 1, b: [1, 2], c: { d: true } }, NO_LIMIT)).toBe(1 + 1 + 1 + 2 + 1 + 1);
+  });
+
+  // Each character of a string is written, and a string shared by several references is written at every use.
+  it('counts a string by its length, a shared one at every use', () => {
+    expect(countMetaValues('text', NO_LIMIT)).toBe(1 + 4);
+    expect(countMetaValues('', NO_LIMIT)).toBe(1);
+    expect(countMetaValues({ d: 'x'.repeat(100) }, NO_LIMIT)).toBe(1 + 1 + 100);
+    expect(countMetaValues(['abc', 'abc'], NO_LIMIT)).toBe(1 + 2 * (1 + 3));
+    const small = { s: 'x'.repeat(10) };
+    expect(countMetaValues({ list: [small, small] }, NO_LIMIT)).toBe(1 + 1 + 2 * (1 + 1 + 10));
+
+    const holder = { s: 'x'.repeat(500_000) };
+    const started = Date.now();
+    const count = countMetaValues({ list: Array.from({ length: 2000 }, () => holder) }, 8192);
+
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(count).toBeGreaterThan(8192);
   });
 
   it('counts a shared reference at every use', () => {

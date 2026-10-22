@@ -734,11 +734,7 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     loader.capturedOnLog!('log', 'big', { data: 'x'.repeat(20000) });
     loader.capturedOnLog!('log', 'small', { n: 1 });
 
-    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', {
-      metaTruncated: true,
-      metaLength: 20011,
-      pluginId: 'p1',
-    });
+    expect(logSpy).toHaveBeenNthCalledWith(1, '[p1] big', { metaTruncated: true, pluginId: 'p1' });
     expect(logSpy).toHaveBeenNthCalledWith(2, '[p1] small', { n: 1, pluginId: 'p1' });
   });
 
@@ -759,7 +755,6 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     expect(errorSpy).toHaveBeenNthCalledWith(1, '[p1] big', undefined, {
       error: 'boom',
       metaTruncated: true,
-      metaLength: 20026,
       pluginId: 'p1',
     });
     expect(errorSpy).toHaveBeenNthCalledWith(2, '[p1] bigint', undefined, { error: 'boom', pluginId: 'p1' });
@@ -857,6 +852,20 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
 
       expect(Date.now() - started).toBeLessThan(1000);
       expect(logSpy).toHaveBeenCalledWith('[p1] boxed', { metaTruncated: true, pluginId: 'p1' });
+    });
+
+    it('replaces one long string shared by 2000 entries by the size marker at once', async () => {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const holder = { s: 'x'.repeat(500_000) };
+
+      const started = Date.now();
+      loader.capturedOnLog!('log', 'shared-string', { list: Array.from({ length: 2000 }, () => holder) });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(logSpy).toHaveBeenCalledWith('[p1] shared-string', { metaTruncated: true, pluginId: 'p1' });
     });
 
     it('counts a Map or a Set by its size', async () => {

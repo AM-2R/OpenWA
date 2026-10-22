@@ -3,8 +3,8 @@
  *
  * JSON.stringify cannot be stopped part way: it lists every key of an object or typed array before it calls a
  * replacer for the first one, and it writes a shared reference out again at every use. So the size of the text has
- * to be bounded before it runs. A shared reference is counted at every use, a typed array and a String wrapper by
- * their length. The count errs toward more: a property that JSON.stringify skips (undefined, a function, a symbol)
+ * to be bounded before it runs. A shared reference is counted at every use, a string, a typed array and a String
+ * wrapper by their length. The count errs toward more: a property that JSON.stringify skips (undefined, a function, a symbol)
  * and the entries of a Map or Set (written as {}) are counted too. Every value that is written costs at least one
  * character, so a count past `limit` means a text longer than `limit`.
  */
@@ -14,6 +14,7 @@ export function countMetaValues(meta: unknown, limit: number): number {
   const frames: Array<{ node: object; items: ArrayLike<unknown>; next: number }> = [];
   const visit = (value: unknown): void => {
     count++;
+    if (typeof value === 'string') count += value.length;
     if (typeof value !== 'object' || value === null) return;
     if (ArrayBuffer.isView(value)) {
       count += (value as { length?: number }).length ?? 0;
