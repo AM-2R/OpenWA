@@ -2215,6 +2215,19 @@ describe('SessionService', () => {
       expect(ownership.release).toHaveBeenCalledWith('sess-uuid-1');
     });
 
+    // A delete refused before its teardown (a credential teardown still pending for the name) leaves the
+    // engine running here, and the claim it took is the one that engine's heartbeat renews.
+    it('delete() keeps the claim it took when it is refused while the engine still runs here', async () => {
+      const ownership = withOwnership();
+      jest.spyOn(lifecycle, 'delete').mockRejectedValue(new ConflictException('teardown pending'));
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(true);
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow(ConflictException);
+
+      expect(ownership.claim).toHaveBeenCalledWith('sess-uuid-1');
+      expect(ownership.release).not.toHaveBeenCalled();
+    });
+
     it('forceKill() hands the claim back after the kill', async () => {
       const ownership = withOwnership();
       jest.spyOn(lifecycle, 'forceKill').mockResolvedValue(createMockSession());

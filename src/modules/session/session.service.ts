@@ -9,6 +9,7 @@ import {
   OnModuleInit,
   OnApplicationBootstrap,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
@@ -604,16 +605,53 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // COUNT, or delete()'s own requireSession — would let the mark land after that window. A mark
     // left behind when the fence refuses (409) is harmless and is cleared by the next start().
     this.markStopping(id);
+    let claimed = false;
     try {
-      if (this.ownership) await this.assertNotHeldElsewhere(id);
+      if (this.ownership) {
+        await this.assertNotHeldElsewhere(id);
+        await this.claimForDelete(id, this.ownership);
+        claimed = true;
+      }
       // A failed row read deleted nothing: the lifecycle drops the mark, and the count goes with it.
       await this.engineLifecycle.delete(id, { onReadFailed: () => this.uncountStopRequest(id) });
       await this.releaseClaimBestEffort(id);
       this.stopRequests.delete(id);
     } catch (error) {
+      // The row survived. A claim left on it lapses with nothing to renew it, and a peer would then
+      // adopt and restart the session the operator was deleting.
+      if (claimed) await this.releaseAfterTeardown(id);
       this.discardStopMarkForMissingSession(id, error);
       throw error;
     }
+  }
+
+  /**
+   * Hold the session's claim for as long as the delete runs. A row nobody held, or one whose holder's
+   * lease lapsed, could otherwise be claimed by a peer's start or takeover while its rows are removed,
+   * and the engine that peer launched would store messages for a session that no longer exists. The
+   * heartbeat renews the claim (a delete in flight counts as active) and delete() hands it back.
+   * Nothing has been removed when this refuses: a peer that claimed first answers the same 409 as
+   * assertNotHeldElsewhere, and a failed write is undone like a failed ownership read.
+   */
+  private async claimForDelete(id: string, ownership: SessionOwnershipService): Promise<void> {
+    let claimed: boolean;
+    try {
+      claimed = await ownership.claim(id);
+    } catch (error) {
+      this.engineLifecycle.clearStopping(id);
+      this.uncountStopRequest(id);
+      this.logger.warn(`Could not claim session ${id} for the delete; nothing was deleted`, {
+        sessionId: id,
+        action: 'session_delete_claim_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new ServiceUnavailableException(`Session ${id} could not be claimed for the delete; nothing was deleted`);
+    }
+    if (claimed) return;
+    this.uncountStopRequest(id);
+    // The claim is a conditional UPDATE, so an id with no row matches nothing too: answer its 404.
+    await this.findOne(id);
+    throw new ConflictException(`Session ${id} is running on another node`);
   }
 
   /**

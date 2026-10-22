@@ -265,8 +265,8 @@ export class SessionOwnershipService {
 
   /**
    * Register what to do when this process takes a session over from a node whose lease lapsed, by
-   * claiming it (an explicit start, boot auto-start, the takeover sweep) or by releasing that node's
-   * claim (a stop of such a session). Whatever that node left unfinished for the
+   * claiming it (an explicit start, boot auto-start, the takeover sweep, a delete) or by releasing
+   * that node's claim (a stop of such a session). Whatever that node left unfinished for the
    * session can no longer finish there. A session its holder released is not taken over: that holder
    * may still be finishing its own work.
    */
