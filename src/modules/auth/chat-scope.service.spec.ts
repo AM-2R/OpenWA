@@ -3,6 +3,7 @@ import { ChatScopeService } from './chat-scope.service';
 import { DataSource, FindOperator, Repository } from 'typeorm';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { Session } from '../session/entities/session.entity';
 
 const PHONE = '919999999999';
 const LID = '555000111';
@@ -119,9 +120,11 @@ describe('ChatScopeService', () => {
 
 describe('ChatScopeService over the shared lid table, with two sessions', () => {
   const key = { allowedChats: [`${PHONE}@c.us`] };
+  const [s1, s2] = ['00000001-0000-4000-8000-000000000000', '00000002-0000-4000-8000-000000000000'];
   let ds: DataSource;
   let store: LidMappingStoreService;
   let svc: ChatScopeService;
+  let warn: jest.SpyInstance;
   const admitted = async (): Promise<[boolean, boolean]> => [
     await svc.allows(key, `${LID}@lid`),
     (await svc.scopeForFilter(key))!.allowed.has(`${LID}@lid`),
@@ -131,27 +134,41 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
     ds = await new DataSource({
       type: 'better-sqlite3',
       database: ':memory:',
-      entities: [LidMapping],
+      entities: [LidMapping, Session],
       synchronize: true,
     }).initialize();
+    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id })));
     store = new LidMappingStoreService(ds.getRepository(LidMapping));
+    // A statement that fails is only logged, which would let a case pass on a write that never ran.
+    warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
     await store.onModuleInit();
     svc = new ChatScopeService(store);
-    await store.remember(LID, PHONE, 's1');
+    await store.remember(LID, PHONE, s1);
   });
 
-  afterEach(() => ds.destroy());
+  afterEach(async () => {
+    expect(warn).not.toHaveBeenCalled();
+    await ds.destroy();
+  });
 
   it('still admits the lid of a phone after a session that cannot see the number answers no phone', async () => {
     expect(await admitted()).toEqual([true, true]);
 
-    await store.remember(LID, null, 's2');
+    await store.remember(LID, null, s2);
 
     expect(await admitted()).toEqual([true, true]);
   });
 
   it('stops admitting it once the session that stored the phone answers no phone', async () => {
-    await store.remember(LID, null, 's1');
+    await store.remember(LID, null, s1);
+
+    expect(await admitted()).toEqual([false, false]);
+  });
+
+  it('stops admitting it once the session that stored the phone is deleted and another answers no phone', async () => {
+    await ds.getRepository(Session).delete({ id: s1 });
+
+    await store.remember(LID, null, s2);
 
     expect(await admitted()).toEqual([false, false]);
   });
