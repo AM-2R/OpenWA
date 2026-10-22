@@ -224,7 +224,6 @@ test('an http(s) URL in lower case, a git:// or ssh:// URL in any case and a use
     'git@example.com:org/repo.git',
     'deploy@example.com:org/repo.git',
     'us-er_1@host-1.example.com:org/repo.git',
-    'deploy@[::1]:org/repo.git',
   ];
   for (const source of remote) {
     const run = runGate({
@@ -259,6 +258,17 @@ test('any other ADD source names a context path: ftp://, s3://, file:///, a sche
     assert.equal(run.status, 1, `ADD ${source}: ${run.out}`);
     assert.match(run.out, new RegExp(`rejects '${path.replaceAll('.', '\\.')}'`), `ADD ${source}: ${run.out}`);
   }
+});
+
+test('a bracketed host after user@ is a wildcard of the context to BuildKit, not an scp address', () => {
+  // Real BuildKit 0.34 builds ADD deploy@[::1]:org/repo.git without a fetch: [::1] is a class of characters, so
+  // the source is a pattern over the context, and one in a directory name is what this check cannot expand.
+  const run = runGate({
+    Dockerfile: 'COPY control.txt ./\nADD deploy@[::1]:org/repo.git /opt/\n',
+    '.dockerignore': REAL_DOCKERIGNORE,
+  });
+  assert.equal(run.status, 1, run.out);
+  assert.match(run.out, /expands a wildcard only in the file name/, run.out);
 });
 
 test('a wildcard in a directory name is reported instead of guessed', () => {

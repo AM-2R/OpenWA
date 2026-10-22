@@ -179,9 +179,10 @@ const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
   .join('\n')
   .replace(/\\[ \t\r]*\n(?:[ \t\r]*\n)*/g, ' ');
 const wildcard = /[*?[]/;
-// user@host:path as BuildKit takes it: a user of letters, digits, _ and -, and a host of letters, digits, . and -
-// or an IPv6 address in brackets.
-const SCP_ADDRESS = /^[A-Za-z0-9_-]+@(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):/;
+// user@host:path as BuildKit takes it: a user of letters, digits, _ and -, and a host of letters, digits, . and -.
+// A host in brackets is no scp address to it: [::1] is a class of characters, so the source is a pattern over
+// the context.
+const SCP_ADDRESS = /^[A-Za-z0-9_-]+@[A-Za-z0-9.-]+:/;
 function copyInputs(source) {
   // Remote, as BuildKit 0.34 reads it: an http(s) URL in lower case, a git:// or ssh:// URL in any case, or an
   // scp address user@host:path. Anything else, ftp://x/y, s3://x/y, file:///x, HTTPS://x/y or user@host, names
