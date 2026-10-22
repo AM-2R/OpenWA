@@ -1239,6 +1239,32 @@ describe('Baileys inbound messages held for storage', () => {
       expect(rowsWhenEdited).toEqual([0]);
     });
 
+    // The message is handed over with the edit applied, and the edit reaches the session too, so the session is told
+    // the text the message arrived with to compare the edit with.
+    it.each([
+      ['an edit', 'fixed caption', 'caption'],
+      ['an edit that repeats the text', 'caption', undefined],
+    ])('hands the message over with %s and the text it arrived with', async (_, body, originalBody) => {
+      const h = heldProjector({ unique: true, sqlite });
+      const handedOver: Array<Pick<IncomingMessage, 'body' | 'originalBody'>> = [];
+      const { events } = build(4, {
+        ...h.callbacks,
+        onMessage: (m, t) => (
+          handedOver.push({ body: m.body, originalBody: m.originalBody }),
+          h.callbacks.onMessage!(m, t)
+        ),
+      });
+      const release = download();
+      upsert(events, media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, edit('E', 'M', body));
+      await flush();
+      release();
+      await flush();
+
+      expect(handedOver).toEqual([{ body, originalBody }]);
+    });
+
     it(
       sqlite
         ? 'announces them once the message has been handed on'

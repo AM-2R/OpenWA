@@ -404,6 +404,8 @@ export class MessageProjector {
     void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
     // Convert IncomingMessage to plain object for dispatch
     const messageData = { ...message };
+    // What an engine says of the edit it applied is for the session alone: no hook, row or consumer sees it.
+    delete messageData.originalBody;
     // Tracks what the chain's current copy lends a quote, so one taken mid-chain carries an earlier
     // handler's rewrite.
     const inFlightKey = `${id}:${message.id}`;
@@ -553,7 +555,9 @@ export class MessageProjector {
       received: candidate === null ? 'null' : typeof candidate,
       action: 'hook_message_discarded',
     });
-    return { ...message };
+    const copy = { ...message };
+    delete copy.originalBody;
+    return copy;
   }
 
   /** `isStatusBroadcast` arm of {@link handleInboundMessage}: ingest into the status store, not the message pipeline. */
@@ -1042,6 +1046,7 @@ export class MessageProjector {
     // Update last active timestamp
     void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
     const messageData = { ...message };
+    delete messageData.originalBody;
 
     const onFailure = (err: unknown): null => {
       this.logger.error(`onMessageCreate handler failed for ${id}`, String(err));

@@ -144,6 +144,10 @@ describe('edited marker for a message whose row is not written yet', () => {
   let engine: IWhatsAppEngine;
   // The insert of a row waits for the promise held under its message id.
   let stalled: Map<string, Promise<void>>;
+  // What the message hooks were given, and what webhooks and the socket were told, in order.
+  let hooked: Array<{ event: string; data: Record<string, unknown> }>;
+  let announced: Array<{ event: string; payload: Record<string, unknown> }>;
+  let hookManager: { execute: jest.Mock };
 
   const flush = async (): Promise<void> => {
     for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve));
@@ -170,6 +174,14 @@ describe('edited marker for a message whose row is not written yet', () => {
     await db.initialize();
     repository = db.getRepository(Message);
     stalled = new Map();
+    hooked = [];
+    announced = [];
+    hookManager = {
+      execute: jest.fn((event: string, data: unknown) => {
+        hooked.push({ event, data: data as Record<string, unknown> });
+        return Promise.resolve({ continue: true, data });
+      }),
+    };
     const insert = repository.insert.bind(repository);
     jest.spyOn(repository, 'insert').mockImplementation(async row => {
       await stalled.get((row as { waMessageId: string }).waMessageId);
@@ -182,11 +194,23 @@ describe('edited marker for a message whose row is not written yet', () => {
       repository,
       { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>,
       engines,
-      new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
-      { dispatch: jest.fn().mockResolvedValue(undefined) } as unknown as WebhookService,
+      new Proxy(
+        {},
+        {
+          get:
+            (_target, name) =>
+            (_id: string, payload: Record<string, unknown>): void => {
+              announced.push({ event: `socket ${String(name)}`, payload });
+            },
+        },
+      ) as unknown as EventsGateway,
       {
-        execute: jest.fn((_event: string, data: unknown) => Promise.resolve({ continue: true, data })),
-      } as unknown as HookManager,
+        dispatch: jest.fn((_id: string, event: string, payload: Record<string, unknown>) => {
+          announced.push({ event, payload });
+          return Promise.resolve();
+        }),
+      } as unknown as WebhookService,
+      hookManager as unknown as HookManager,
       { ingest: jest.fn() } as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
     );
@@ -194,6 +218,40 @@ describe('edited marker for a message whose row is not written yet', () => {
 
   afterEach(async () => {
     await db.destroy();
+  });
+
+  // What an engine that applied an edit before the hand-over tells the session stays between them.
+  it('removes the text a message arrived with before it is hooked, stored or announced', async () => {
+    projector.handleInboundMessage('s1', engine, incoming('A', { body: 'fixed', originalBody: 'original' }));
+    projector.handleOwnSendEcho('s1', engine, incoming('S', { fromMe: true, body: 'fixed', originalBody: 'original' }));
+    await flush();
+
+    const seen = [
+      ...hooked.filter(h => /^message:(received|sent)$/.test(h.event)).map(h => h.data),
+      ...announced.map(a => a.payload),
+    ];
+    expect(seen.length).toBeGreaterThanOrEqual(4);
+    for (const payload of seen) expect(payload).not.toHaveProperty('originalBody');
+    expect(announced.find(a => a.event === 'message.received')?.payload).toEqual(
+      expect.objectContaining({ body: 'fixed' }),
+    );
+    expect((await stored('A')).body).toBe('fixed');
+    expect((await stored('S')).body).toBe('fixed');
+  });
+
+  // A hook that hands back something that is not a message leaves the session with the engine's own copy.
+  it('removes the text a message arrived with from the copy it falls back to when a hook returns no message', async () => {
+    hookManager.execute.mockImplementation(() => Promise.resolve({ continue: true, data: null }));
+    projector.handleInboundMessage('s1', engine, incoming('A', { body: 'fixed', originalBody: 'original' }));
+    projector.handleOwnSendEcho('s1', engine, incoming('S', { fromMe: true, body: 'fixed', originalBody: 'original' }));
+    await flush();
+
+    const sent = announced.filter(a => a.event === 'message.received' || a.event === 'message.sent');
+    expect(sent.map(a => a.event).sort()).toEqual(['message.received', 'message.sent']);
+    for (const { payload } of sent) {
+      expect(payload).toEqual(expect.objectContaining({ body: 'fixed' }));
+      expect(payload).not.toHaveProperty('originalBody');
+    }
   });
 
   it('marks a message edited while its insert is out, beside the metadata it was stored with', async () => {

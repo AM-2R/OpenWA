@@ -115,6 +115,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     return {
       handOver: handedOver => {
         if (mine.deleted) return false;
+        // The session is told of the edits too, and compares them with the text the message arrived with.
+        if (handedOver.body !== mine.text) handedOver.originalBody = handedOver.body;
         handedOver.body = mine.text;
         return true;
       },

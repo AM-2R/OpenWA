@@ -427,16 +427,19 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
   /** Calls of the engine callbacks in the order they were made, with the registration under test. */
   const wire = (extra: Partial<EngineEventCallbacks> = {}, media: Promise<undefined> = Promise.resolve(undefined)) => {
     const order: string[] = [];
-    // The body of each message handed over, in order.
+    // The body of each message handed over, in order, and the text it arrived with where an edit was applied.
     const bodies: string[] = [];
+    const arrivals: Array<string | undefined> = [];
     const callbacks: EngineEventCallbacks = {
       onMessage: (m: IncomingMessage) => {
         order.push(`message ${m.id}`);
         bodies.push(m.body);
+        arrivals.push(m.originalBody);
       },
       onMessageCreate: (m: IncomingMessage) => {
         order.push(`own ${m.id}`);
         bodies.push(m.body);
+        arrivals.push(m.originalBody);
       },
       onMessageEdited: (e: EditedMessage) => {
         order.push(`edit ${e.messageId} ${e.body}`);
@@ -456,7 +459,7 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
       capInboundMediaFor: jest.fn(() => media),
     } as unknown as WwebjsEngineHost;
     registerWwebjsMessageEvents(client as unknown as Client, host);
-    return { client, order, bodies, callbacks };
+    return { client, order, bodies, arrivals, callbacks };
   };
 
   // The bounds of wwebjs-message-events.ts: changes kept per message, and messages tracked at once.
@@ -478,6 +481,53 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
 
     expect(order).toEqual(['message A', 'edit A fixed', 'react A 👍', 'edit A fixed twice']);
     expect(bodies).toEqual(['fixed twice']);
+  });
+
+  it('hands over the text a message arrived with beside the edit applied to it', async () => {
+    const { client, bodies, arrivals } = wire();
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    editEvent(client, 'A', 'v1');
+    editEvent(client, 'A', 'v2');
+
+    contact.resolve(null);
+    await flush();
+
+    expect(bodies).toEqual(['v2']);
+    expect(arrivals).toEqual(['orig']);
+  });
+
+  it('hands over no arrival text when no edit was applied', async () => {
+    const { client, arrivals } = wire();
+    const plain = deferred<null>();
+    const reacted = deferred<null>();
+    const restored = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: plain.promise }));
+    client.emit('message', incoming('B', 'orig', { contact: reacted.promise }));
+    client.emit('message', incoming('C', 'orig', { contact: restored.promise }));
+    reactionEvent(client, 'B', '👍');
+    editEvent(client, 'C', 'v1');
+    editEvent(client, 'C', 'orig');
+
+    plain.resolve(null);
+    reacted.resolve(null);
+    restored.resolve(null);
+    await flush();
+
+    expect(arrivals).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('hands over the text an own send arrived with beside the edit applied to it', async () => {
+    const download = deferred<undefined>();
+    const { client, bodies, arrivals } = wire({}, download.promise);
+    client.emit('message_create', incoming('S', 'sent', { page: jest.fn(), fromMe: true }));
+    editEvent(client, 'S', 'sent again', { media: true, fromMe: true });
+
+    download.resolve(undefined);
+    await flush();
+
+    expect(bodies).toEqual(['sent again']);
+    expect(arrivals).toEqual(['sent']);
   });
 
   it('does not hand over a message deleted meanwhile, and delivers what reached it', async () => {

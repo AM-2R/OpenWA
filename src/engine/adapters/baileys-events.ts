@@ -865,6 +865,9 @@ export class BaileysEvents {
         toStore = JSON.parse(JSON.stringify(msg, b.BufferJSON.replacer), b.BufferJSON.reviver) as WAMessage;
         const content = b.normalizeMessageContent(toStore.message ?? undefined);
         if (content) setBaileysText(content, editedBody);
+        // The session is told of the edit too, with a ticket at once and without one right after the emit, and
+        // compares it with the text the message arrived with.
+        if (editedBody !== incoming.body) incoming.originalBody = incoming.body;
         incoming.body = editedBody;
       }
       if (opts.generation === this.storeGeneration) {
