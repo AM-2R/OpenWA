@@ -81,6 +81,9 @@
 #   (aq) a restore removes the -wal, -shm and -journal of every database it replaces, beside the file a
 #       link points at and beside the link's own name, and an external database's are kept in its
 #       snapshot
+#   (ar) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that is /, //, /. or a
+#       link to /, ahead of the writability check a non-root user would stop at (skipped where a user can
+#       write /)
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2581,6 +2584,30 @@ for sfx in -wal -shm -journal; do
   fi
 done
 pass "(aq) -wal, -shm and -journal are cleared from both databases and kept in their snapshots"
+
+echo ""
+echo "==> (ar) restore refuses a database or key file that resolves to /"
+# restore_db and restore_admin_key snapshot their target with cp -pRH, so a root user whose target is / would
+# copy the filesystem into a directory inside it. A non-root user is stopped by the writability check, which
+# is why the refusal has to come before it, and why these runs, like the root spellings in (am), have the cp
+# that stops at / ahead on PATH (created there, so they run only where (am) does).
+if [ "$ROOT_SAFE" -eq 1 ]; then
+  AR="$WORK/ar"
+  mkdir -p "$AR/work/data" "$AR/home"
+  printf 'ar-keep\n' >"$AR/work/data/keep.txt"
+  ln -s / "$AR/rootlink"
+  for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOOTSTRAP_KEY_FILE admin key (BOOTSTRAP_KEY_FILE)'; do
+    ar_var="${target%% *}"
+    ar_label="${target#* }"
+    for ar_spelling in / // /. "$AR/rootlink"; do
+      refused_restore "$AR" "ar: $ar_var=$ar_spelling" "refusing to replace broad $ar_label target" "$AR/work" "$ARCHIVE_AP" \
+        PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$AR/work/data" "$ar_var=$ar_spelling"
+    done
+  done
+  pass "(ar) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE as /, //, /. or a link to / are refused"
+else
+  echo "SKIP: (ar) the / cases, which need a user who cannot write /"
+fi
 
 echo ""
 echo "All smoke tests passed!"

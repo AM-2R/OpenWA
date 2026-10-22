@@ -133,6 +133,16 @@ refuse_unwritable() {
   exit 1
 }
 
+# refuse_root_target <path> <label>: a database or key file that resolves to / (//, /., a link to /) is
+# snapshotted with cp -pRH, which copies the whole filesystem into a directory inside it, and a root user can
+# write there. Checked first in the snapshot phase, ahead of the writability test a non-root user stops at.
+refuse_root_target() {
+  if [ "$(resolve_path "$1")" = / ]; then
+    log "ERROR: refusing to replace broad $2 target: $1"
+    exit 1
+  fi
+}
+
 replace_tree() {
   source_dir="$1"
   target_dir="$2"
@@ -222,6 +232,7 @@ snapshot_external() {
 restore_db() {
   resolved_db="$(resolve_path "$2")"
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$2" "$3"
     openwa_writable "$2" || refuse_unwritable "$2" "$3"
     for db in "$2" "$resolved_db"; do
       for sfx in -wal -shm -journal; do
@@ -450,6 +461,7 @@ restore_targets() {
 # with the other targets: it may be the only plaintext copy of a key the replaced main.sqlite accepts.
 restore_admin_key() {
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     openwa_writable "$ADMIN_KEY_FILE" || refuse_unwritable "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     snapshot_external "$ADMIN_KEY_FILE"
     return
