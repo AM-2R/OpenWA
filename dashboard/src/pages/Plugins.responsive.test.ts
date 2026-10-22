@@ -56,3 +56,23 @@ test('the status rail stacks above the cards before the card column gets too nar
   const width = Number(/max-width: (\d+)px/.exec(stacked[0].media)?.[1]);
   assert.ok(width >= 950, `the rail stacks at ${stacked[0].media || 'every width'}`);
 });
+
+// The side-by-side rail is pinned with position: sticky. A rail taller than the window (about 17 enabled plugins in a
+// 650px window) stayed pinned with its lower entries below the fold at every scroll position, so it is bounded by the
+// window and scrolls inside itself; stacked above the cards it flows with the page again.
+const RAIL = '.plugins-page .plugins-rail';
+
+test('the pinned status rail is bounded by the window and scrolls inside itself', () => {
+  const rail = rules.find(r => !r.media && r.selectors.includes(RAIL));
+  assert.ok(rail, 'no base rail rule');
+  const heights = [...rail.body.matchAll(/max-height\s*:\s*([^;]+)/g)].map(m => m[1].trim());
+  assert.deepEqual(heights, ['calc(100vh - 3rem)', 'calc(100dvh - 3rem)']);
+  assert.equal(decl(rail.body, 'overflow-y'), 'auto');
+});
+
+test('the stacked rail is not bounded', () => {
+  const stacked = rules.find(r => r.media === '@media (max-width: 950px)' && r.selectors.includes(RAIL));
+  assert.ok(stacked, 'no stacked rail rule');
+  assert.equal(decl(stacked.body, 'max-height'), 'none');
+  assert.equal(decl(stacked.body, 'overflow-y'), 'visible');
+});

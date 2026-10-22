@@ -630,6 +630,10 @@
   flex: 0 0 280px;
   position: sticky;
   top: 1.5rem;
+  /* Pinned, so never taller than the window less its 1.5rem offset: a longer list scrolls inside the rail. */
+  max-height: calc(100vh - 3rem);
+  max-height: calc(100dvh - 3rem);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
@@ -820,6 +824,8 @@
     flex-basis: auto;
     width: 100%;
     position: static;
+    max-height: none;
+    overflow-y: visible;
   }
 }
 
