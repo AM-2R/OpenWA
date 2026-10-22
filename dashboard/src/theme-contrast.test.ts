@@ -48,6 +48,10 @@ const PAGES = join(dirname(fileURLToPath(import.meta.url)), 'pages');
 const read = (file: string): string => readFileSync(join(PAGES, file), 'utf8');
 const LIGHT = ':root {';
 const DARK = "[data-theme='dark'] {";
+// A visitor on a dark OS with no stored theme has no data-theme at all (every first visit, and the signed-out
+// Login page): they get this block, not DARK, so every dark ratio is checked against both.
+const DARK_MEDIA = ":root:not([data-theme='light']) {";
+const DARKS = [DARK, DARK_MEDIA];
 const valueOf = (block: string, name: string): string => {
   const raw = block.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1].trim();
   assert.ok(raw, `${name} is not set in the block`);
@@ -67,7 +71,7 @@ test('--text-muted placeholders clear AA on every input surface in both themes',
     CSS,
     /input::placeholder,\s*textarea::placeholder\s*\{[^}]*color:\s*var\(--text-muted\)[^}]*opacity:\s*1/,
   );
-  for (const anchor of [LIGHT, DARK]) {
+  for (const anchor of [LIGHT, ...DARKS]) {
     const block = blockAfter(anchor);
     const text = rgb(hexOf(block, '--text-muted'));
     for (const surface of ['--bg-white', '--bg-light']) {
@@ -80,17 +84,31 @@ test('--text-muted placeholders clear AA on every input surface in both themes',
 test('time stamps and read ticks on the outgoing bubble clear their ratios in both themes', () => {
   const chats = read('Chats.css');
   const light = rgb(/\.chats-page \.message-bubble\.outgoing \{\s*background:\s*(#[0-9a-f]{6})/i.exec(chats)![1]);
-  const dark = rgb(
-    /\[data-theme='dark'\] \.chats-page \.message-bubble\.outgoing \{\s*background:\s*(#[0-9a-f]{6})/i.exec(chats)![1],
-  );
   assert.match(chats, /\.message-bubble\.outgoing \.message-time\s*\{\s*color:\s*var\(--text-secondary\)/);
-  assert.match(chats, /\[data-theme='dark'\] \.chats-page \.message-status-icon\.read\s*\{\s*color:\s*var\(--info\)/);
   const secondaryLight = contrast(rgb(hexOf(blockAfter(LIGHT), '--text-secondary')), light);
-  const secondaryDark = contrast(rgb(hexOf(blockAfter(DARK), '--text-secondary')), dark);
   assert.ok(secondaryLight >= 4.5, `light time stamp ${secondaryLight.toFixed(2)}:1`);
-  assert.ok(secondaryDark >= 4.5, `dark time stamp ${secondaryDark.toFixed(2)}:1`);
-  const tick = contrast(rgb(hexOf(blockAfter(DARK), '--info')), dark);
-  assert.ok(tick >= 3, `dark read tick ${tick.toFixed(2)}:1 (a status glyph needs 3:1)`);
+  // The dark bubble and its read tick are written twice: once under [data-theme='dark'], once for the system theme.
+  const escape = (text: string): string => text.replace(/[[\]().]/g, '\\$&');
+  for (const [anchor, prefix] of [
+    [DARK, "[data-theme='dark'] "],
+    [DARK_MEDIA, ":root:not([data-theme='light']) "],
+  ]) {
+    const bubble = new RegExp(
+      `${escape(prefix)}\\.chats-page \\.message-bubble\\.outgoing \\{\\s*background:\\s*(#[0-9a-f]{6})`,
+      'i',
+    ).exec(chats);
+    assert.ok(bubble, `Chats.css has no outgoing bubble rule under ${prefix}`);
+    assert.match(
+      chats,
+      new RegExp(`${escape(prefix)}\\.chats-page \\.message-status-icon\\.read\\s*\\{\\s*color:\\s*var\\(--info\\)`),
+      `Chats.css has no read tick rule under ${prefix}`,
+    );
+    const dark = rgb(bubble[1]);
+    const secondary = contrast(rgb(hexOf(blockAfter(anchor), '--text-secondary')), dark);
+    assert.ok(secondary >= 4.5, `${anchor} time stamp ${secondary.toFixed(2)}:1`);
+    const tick = contrast(rgb(hexOf(blockAfter(anchor), '--info')), dark);
+    assert.ok(tick >= 3, `${anchor} read tick ${tick.toFixed(2)}:1 (a status glyph needs 3:1)`);
+  }
 });
 
 test('the action required pill clears 4.5:1 on its tint in the dark theme, with one tint on both pages', () => {
@@ -106,10 +124,12 @@ test('the action required pill clears 4.5:1 on its tint in the dark theme, with 
   });
   assert.equal(tints[0], tints[1], 'the same status is tinted differently on the two pages');
   // The tint is the base amber (--warning) over the card; the text is --warning-text, which keeps the base value in dark.
-  const block = blockAfter(DARK);
-  const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--warning')), tints[0], rgb(hexOf(block, '--bg-white')));
-  const ratio = contrast(rgb(hexOf(block, '--warning-text')), tint);
-  assert.ok(ratio >= 4.5, `dark amber text on a ${tints[0]} tint is ${ratio.toFixed(2)}:1`);
+  for (const anchor of DARKS) {
+    const block = blockAfter(anchor);
+    const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--warning')), tints[0], rgb(hexOf(block, '--bg-white')));
+    const ratio = contrast(rgb(hexOf(block, '--warning-text')), tint);
+    assert.ok(ratio >= 4.5, `${anchor} amber text on a ${tints[0]} tint is ${ratio.toFixed(2)}:1`);
+  }
 });
 
 test('the search match and the Number Checker highlight pill clear AA in both themes', () => {
@@ -124,7 +144,7 @@ test('the search match and the Number Checker highlight pill clear AA in both th
       read('NumberChecker.css'),
     );
   assert.ok(pill, 'NumberChecker.css no longer styles the highlight pill with a token colour');
-  for (const anchor of [LIGHT, DARK]) {
+  for (const anchor of [LIGHT, ...DARKS]) {
     const block = blockAfter(anchor);
     // The amber fill is the same in both themes, so the dark text on it must hold in both.
     const onAmber = contrast(rgb(mark[2]), rgb(hexOf(blockAfter(LIGHT), mark[1])));
@@ -171,6 +191,7 @@ test('muted text on a tinted row uses --text-secondary, which clears AA on the t
     for (const [anchor, alpha] of [
       [LIGHT, light],
       [DARK, dark],
+      [DARK_MEDIA, dark],
     ] as const) {
       const block = blockAfter(anchor);
       const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--primary')), alpha, rgb(hexOf(block, surface)));
@@ -186,7 +207,7 @@ test('the batch badge uses --info, which clears the twins range on its tint in b
   );
   assert.ok(rule, 'MessageTester.css no longer styles the pending badge');
   assert.equal(rule[1].trim(), 'var(--info)');
-  for (const anchor of [LIGHT, DARK]) {
+  for (const anchor of [LIGHT, ...DARKS]) {
     const block = blockAfter(anchor);
     // The batch panel is --bg-light; the badge paints 12 percent of the blue over it.
     const tint = mix([59, 130, 246], 0.12, rgb(hexOf(block, '--bg-light')));
