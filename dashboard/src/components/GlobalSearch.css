@@ -106,7 +106,8 @@
 
 .global-search-hit-snippet mark {
   background: var(--warning);
-  color: inherit;
+  /* The amber is a light fill in both themes: inherited light text was 1.96:1 on it in dark. */
+  color: #0f172a;
   border-radius: 2px;
   padding: 0 1px;
 }

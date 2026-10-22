@@ -42,3 +42,95 @@ test('dark --error-text clears AA on every error tint it lands on, in both dark 
     }
   }
 });
+
+// The pairs below are the ones the stylesheets build from these tokens and from two literal bubble greens.
+const PAGES = join(dirname(fileURLToPath(import.meta.url)), 'pages');
+const read = (file: string): string => readFileSync(join(PAGES, file), 'utf8');
+const LIGHT = ':root {';
+const DARK = "[data-theme='dark'] {";
+const valueOf = (block: string, name: string): string => {
+  const raw = block.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1].trim();
+  assert.ok(raw, `${name} is not set in the block`);
+  const alias = /^var\((--[\w-]+)\)$/.exec(raw);
+  return alias ? valueOf(blockAfter(LIGHT), alias[1]) : raw;
+};
+const hexOf = (block: string, name: string): string => {
+  const value = valueOf(block, name);
+  assert.match(value, /^#[0-9a-f]{6}$/i, `${name} is ${value}`);
+  return value;
+};
+const mix = (over: number[], alpha: number, under: number[]): number[] =>
+  over.map((c, i) => c * alpha + under[i] * (1 - alpha));
+
+test('--text-muted placeholders clear AA on every input surface in both themes', () => {
+  assert.match(
+    CSS,
+    /input::placeholder,\s*textarea::placeholder\s*\{[^}]*color:\s*var\(--text-muted\)[^}]*opacity:\s*1/,
+  );
+  for (const anchor of [LIGHT, DARK]) {
+    const block = blockAfter(anchor);
+    const text = rgb(hexOf(block, '--text-muted'));
+    for (const surface of ['--bg-white', '--bg-light']) {
+      const ratio = contrast(text, rgb(hexOf(block, surface)));
+      assert.ok(ratio >= 4.5, `${anchor} --text-muted on ${surface} is ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('time stamps and read ticks on the outgoing bubble clear their ratios in both themes', () => {
+  const chats = read('Chats.css');
+  const light = rgb(/\.chats-page \.message-bubble\.outgoing \{\s*background:\s*(#[0-9a-f]{6})/i.exec(chats)![1]);
+  const dark = rgb(
+    /\[data-theme='dark'\] \.chats-page \.message-bubble\.outgoing \{\s*background:\s*(#[0-9a-f]{6})/i.exec(chats)![1],
+  );
+  assert.match(chats, /\.message-bubble\.outgoing \.message-time\s*\{\s*color:\s*var\(--text-secondary\)/);
+  assert.match(chats, /\[data-theme='dark'\] \.chats-page \.message-status-icon\.read\s*\{\s*color:\s*var\(--info\)/);
+  const secondaryLight = contrast(rgb(hexOf(blockAfter(LIGHT), '--text-secondary')), light);
+  const secondaryDark = contrast(rgb(hexOf(blockAfter(DARK), '--text-secondary')), dark);
+  assert.ok(secondaryLight >= 4.5, `light time stamp ${secondaryLight.toFixed(2)}:1`);
+  assert.ok(secondaryDark >= 4.5, `dark time stamp ${secondaryDark.toFixed(2)}:1`);
+  const tick = contrast(rgb(hexOf(blockAfter(DARK), '--info')), dark);
+  assert.ok(tick >= 3, `dark read tick ${tick.toFixed(2)}:1 (a status glyph needs 3:1)`);
+});
+
+test('the action required pill clears 4.5:1 on its tint in the dark theme, with one tint on both pages', () => {
+  const tints = [
+    ['Sessions.css', '.sessions-page .status-pill.action_required'],
+    ['Dashboard.css', '.dashboard .status-pill.action_required'],
+  ].map(([file, selector]) => {
+    const rule = new RegExp(
+      `${selector.replace(/[.]/g, '\\.')}[^{]*\\{[^}]*background:\\s*rgba\\(245,\\s*158,\\s*11,\\s*([\\d.]+)\\)`,
+    ).exec(read(file));
+    assert.ok(rule, `${file} has no amber tint for ${selector}`);
+    return Number(rule[1]);
+  });
+  assert.equal(tints[0], tints[1], 'the same status is tinted differently on the two pages');
+  // The tint is the base amber (--warning) over the card; the text is --warning-text, which keeps the base value in dark.
+  const block = blockAfter(DARK);
+  const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--warning')), tints[0], rgb(hexOf(block, '--bg-white')));
+  const ratio = contrast(rgb(hexOf(block, '--warning-text')), tint);
+  assert.ok(ratio >= 4.5, `dark amber text on a ${tints[0]} tint is ${ratio.toFixed(2)}:1`);
+});
+
+test('the search match and the Number Checker highlight pill clear AA in both themes', () => {
+  const search = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/GlobalSearch.css'), 'utf8');
+  const mark =
+    /\.global-search-hit-snippet mark\s*\{[^}]*background:\s*var\((--[\w-]+)\);[^}]*?color:\s*(#[0-9a-f]{6})/i.exec(
+      search,
+    );
+  assert.ok(mark, 'GlobalSearch.css no longer styles the match with a hex colour on a token fill');
+  const pill =
+    /\.nc-format-pill\.highlight\s*\{[^}]*background:\s*rgba\(37,\s*211,\s*102,\s*([\d.]+)\)[^}]*?color:\s*var\((--[\w-]+)\)/.exec(
+      read('NumberChecker.css'),
+    );
+  assert.ok(pill, 'NumberChecker.css no longer styles the highlight pill with a token colour');
+  for (const anchor of [LIGHT, DARK]) {
+    const block = blockAfter(anchor);
+    // The amber fill is the same in both themes, so the dark text on it must hold in both.
+    const onAmber = contrast(rgb(mark[2]), rgb(hexOf(blockAfter(LIGHT), mark[1])));
+    assert.ok(onAmber >= 4.5, `${anchor} match text on the amber is ${onAmber.toFixed(2)}:1`);
+    const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--primary')), Number(pill[1]), rgb(hexOf(block, '--bg-white')));
+    const onTint = contrast(rgb(hexOf(block, pill[2])), tint);
+    assert.ok(onTint >= 4.5, `${anchor} pill text on the green tint is ${onTint.toFixed(2)}:1`);
+  }
+});

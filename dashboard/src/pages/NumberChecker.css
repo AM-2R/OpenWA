@@ -588,7 +588,7 @@
 .number-checker .nc-format-pill.highlight {
   background: rgba(37, 211, 102, 0.12);
   border-color: rgba(37, 211, 102, 0.35);
-  color: #0b8043;
+  color: var(--primary-text);
   font-weight: 600;
 }
 
