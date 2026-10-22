@@ -9,8 +9,11 @@ import { Column, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm'
  * so it's a cache WhatsApp can correct. `phone` is nullable to record a negative result (a lid we looked
  * up and could not resolve) so active lookups stay one-network-call-per-unknown-lid. A negative replaces a
  * phone only when the session that wrote it (or none, or one since deleted) answers it, since another
- * account may not see the number. `sessionId` is the session that last wrote the row or reported its phone -
- * intentionally NOT a foreign key, since the row outlives any one session.
+ * account may not see the number. `sessionId` is the row's owner, the session that last wrote it: a
+ * negative, or a report of a phone, though a session this node already counted for that phone writes
+ * nothing when it reports it again (LidMappingStoreService.seenBy), so after s1, s2, s1 report one phone
+ * the owner is s2. A deleted session owns nothing. Intentionally NOT a foreign key, since the row outlives
+ * any one session.
  */
 @Entity('lid_mappings')
 @Index(['phone']) // reverse lookup: phone -> lids, for the message from-filter
@@ -23,7 +26,7 @@ export class LidMapping {
   @Column({ type: 'varchar', nullable: true })
   phone!: string | null;
 
-  /** The row's owner: the session that last wrote it or reported its phone (see above). Not a foreign key. */
+  /** The row's owner: the session that last wrote it (see above). Not a foreign key. */
   @Column({ type: 'varchar', nullable: true })
   sessionId!: string | null;
 

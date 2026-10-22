@@ -50,9 +50,10 @@ export interface LidMappingStore {
   /** The lids the table maps to these phone digits, read from the database. */
   findLidsForPhone?(phone: string): Promise<string[]>;
   /**
-   * Write-through: update the cache + persist. A phone is last-write-wins, and the same phone from another
-   * session makes that session the row's owner. A `null` phone records a negative result, and replaces a
-   * stored phone only when its owner (or none, or one since deleted) gives it.
+   * Write-through: update the cache + persist. A phone is last-write-wins. A session reporting the phone
+   * this node already holds takes the row, unless this node already counted a report of it from that
+   * session: after s1, s2, s1 report one phone the owner is s2. A `null` phone records a negative result,
+   * and replaces a stored phone only when its owner (or none, or one since deleted) gives it.
    */
   remember(lid: string, phone: string | null, sessionId?: string): Promise<void>;
 }
@@ -110,10 +111,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    */
   private readonly racedLookups = new Set<string>();
   /**
-   * Sessions that wrote or reported the phone a lid holds in {@link lidToPhone}. One not in it that
-   * reports the same phone takes the row, in one write, so the row names the latest session to see
-   * that phone and the negative of a session that saw it earlier leaves it; one already in it reports
-   * again for free. Dropped with the cached entry.
+   * Sessions counted as having written or reported the phone a lid holds in {@link lidToPhone} (a loaded
+   * row counts its owner). One not counted that reports the same phone takes the row, in one write, and is
+   * counted; one already counted writes nothing. So the row names the latest uncounted session to report
+   * the phone, not the latest to report it: after s1, s2, s1 report one phone it names s2, and s2's
+   * negative clears a phone s1 still sees. Started anew when the phone changes, dropped with the cached
+   * entry, on an applied negative and on any release, and a session whose write failed leaves it.
    */
   private readonly seenBy = new Map<string, Set<string>>();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
