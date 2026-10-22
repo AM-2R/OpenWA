@@ -567,6 +567,21 @@ describe('LoggerService', () => {
       expect((JSON.parse(calls[1][0]) as LogEntry).trace).toBe('42');
     });
 
+    it('redacts an object passed as the trace, in json and pretty output', () => {
+      const errorSpy = jest.spyOn(console, 'error');
+      const redacted = '{"a":1,"password":"[REDACTED]","n":{"token":"[REDACTED]"}}';
+      const trace = { a: 1, password: 'value-trace', n: { token: 'value-token' } };
+
+      logger.error('failed', trace);
+      expect(getLogOutput(errorSpy).trace).toBe(redacted);
+
+      errorSpy.mockClear();
+      LoggerService.setLogFormat(LogFormat.PRETTY);
+      logger.error('failed', trace);
+      expect(getRawOutput(errorSpy)).toContain(redacted);
+      expect(getRawOutput(errorSpy)).not.toContain('value-');
+    });
+
     it('serializes an object message with secret-named keys redacted', () => {
       logger.log({ a: 1, password: 'p' });
 
