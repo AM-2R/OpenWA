@@ -404,6 +404,23 @@ describe('GroupService', () => {
       expect(engine.setGroupInfoAdminsOnly).not.toHaveBeenCalled();
     });
 
+    // The SDKs tell a caller that a throttle 503 applied nothing except on this route, where it can
+    // follow a field that was applied and the message lists that field.
+    it('answers a throttle on a later field with 503 and the fields already applied', async () => {
+      const engine = {
+        setGroupEphemeral: jest.fn().mockResolvedValue(undefined),
+        setGroupMessagesAdminsOnly: jest
+          .fn()
+          .mockRejectedValue(new EngineThrottledError('Updating the group was rate-limited by WhatsApp (code 429)')),
+      };
+      const error = await makeService(engine)
+        .updateGroupSettings('s1', 'g1', { announce: true, ephemeralSeconds: 86400 })
+        .catch((e: unknown) => e);
+      expect((error as HttpException).getStatus()).toBe(503);
+      expect((error as HttpException).message).toContain('(code 429)');
+      expect((error as HttpException).message).toContain('already applied: ephemeralSeconds');
+    });
+
     it('propagates a first-field failure unchanged (nothing applied → no partial state to report)', async () => {
       const engine = {
         setGroupEphemeral: jest.fn().mockRejectedValue(new EngineRefusedError('not a group admin')),

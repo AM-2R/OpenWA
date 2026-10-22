@@ -67,11 +67,15 @@ sends still in flight caused it, the rest of the failure breaker's cooldown
 failures, otherwise up to the next UTC day. Every API error also exposes the
 response `.headers`. A 503 does not always prove a write was never carried out:
 when WhatsApp timed out, the change may still have been applied, so re-read the
-state before repeating it. A throttle is the exception: it was turned away
-before it ran, so nothing was sent, and a keyed send frees its
-`Idempotency-Key`. In a routed deployment a forward that fails before reaching
-the owner node answers 503, one that fails after the request reached it answers
-502 or 504, and a 503 from the owner itself is relayed unchanged.
+state before repeating it. A throttle on a send or a single write is the
+exception: it was turned away before it ran, so nothing was sent or applied, and
+a keyed send frees its `Idempotency-Key`. A group settings update with several
+fields applies them one at a time, so a 503 on a later field, a throttle
+included, leaves the earlier ones applied; its message lists them after
+`already applied:`, so re-read the settings before retrying, or send one field
+per request. In a routed deployment a forward that fails before reaching the
+owner node answers 503, one that fails after the request reached it answers 502
+or 504, and a 503 from the owner itself is relayed unchanged.
 
 ## Receiving webhooks
 
