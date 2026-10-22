@@ -74,6 +74,35 @@ test('a source spelled ./x, /x, x//y or x/./y, or read by ADD, is the same build
   }
 });
 
+test('a rule spelled ./x, x//y, x/./y or x/../x drops the file as it does in Docker', () => {
+  // Docker cleans every rule with filepath.Clean, so each spelling keeps scripts/new.js out of the context.
+  const rules = ['./scripts/new.js', 'scripts//new.js', 'scripts/./new.js', 'scripts/../scripts/new.js'];
+  for (const rule of rules) {
+    const run = runGate({
+      Dockerfile: 'COPY scripts/new.js ./scripts/\n',
+      '.dockerignore': `${REAL_DOCKERIGNORE}\n${rule}\n`,
+    });
+    assert.equal(run.status, 1, `the rule '${rule}' drops scripts/new.js and the gate passed`);
+    assert.match(run.out, /rejects 'scripts\/new\.js'/, `${rule}: ${run.out}`);
+  }
+});
+
+test('a negated rule is cleaned the same way', () => {
+  const run = runGate({
+    Dockerfile: 'COPY scripts/new.js ./scripts/\n',
+    '.dockerignore': `${REAL_DOCKERIGNORE}\nscripts/new.js\n!  ./scripts/new.js\n`,
+  });
+  assert.equal(run.status, 0, run.out);
+});
+
+test('a rule spelled ./data/ keeps data/ out of the context as data/ does', () => {
+  const dockerignore = REAL_DOCKERIGNORE.replace(/^data\/$/m, './data/');
+  // Non-vacuity: the real file has a data/ line, or this would compare the file with itself.
+  assert.notEqual(dockerignore, REAL_DOCKERIGNORE);
+  const run = runGate({ Dockerfile: REAL_DOCKERFILE, '.dockerignore': dockerignore });
+  assert.equal(run.status, 0, run.out);
+});
+
 test('an indented or lower-case instruction is read like any other', () => {
   for (const line of [
     '  COPY ./scripts/new.js ./scripts/',

@@ -58,14 +58,16 @@ function globToRegExp(pattern) {
   return new RegExp(`^${re}$`);
 }
 
-// Parse: drop blanks/comments, honor `!` negation, strip surrounding slashes (a trailing slash
-// only marks "this is a directory" — Docker ignores it when matching).
+// Parse: drop blanks/comments, honor `!` negation, clean the pattern the way Docker does (filepath.Clean,
+// so ./x, x//y and x/./y are x) and strip surrounding slashes (a trailing slash only marks "this is a
+// directory"; Docker ignores it when matching).
 const rules = [];
 for (const raw of text.split('\n')) {
   const line = raw.trim();
   if (!line || line.startsWith('#')) continue;
   const negate = line.startsWith('!');
-  const pattern = (negate ? line.slice(1) : line).replace(/^\/+|\/+$/g, '');
+  const body = (negate ? line.slice(1) : line).trim();
+  const pattern = body && posix.normalize(body).replace(/^\/+|\/+$/g, '');
   if (pattern) rules.push({ pattern, negate, re: globToRegExp(pattern) });
 }
 
