@@ -179,10 +179,14 @@ const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
   .join('\n')
   .replace(/\\[ \t\r]*\n(?:[ \t\r]*\n)*/g, ' ');
 const wildcard = /[*?[]/;
+// user@host:path as BuildKit takes it: a user of letters, digits, _ and -, and a host of letters, digits, . and -
+// or an IPv6 address in brackets.
+const SCP_ADDRESS = /^[A-Za-z0-9_-]+@(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):/;
 function copyInputs(source) {
-  // Remote, as in BuildKit: an http(s) URL or a git reference, in lower case. ADD ftp://x/y, s3://x/y,
-  // file:///x and HTTPS://x/y name context paths.
-  if (/^(?:https?|git|ssh):\/\/|^git@/.test(source)) return [];
+  // Remote, as BuildKit 0.34 reads it: an http(s) URL in lower case, a git:// or ssh:// URL in any case, or an
+  // scp address user@host:path. Anything else, ftp://x/y, s3://x/y, file:///x, HTTPS://x/y or user@host, names
+  // a context path.
+  if (/^https?:\/\//.test(source) || /^(?:git|ssh):\/\//i.test(source) || SCP_ADDRESS.test(source)) return [];
   // Docker resolves ./x, /x and x//y against the context root, which is the form the rules match.
   const path = posix.normalize(source).replace(/^\/+|\/+$/g, '');
   if (path === '' || path === '.') return [];

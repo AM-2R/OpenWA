@@ -210,15 +210,46 @@ test('? and [..] in a COPY source are wildcards of the file name', () => {
   }
 });
 
-test('only an http(s) URL or a git reference is a remote ADD source, any other scheme names a context path', () => {
-  // Real BuildKit fetches ADD http://, https://, git://, ssh:// and git@ sources. It looks in the context for
-  // anything else: ftp:// is the file ftp:/host/x.tgz, file:///x.tgz is file:/x.tgz, and a scheme that is not in
-  // lower case, HTTPS://host/x.tgz, is HTTPS:/host/x.tgz.
+test('an http(s) URL in lower case, a git:// or ssh:// URL in any case and a user@host:path are remote ADD sources', () => {
+  // Real BuildKit 0.34 fetches these, so the context is not read for them and a rule that happens to match their
+  // text drops nothing the build needs.
+  const remote = [
+    'http://example.com/x.tgz',
+    'https://example.com/x.tgz',
+    'git://example.com/org/repo.git',
+    'GIT://example.com/org/repo.git',
+    'Git://example.com/org/repo.git',
+    'ssh://git@example.com/org/repo.git',
+    'SSH://git@example.com/org/repo.git',
+    'git@example.com:org/repo.git',
+    'deploy@example.com:org/repo.git',
+    'us-er_1@host-1.example.com:org/repo.git',
+    'deploy@[::1]:org/repo.git',
+  ];
+  for (const source of remote) {
+    const run = runGate({
+      Dockerfile: `COPY control.txt ./\nADD ${source} /opt/\n`,
+      // Matches the text of every source above, mangled into a context path or not.
+      '.dockerignore': `${REAL_DOCKERIGNORE}\n**/*.git\n**/*.tgz\n`,
+    });
+    assert.equal(run.status, 0, `ADD ${source} was read as a context file: ${run.out}`);
+  }
+});
+
+test('any other ADD source names a context path: ftp://, s3://, file:///, a scheme that is not in lower case, user@host', () => {
+  // The same BuildKit looks in the context for these. ftp://host/x.tgz is the file ftp:/host/x.tgz, file:///x.tgz is
+  // file:/x.tgz, HTTPS://host/x.tgz is HTTPS:/host/x.tgz, and user@host:path needs a user of letters, digits, _ and
+  // - and a host of letters, digits, . and - to be an scp address, or it is the file of that name.
   const contextPaths = [
     ['ftp://example.com/x.tgz', 'ftp:/example.com/x.tgz'],
     ['s3://example.com/x.tgz', 's3:/example.com/x.tgz'],
     ['file:///x.tgz', 'file:/x.tgz'],
     ['HTTPS://example.com/x.tgz', 'HTTPS:/example.com/x.tgz'],
+    ['HTTP://example.com/x.tgz', 'HTTP:/example.com/x.tgz'],
+    ['us.er@example.com:x.tgz', 'us.er@example.com:x.tgz'],
+    ['user@ho_st:x.tgz', 'user@ho_st:x.tgz'],
+    ['git@example.com', 'git@example.com'],
+    ['dir/user@example.com:x.tgz', 'dir/user@example.com:x.tgz'],
   ];
   for (const [source, path] of contextPaths) {
     const run = runGate({
@@ -260,6 +291,9 @@ test('only the context files a COPY or ADD reads are build inputs', () => {
         'ADD git://example.com/org/repo.git /opt/repo',
         'ADD ssh://git@example.com/org/repo.git /opt/repo',
         'ADD git@example.com:org/repo.git /opt/repo',
+        'ADD deploy@example.com:org/repo.git /opt/repo',
+        'ADD GIT://example.com/org/upper.git /opt/repo',
+        'ADD SSH://git@example.com/org/upper.git /opt/repo',
         'COPY . .',
         'COPY ./ ./',
         'COPY / ./',
