@@ -9466,19 +9466,31 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     expect(getContactLidAndPhone).not.toHaveBeenCalled();
   });
 
-  it('getNumberId fails with the phone read instead of answering a number that may be wrong', async () => {
+  // The lookup already answered that the number exists; a failed read of its phone (a second page call that can
+  // run a second WhatsApp query) must not turn that answer into a 500.
+  it('getNumberId answers the typed number when the phone read fails, and logs it at debug', async () => {
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
-    const failing = (error: Error): WhatsAppWebJsAdapter =>
-      readyAdapter({ getNumberId, getContactLidAndPhone: jest.fn().mockRejectedValue(error) });
+    const adapter = readyAdapter({
+      getNumberId,
+      getContactLidAndPhone: jest.fn().mockRejectedValue(new Error('Evaluation failed')),
+    });
+    const logger = (adapter as unknown as { logger: { debug: (m: string, meta?: unknown) => void } }).logger;
+    const debug = jest.spyOn(logger, 'debug').mockImplementation(() => undefined);
 
-    await expect(failing(new Error('Evaluation failed')).getNumberId('5511987654321')).rejects.toThrow(
-      'Evaluation failed',
-    );
-    await expect(
-      failing(new Error('Protocol error: Target closed')).getNumberId('5511987654321'),
-    ).rejects.toBeInstanceOf(EngineTransportError);
+    await expect(adapter.getNumberId('+5511987654321')).resolves.toBe('5511987654321@c.us');
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining('phone'), { error: 'Error: Evaluation failed' });
     // Existence is all checkNumberExists asks, so the phone read never reaches it.
-    await expect(failing(new Error('Evaluation failed')).checkNumberExists('5511987654321')).resolves.toBe(true);
+    await expect(adapter.checkNumberExists('5511987654321')).resolves.toBe(true);
+  });
+
+  it('getNumberId still answers 503 when the page dies during the phone read', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({
+      getNumberId,
+      getContactLidAndPhone: jest.fn().mockRejectedValue(new Error('Protocol error: Target closed')),
+    });
+
+    await expect(adapter.getNumberId('5511987654321')).rejects.toBeInstanceOf(EngineTransportError);
   });
 
   it('getSubscribedChannels reads $1 on a renamed build, never the literal "undefined"', async () => {
@@ -9516,6 +9528,66 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     expect(info.id).toBe('120363000@g.us');
     expect(info.owner).toBe('628111@c.us');
     expect(info.participantCount).toBe(3);
+  });
+});
+
+/**
+ * The number check of a migrated contact through the library's own page code (Client.getNumberId,
+ * Client.getContactLidAndPhone and the injected WWebJS.enforceLidAndPnRetrieval) against a stand-in
+ * WhatsApp Web, counting the existence queries one check sends.
+ */
+describe('WhatsAppWebJsAdapter number check through the library page code', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  const LID = '159442138038327@lid';
+  const PN = '551187654321@c.us';
+  afterEach(() => {
+    delete g.window;
+  });
+
+  /** The typed number exists under LID; `knownLocally` is whether the page already holds that lid's phone. */
+  function checkOn(page: { knownLocally: boolean; secondQuery?: 'fills' | 'throws' }) {
+    const wid = (id: string) => ({ _serialized: id, server: id.split('@')[1], user: id.split('@')[0] });
+    let mapped = page.knownLocally;
+    const queryWidExists = jest.fn((queried: { server: string }) => {
+      if (queried.server === 'lid') {
+        if (page.secondQuery === 'throws') return Promise.reject(new Error('query failed'));
+        mapped = true;
+      }
+      return Promise.resolve({ wid: wid(LID) });
+    });
+    const modules: Record<string, unknown> = {
+      WAWebWidFactory: { createWid: wid },
+      WAWebQueryExistsJob: { queryWidExists },
+      WAWebApiContact: { getPhoneNumber: () => (mapped ? wid(PN) : null), getCurrentLid: () => wid(LID) },
+    };
+    g.window = { require: (name: string) => modules[name] };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    (require('whatsapp-web.js/src/util/Injected/Utils.js') as { LoadUtils: () => void }).LoadUtils();
+    const client = Object.assign(Object.create(Client.prototype) as object, {
+      pupPage: { evaluate: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => fn(...args) },
+    });
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return { adapter, queryWidExists };
+  }
+
+  it('sends one query when the page already holds the phone of the lid', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: true });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe(PN);
+    expect(queryWidExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a second query when the page does not, and answers the phone it reads', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'fills' });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe(PN);
+    expect(queryWidExists).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers the typed number when that second query fails', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'throws' });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('5511987654321@c.us');
+    expect(queryWidExists).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1,6 +1,7 @@
 import { type Client } from 'whatsapp-web.js';
 import { InternalServerErrorException } from '@nestjs/common';
 import { Contact } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
@@ -260,9 +261,20 @@ export class WwebjsContacts {
     // engine answers. It can differ from the digits typed (a Brazilian, Mexican or Argentine number with or
     // without its extra digit). A migrated contact's lookup names its `@lid`, the engine's own scheme, so the
     // phone is read back through it. When WhatsApp Web knows none, the typed number stands in, and a send to
-    // it re-resolves to the lid. A failed read propagates, as the lookup above does.
-    const phone = await withPage(this.host, 'getNumberId', () => this.resolveContactPhone(wid));
-    return `${phone ?? userPart(number).replace(/\D/g, '')}@c.us`;
+    // it re-resolves to the lid. That read runs a second existence query when the page holds no phone for the
+    // lid, so its failure answers the typed number too: the lookup above already settled that the number
+    // exists. A session or page that died meanwhile still answers 409 or 503, as every read does.
+    const typed = `${userPart(number).replace(/\D/g, '')}@c.us`;
+    try {
+      const phone = await withPage(this.host, 'getNumberId', () => this.resolveContactPhone(wid));
+      return phone ? `${phone}@c.us` : typed;
+    } catch (error) {
+      if (error instanceof EngineNotReadyError || error instanceof EngineTransportError) throw error;
+      this.host.logger.debug('Could not read the phone of a migrated number, answering the typed number', {
+        error: String(error),
+      });
+      return typed;
+    }
   }
 
   async checkNumberExists(number: string): Promise<boolean> {
