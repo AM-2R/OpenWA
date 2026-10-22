@@ -211,6 +211,18 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect([...phoneToLids.keys()].sort()).toEqual(['620002', '620004']);
   });
 
+  it('drops who reported a phone along with the evicted entry', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const store = await newStore(makeFakeRepo());
+    const seenBy = (store as unknown as { seenBy: Map<string, Set<string>> }).seenBy;
+
+    await store.remember('lid-a', '620001', 's1');
+    await store.remember('lid-b', '620002', 's1');
+    await store.remember('lid-c', '620003', 's1'); // evicts lid-a
+
+    expect([...seenBy.keys()].sort()).toEqual(['lid-b', 'lid-c']);
+  });
+
   it('LID_MAPPING_CACHE_MAX=0 disables the cap (legacy unbounded behaviour)', async () => {
     process.env.LID_MAPPING_CACHE_MAX = '0';
     const repo = makeFakeRepo();
@@ -948,6 +960,65 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     await store.remember('111', '628222', s3);
 
     expect(await row('111')).toMatchObject({ phone: '628222', sessionId: s3 });
+  });
+
+  it('gives the row to a second session that reports the same phone, so the first one no longer clears it', async () => {
+    await store.remember('111', '628111', s1);
+    await store.remember('111', '628111', s2);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+
+    await store.remember('111', null, s1);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+    expect(store.getCached('111')).toBe('628111');
+
+    await store.remember('111', null, s2);
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: s2 });
+  });
+
+  it('writes a phone each session keeps reporting once, not once per report', async () => {
+    const upsert = jest.spyOn(repo, 'upsert');
+    for (let i = 0; i < 50; i++) {
+      await store.remember('111', '628111', s1);
+      await store.remember('111', '628111', s2);
+    }
+
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+  });
+
+  it('forgets who reported a phone once the phone changes or is cleared', async () => {
+    const seenBy = (store as unknown as { seenBy: Map<string, Set<string>> }).seenBy;
+    await store.remember('111', '628111', s1);
+    await store.remember('111', '628111', s2);
+    await store.remember('111', '628222', s3);
+    await store.remember('111', '628222', s1); // s1 reported the old phone, not this one
+
+    expect(await row('111')).toMatchObject({ phone: '628222', sessionId: s1 });
+    await store.remember('111', null, s1);
+    expect(seenBy.has('111')).toBe(false);
+  });
+
+  it('knows the owner of a row it loaded, so only another session reporting the phone writes', async () => {
+    await repo.insert({ lid: '111', phone: '628111', sessionId: s1 });
+    await store.reload();
+    const upsert = jest.spyOn(repo, 'upsert');
+
+    await store.remember('111', '628111', s1);
+    expect(upsert).not.toHaveBeenCalled();
+    await store.remember('111', '628111', s2);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+  });
+
+  it('knows the owner of a row it warms on a miss as well', async () => {
+    await repo.insert({ lid: '111', phone: '628111', sessionId: s1 }); // stored after this node loaded the table
+    for (let i = 0; i < 100 && store.getCached('111') === undefined; i++) await new Promise(r => setTimeout(r, 5));
+    const upsert = jest.spyOn(repo, 'upsert');
+
+    await store.remember('111', '628111', s1);
+    expect(upsert).not.toHaveBeenCalled();
+    await store.remember('111', '628111', s2);
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a phone stored while the negative of another session is being written', async () => {

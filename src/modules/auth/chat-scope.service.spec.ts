@@ -159,6 +159,14 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
     expect(await admitted()).toEqual([true, true]);
   });
 
+  it('still admits it after the session that stored the phone answers no phone, when another one reported it since', async () => {
+    await store.remember(LID, PHONE, s2);
+
+    await store.remember(LID, null, s1);
+
+    expect(await admitted()).toEqual([true, true]);
+  });
+
   it('stops admitting it once the session that stored the phone answers no phone', async () => {
     await store.remember(LID, null, s1);
 

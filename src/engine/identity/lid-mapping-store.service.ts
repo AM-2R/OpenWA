@@ -50,8 +50,9 @@ export interface LidMappingStore {
   /** The lids the table maps to these phone digits, read from the database. */
   findLidsForPhone?(phone: string): Promise<string[]>;
   /**
-   * Write-through: update the cache + persist. A phone is last-write-wins. A `null` phone records a negative
-   * result, and replaces a stored phone only when the same session (or none, or one since deleted) wrote it.
+   * Write-through: update the cache + persist. A phone is last-write-wins, and the same phone from another
+   * session makes that session the row's owner. A `null` phone records a negative result, and replaces a
+   * stored phone only when its owner (or none, or one since deleted) gives it.
    */
   remember(lid: string, phone: string | null, sessionId?: string): Promise<void>;
 }
@@ -108,6 +109,13 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    * write committed, so whatever it answers predates the mapping this process now holds.
    */
   private readonly racedLookups = new Set<string>();
+  /**
+   * Sessions that wrote or reported the phone a lid holds in {@link lidToPhone}. One not in it that
+   * reports the same phone takes the row, in one write, so the row names the latest session to see
+   * that phone and the negative of a session that saw it earlier leaves it; one already in it reports
+   * again for free. Dropped with the cached entry.
+   */
+  private readonly seenBy = new Map<string, Set<string>>();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
   // the default is finite; the env override exists for operators who explicitly want the old behaviour.
   private readonly maxCachedLids: number;
@@ -145,12 +153,13 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       });
       this.lidToPhone.clear();
       this.phoneToLids.clear();
+      this.seenBy.clear();
       // A reload re-reads the table, so every recorded absence is a fresh question again.
       this.absentFromTable.clear();
       // Oldest first, so the newest row ends at the most-recent end of the LRU rather than the first
       // one evicted.
       for (const row of rows.reverse()) {
-        this.index(row.lid, row.phone);
+        this.index(row.lid, row.phone, row.sessionId);
       }
       this.logger.log(
         `Loaded ${rows.length} lid->phone mappings into cache${this.maxCachedLids ? ` (cap ${this.maxCachedLids})` : ''}`,
@@ -277,11 +286,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   }
 
   async remember(lid: string, phone: string | null, sessionId?: string): Promise<void> {
-    if (!lid || this.lidToPhone.get(lid) === phone) {
-      return; // unseen-or-changed only; a no-op write would just churn updatedAt
+    if (!lid) return;
+    // Unseen-or-changed only, or a phone a session reports here for the first time: a no-op write would
+    // just churn updatedAt.
+    if (this.lidToPhone.get(lid) === phone && (phone === null || !sessionId || this.seenBy.get(lid)?.has(sessionId))) {
+      return;
     }
     // A negative is not cached until the table has taken it: see clear().
-    if (phone !== null) this.index(lid, phone);
+    if (phone !== null) this.index(lid, phone, sessionId ?? null);
     this.unsettledWrites.set(lid, (this.unsettledWrites.get(lid) ?? 0) + 1);
     if (this.pendingLookups.has(lid)) this.racedLookups.add(lid);
     try {
@@ -328,6 +340,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     if (!affected) return;
     const cached = this.lidToPhone.get(lid);
     this.lidToPhone.delete(lid);
+    this.seenBy.delete(lid);
     if (cached) this.unindex(lid, cached);
     this.absentFromTable.delete(lid);
   }
@@ -372,7 +385,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
         if (writeInFlight || this.racedLookups.has(lid)) return;
         // Last-write-wins: a mapping indexed while the lookup was in flight is newer.
         if (row && !this.lidToPhone.has(row.lid)) {
-          this.index(row.lid, row.phone);
+          this.index(row.lid, row.phone, row.sessionId);
           return;
         }
         if (!row && !this.lidToPhone.has(lid)) this.noteAbsent(lid);
@@ -385,11 +398,15 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   }
 
   /** Update both in-memory indexes, dropping any stale reverse entry from a previous phone. */
-  private index(lid: string, phone: string | null): void {
+  private index(lid: string, phone: string | null, sessionId: string | null): void {
     const prev = this.lidToPhone.get(lid);
     if (prev && prev !== phone) {
       this.unindex(lid, prev);
     }
+    const seen = (prev === phone && this.seenBy.get(lid)) || new Set<string>();
+    if (sessionId) seen.add(sessionId);
+    if (phone) this.seenBy.set(lid, seen);
+    else this.seenBy.delete(lid);
     // Re-insert (delete + set) so the entry moves to the most-recent end of the LRU order even on update.
     this.lidToPhone.delete(lid);
     this.lidToPhone.set(lid, phone);
@@ -427,6 +444,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       if (oldest === undefined) break;
       const phone = this.lidToPhone.get(oldest);
       this.lidToPhone.delete(oldest);
+      this.seenBy.delete(oldest);
       if (phone) this.unindex(oldest, phone);
     }
   }
