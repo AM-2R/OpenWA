@@ -7,11 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { In, QueryDeepPartialEntity, Repository, DataSource } from 'typeorm';
+import { In, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
-import { stripBatchMediaPayloads } from '../message/batch-media.util';
+import { MessageBatch } from '../message/entities/message-batch.entity';
+import { failUnfinishedSessionBatches } from '../message/batch-media.util';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
@@ -915,25 +915,13 @@ export class SessionEngineControls {
 
   /**
    * Fail the session's unfinished bulk batches after a delete that closed its write scopes but did not
-   * remove it. Written here rather than through the batch service, which this module cannot reach without
-   * a cycle; the rows are the same ones its reapers fail, with the media payloads stripped as on every
-   * terminal path. Best effort: the database that just failed the delete may fail this too, and the
+   * remove it. Written against the table rather than through the batch service, which this module cannot
+   * reach without a cycle. Best effort: the database that just failed the delete may fail this too, and the
    * boot reaper still gets the row on the next start.
    */
   private async failUnfinishedBatches(sessionId: string): Promise<void> {
     try {
-      const batches = this.host.dataSource().getRepository(MessageBatch);
-      const unfinished = await batches.find({
-        where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
-      });
-      for (const batch of unfinished) {
-        stripBatchMediaPayloads(batch.messages);
-        await batches.update({ id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) }, {
-          status: BatchStatus.FAILED,
-          completedAt: new Date(),
-          messages: batch.messages,
-        } as QueryDeepPartialEntity<MessageBatch>);
-      }
+      await failUnfinishedSessionBatches(this.host.dataSource(), sessionId);
     } catch (error) {
       this.logger.warn(`Could not fail the unfinished batches of session ${sessionId} after a failed delete`, {
         sessionId,

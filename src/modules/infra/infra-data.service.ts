@@ -5,6 +5,8 @@ import { DataSource, QueryRunner } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
+import { closeSessionWrites } from '../../common/utils/session-write-scope';
+import { failUnfinishedSessionBatches } from '../message/batch-media.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SessionService } from '../session/session.service';
@@ -717,6 +719,14 @@ export class InfraDataService {
     const sharesOneConnection = SHARED_CONNECTION_DIALECTS.has(this.dataDataSource.options.type);
     const resumeLossDetection = sharesOneConnection ? this.ownership?.suspendLossDetection() : undefined;
 
+    // The replace deletes every session the archive does not hold, rows and all, and messages has no foreign
+    // key to refuse a send or batch row that lands after it. So their write scopes are closed and drained
+    // before the transaction opens, as SessionEngineControls.delete does. Not for an engine force left
+    // running, which keeps writing (restartRequired says so), nor for one another node holds.
+    const leftRunning = new Set([...heldElsewhere, ...(data.stopOrphans ? [] : orphanedEngines)]);
+    let retired: Array<{ id: string; writes: ReturnType<typeof closeSessionWrites> }> = [];
+    let committed = false;
+
     // Everything from here is wrapped so the token cannot outlive this request. It is not enough to
     // release it in the transaction's own finally: createQueryRunner/connect/startTransaction sit
     // before that finally exists, so any throw there — a driver change, a broadcaster subscriber, a
@@ -742,7 +752,7 @@ export class InfraDataService {
       // The try/finally that releases the runner opens only after BEGIN, so the refusal and a failing
       // BEGIN give the runner back here: a pooled PostgreSQL client would otherwise stay checked out for
       // the life of the process.
-      try {
+      const refuseNestedTransaction = (): void => {
         if (queryRunner.isTransactionActive) {
           throw new ConflictException({
             statusCode: 409,
@@ -753,6 +763,17 @@ export class InfraDataService {
             code: 'IMPORT_NESTED_TRANSACTION',
           });
         }
+      };
+      try {
+        refuseNestedTransaction();
+        // Drained before BEGIN: on SQLite a write still in flight would otherwise join this transaction.
+        const existing = (await queryRunner.query('SELECT id FROM sessions')) as Array<{ id: string }>;
+        retired = existing
+          .filter(({ id }) => !importedSessionIds.has(id) && !leftRunning.has(id))
+          .map(({ id }) => ({ id, writes: closeSessionWrites(this.dataDataSource, id) }));
+        await Promise.all(retired.map(({ writes }) => writes.drain()));
+        // Again after the drain's await: BEGIN must follow the check with nothing in between.
+        refuseNestedTransaction();
         await queryRunner.startTransaction();
       } catch (error) {
         await queryRunner.release().catch(() => undefined);
@@ -1044,6 +1065,7 @@ export class InfraDataService {
         }
 
         await queryRunner.commitTransaction();
+        committed = true;
 
         // Runtime reconciliation, part 2 (post-commit): the in-memory lid->phone mirror was warmed from
         // the OLD lid_mappings rows and is write-through only, so the just-restored table would never
@@ -1100,6 +1122,22 @@ export class InfraDataService {
         await queryRunner.release();
       }
     } finally {
+      // A restore that did not commit keeps those sessions, but a batch run that captured their writes before
+      // the close stays stopped, so its row is failed before the release, as a failed delete does. Their
+      // engines are gone, so the batch could not have sent anyway.
+      for (const { id } of committed ? [] : retired) {
+        await failUnfinishedSessionBatches(this.dataDataSource, id).catch((error: unknown) =>
+          this.logger.warn(
+            `Could not fail the unfinished batches of session ${id} after an import that did not commit`,
+            {
+              sessionId: id,
+              action: 'infra_import_batch_fail_failed',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          ),
+        );
+      }
+      for (const { writes } of retired) writes.release();
       // Its own finally, so a throwing release() cannot strand the token either.
       resumeLossDetection?.();
     }

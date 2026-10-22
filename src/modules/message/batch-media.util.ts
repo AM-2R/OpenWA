@@ -1,4 +1,5 @@
-import { MessageBatch } from './entities/message-batch.entity';
+import { DataSource, In, QueryDeepPartialEntity } from 'typeorm';
+import { BatchStatus, MessageBatch } from './entities/message-batch.entity';
 
 /**
  * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
@@ -13,5 +14,26 @@ export function stripBatchMediaPayloads(messages: MessageBatch['messages']): voi
         delete media.base64;
       }
     }
+  }
+}
+
+/**
+ * Fail a session's unfinished (PENDING or PROCESSING) batches, with their media payloads stripped as on every
+ * terminal path. For a session whose write scopes an operation closed and then did not remove: a run that
+ * captured a scope before the close stops at its next item without recording anything, and nothing else moves
+ * its row on while this process lives. The boot reaper gets any row this misses on the next start.
+ */
+export async function failUnfinishedSessionBatches(dataSource: DataSource, sessionId: string): Promise<void> {
+  const batches = dataSource.getRepository(MessageBatch);
+  const unfinished = await batches.find({
+    where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
+  });
+  for (const batch of unfinished) {
+    stripBatchMediaPayloads(batch.messages);
+    await batches.update({ id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) }, {
+      status: BatchStatus.FAILED,
+      completedAt: new Date(),
+      messages: batch.messages,
+    } as QueryDeepPartialEntity<MessageBatch>);
   }
 }
