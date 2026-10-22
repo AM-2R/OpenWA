@@ -3170,7 +3170,7 @@ describe('WebhookDeliveryService', () => {
         await drain(receipts);
       });
 
-      it("reports a failure of a session's webhooks to the caller, whichever of them it comes from", async () => {
+      it("reports the failure of both of a session's webhooks to the caller", async () => {
         const original = (configService.get as jest.Mock).getMockImplementation() as (key: string) => unknown;
         (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) => {
           if (key === 'webhook.mediaInlineMaxBytes') throw new Error('config unavailable');
@@ -3191,6 +3191,36 @@ describe('WebhookDeliveryService', () => {
           (configService.get as jest.Mock).mockImplementation(original);
         }
       });
+
+      // Only one of the two deliveries fails, once as the first webhook and once as the second: a dispatch that looked
+      // at the first result only would hide the second. The webhooks' fan-outs start in the order they are listed,
+      // and each reads the inline media cap once, so the nth read stands for the nth webhook.
+      it.each([1, 2])(
+        "reports the failure of only webhook number %i of a session's two to the caller",
+        async failing => {
+          const original = (configService.get as jest.Mock).getMockImplementation() as (key: string) => unknown;
+          let reads = 0;
+          (configService.get as jest.Mock).mockImplementation((key: string, def?: unknown) => {
+            if (key === 'webhook.mediaInlineMaxBytes' && ++reads === failing) throw new Error('config unavailable');
+            return original(key) ?? def;
+          });
+          hooksBySession['sess-m'] = [
+            createMockWebhook({ id: 'wh-m1', url: 'https://one.example/hook', events: ['message.receipt'] }),
+            createMockWebhook({ id: 'wh-m2', url: 'https://two.example/hook', events: ['message.receipt'] }),
+          ];
+          mockFetch.mockResolvedValue({ ok: true, status: 200 });
+          try {
+            await expect(service.dispatch('sess-m', 'message.receipt', receipt(1))).rejects.toThrow(
+              'config unavailable',
+            );
+
+            // The other webhook's delivery was not held back by it.
+            expect(urlsCalled()).toEqual([failing === 1 ? 'https://two.example/hook' : 'https://one.example/hook']);
+          } finally {
+            (configService.get as jest.Mock).mockImplementation(original);
+          }
+        },
+      );
 
       // fanOut waits on its own deliveries with Promise.allSettled; a session with several receipt webhooks waits
       // on the deliveries of its stages with one more. A single webhook has nothing to collect: it is passed
