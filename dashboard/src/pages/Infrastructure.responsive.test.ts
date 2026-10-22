@@ -50,6 +50,23 @@ test('the queue counters wrap in a card too narrow for all three', () => {
   assert.equal(decl(wrap[0].body, 'flex-wrap'), 'wrap');
 });
 
+// The status badge of a card header sits beside the title. A title that cannot share a line with it (the one word
+// of "Speicherkonfiguration", the three words of "Configuración de almacenamiento") ran under the badge at 320px in
+// German, Spanish, French, Italian, Portuguese and Turkish. The title keeps its natural width as the basis, so the
+// badge wraps onto a line of its own when the two do not fit.
+test('a card status badge drops below its title when the two do not fit on one line', () => {
+  const header = rules.filter(
+    r => r.selectors.includes('.infrastructure-page .card-header') && decl(r.body, 'flex-wrap'),
+  );
+  assert.equal(header.length, 1, 'expected one rule that lets the card header wrap');
+  assert.equal(header[0].media, '@media (max-width: 900px)');
+  const left = rules.filter(r => r.selectors.includes('.infrastructure-page .header-left') && decl(r.body, 'flex'));
+  assert.equal(left.length, 1, 'expected one rule that sizes the title');
+  assert.equal(left[0].media, '@media (max-width: 900px)');
+  assert.equal(decl(left[0].body, 'flex'), '1 1 auto');
+  assert.equal(decl(left[0].body, 'min-width'), '0');
+});
+
 test('the data export and import buttons wrap in a card that is too narrow for both', () => {
   const actions = rules.find(r => !r.media && r.selectors.includes('.infrastructure-page .data-migration-actions'));
   assert.ok(actions, 'no .data-migration-actions rule');
