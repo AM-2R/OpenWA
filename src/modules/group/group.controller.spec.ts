@@ -183,6 +183,17 @@ describe('GroupController OpenAPI responses', () => {
     expect(responsesOf('getSettings')['503']?.description).not.toContain('5xx');
   });
 
+  // GroupSettingsDto checks each field against its own type or range and refuses an explicit null, and
+  // the engine lookup answers 400 for a session that is not started, so the 400 names all of them.
+  it('describes every 400 of the settings update', () => {
+    const description = responsesOf('updateSettings')['400']?.description ?? '';
+    for (const part of ['`ephemeralSeconds`', '0 or more', '`memberAddMode`', '`all` or `admins`', '`null`']) {
+      expect(description).toContain(part);
+    }
+    expect(description).toContain('not started');
+    expect(description).not.toContain('not a boolean');
+  });
+
   it('declares the rate-limited 503 on group creation', () => {
     expect(responsesOf('create')['503']?.description).toContain('429');
   });

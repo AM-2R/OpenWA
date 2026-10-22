@@ -185,7 +185,13 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })
   @ApiResponse({ status: 200, description: 'Group settings updated', type: GroupAckResponseDto })
-  @ApiResponse({ status: 400, description: 'No setting provided, or a value is not a boolean' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, ' +
+      '`ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. ' +
+      'Also answered when the session is not started (no engine is running for it).',
+  })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
   @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
