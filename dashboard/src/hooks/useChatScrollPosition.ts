@@ -492,7 +492,10 @@ export function useChatScrollPosition(
       if (pending !== null) {
         requestAnimationFrame(() => {
           const cur = containerRef.current;
-          if (cur && onScreen() && pendingRestoreRef.current !== null) writeScrollTop(cur, savedSpotTop(cur, pending));
+          if (!cur || !onScreen() || pendingRestoreRef.current === null) return;
+          writeScrollTop(cur, savedSpotTop(cur, pending));
+          // What grew above the spot is absorbed by this write: a page still out is held from where it put the reader.
+          if (awaitingOlderPageRef.current) onOlderMessagesRequested();
         });
         return;
       }
@@ -518,7 +521,7 @@ export function useChatScrollPosition(
         else decoded.length = 0;
       });
     },
-    [activeChatId, applyMediaGrowth, followBottom, writeScrollTop],
+    [activeChatId, applyMediaGrowth, followBottom, onOlderMessagesRequested, writeScrollTop],
   );
 
   return { containerRef, onMessageAppended, onMediaLoad, measureMedia, onOlderMessagesRequested };

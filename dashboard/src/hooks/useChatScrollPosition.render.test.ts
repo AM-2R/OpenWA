@@ -1410,6 +1410,48 @@ for (const scenario of [
   });
 }
 
+// A chat shown again with its page still out is held against where the restore put the reader, before the images of
+// the thread, mounted again, have decoded. One above the saved spot that decodes while the restore waits is absorbed
+// by the restore putting them back on it, so the page that lands after must not count it a second time.
+for (const scenario of [{ name: 'by the row they are on' }, { name: 'with no message row in view', noAnchors: true }]) {
+  test(`a page still out when the reader comes back lands after an image above their spot decoded ${scenario.name}`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const plain = (rows: Row[]) => (scenario.noAnchors ? rows.map(r => ({ ...r, anchor: false as const })) : rows);
+    const t: Thread = { rows: plain(textRows('a', 46)), top: 0 };
+    t.rows[2] = { ...t.rows[2], img: 300 }; // decoded while the reader was here
+    const restore = installRows(t);
+    try {
+      const { rerender, container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+      readerScrollsTo(el, 1000); // a7 at the top edge
+      hook().onOlderMessagesRequested();
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+
+      const rowsOfA = t.rows;
+      t.rows = textRows('b', 30);
+      rerender(createElement(RowsProbe, { chatId: 'B', rows: t.rows }));
+      fireEvent.scroll(el);
+      t.rows = rowsOfA.map((r, i) => (i === 2 ? { ...r, img: 0 } : r)); // mounted again, not decoded yet
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: true }));
+      fireEvent.scroll(el);
+
+      t.rows[2] = { ...t.rows[2], img: 300 };
+      hook().onMediaLoad({ currentTarget: container.querySelector('img[data-img="a2"]') });
+      await nextFrame();
+      fireEvent.scroll(el);
+      assert.equal(el.scrollTop, 1000, 'the restore did not put the reader back on their spot');
+
+      t.rows = [...plain(textRows('p', 10)), ...t.rows]; // the page lands: 1000px above
+      rerender(createElement(RowsProbe, { chatId: 'A', rows: t.rows, fetching: false }));
+      assert.equal(el.scrollTop, 1000 + 1000, 'the image the restore absorbed was counted again by the page');
+    } finally {
+      restore();
+    }
+  });
+}
+
 // A reader can stop where no row is in view (a tall element that is not a message): the landing then holds them by the
 // row they were on before, not by every pixel the thread grew, growth below them included.
 test('a reader who scrolls to where no message is in view while an older page is out is held by the row before', async () => {
