@@ -1,6 +1,7 @@
 import Docker from 'dockerode';
 import { DockerService, prestartBuiltinDatabase } from './docker.service';
 import { recordPinnedEnvKeys } from '../../config/env-precedence';
+import { HOST_SPELLINGS } from '../../../test/fixtures/builtin-mode-cases';
 
 // Prevent actual Docker connections on module init during tests
 jest.mock('dockerode');
@@ -315,16 +316,17 @@ describe('DockerService.onModuleInit', () => {
   });
 
   // The host the environment pins outranks the saved file at boot, so a bundled container started for a host pinned
-  // elsewhere would run with nothing dialling it. A pinned bundled host still starts it.
+  // elsewhere would run with nothing dialling it. A pinned host that reaches the container in any spelling still starts
+  // it: the next boot dials it.
   describe.each([
-    ['openwa-postgres', 'POSTGRES_BUILTIN', { DATABASE_TYPE: 'postgres' }, 'DATABASE_HOST', 'postgres'],
+    ['openwa-postgres', 'POSTGRES_BUILTIN', { DATABASE_TYPE: 'postgres' }, 'DATABASE_HOST', 'database'],
     ['openwa-redis', 'REDIS_BUILTIN', { REDIS_ENABLED: 'true' }, 'REDIS_HOST', 'redis'],
-    ['openwa-minio', 'MINIO_BUILTIN', { STORAGE_TYPE: 's3' }, 'S3_ENDPOINT', 'http://minio:9000'],
-  ] as const)('%s with its host pinned', (container, flag, use, hostKey, bundled) => {
+    ['openwa-minio', 'MINIO_BUILTIN', { STORAGE_TYPE: 's3' }, 'S3_ENDPOINT', 'storage'],
+  ] as const)('%s with its host pinned', (container, flag, use, hostKey, service) => {
     it.each([
-      [bundled, true],
-      ['external.example', false],
-    ])('to %s is started: %s', async (host, expected) => {
+      ...HOST_SPELLINGS[service].reach.map(host => [host, true] as const),
+      ...HOST_SPELLINGS[service].elsewhere.map(host => [host, false] as const),
+    ])('to %j is started: %s', async (host, expected) => {
       Object.assign(process.env, { [flag]: 'true', [hostKey]: host }, use);
       recordPinnedEnvKeys({ [hostKey]: host });
       const docker = happyDocker();
@@ -375,9 +377,9 @@ describe('prestartBuiltinDatabase', () => {
   });
 
   it.each([
-    ['postgres', 1],
-    ['db.external.example', 0],
-  ])('with DATABASE_HOST pinned to %s starts the container %i times', async (host, calls) => {
+    ...HOST_SPELLINGS.database.reach.map(host => [host, 1] as const),
+    ...HOST_SPELLINGS.database.elsewhere.map(host => [host, 0] as const),
+  ])('with DATABASE_HOST pinned to %j starts the container %i times', async (host, calls) => {
     recordPinnedEnvKeys({ DATABASE_HOST: host });
     const service = { startBuiltinDatabase: jest.fn().mockResolvedValue(undefined) };
     try {

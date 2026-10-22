@@ -162,3 +162,31 @@ export function pinnedHost(service: ServiceName, pin: PinState): string | undefi
   const spec = SERVICES[service];
   return pin === 'none' ? undefined : pin === 'bundled' ? spec.bundledHost : spec.externalHost;
 }
+
+/**
+ * Host spellings for each service. `reach` names the bundled container all the same: Docker's DNS answers to its
+ * network alias and its container name, in any letter case and as an absolute name with a trailing dot (for storage,
+ * the host of the endpoint URL). `elsewhere` names another server. Every decision that asks whether a host is the
+ * bundled container (start, stop, stored credentials, the built-in mode, the page's notes and restart list) must
+ * answer the same for each.
+ */
+export const HOST_SPELLINGS: Record<ServiceName, { reach: string[]; elsewhere: string[] }> = {
+  database: {
+    reach: ['postgres', 'Postgres', 'postgres.', 'openwa-postgres', ' OPENWA-POSTGRES. '],
+    elsewhere: ['localhost', 'postgres-replica', 'postgres.example.com', 'openwa-postgres-2', ''],
+  },
+  redis: {
+    reach: ['redis', 'REDIS', 'redis.', 'openwa-redis'],
+    elsewhere: ['localhost', 'redis-master', 'myredis', ''],
+  },
+  storage: {
+    reach: [
+      'http://minio:9000',
+      'http://MINIO:9000',
+      'http://minio:9000/',
+      'http://openwa-minio:9000',
+      'https://minio.:9000',
+    ],
+    elsewhere: ['http://localhost:9000', 'http://minio.example.com:9000', 'minio:9000', 'not a url', ''],
+  },
+};

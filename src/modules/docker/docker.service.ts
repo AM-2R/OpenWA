@@ -47,12 +47,13 @@ export function namesBundledContainer(profile: string, value: string | undefined
 }
 
 /**
- * Whether the environment (or the project .env) pins the profile's host to anything but its bundled container. The
- * pin outranks the saved file at every boot, so a container started for that profile would run with nothing using it.
+ * Whether the environment (or the project .env) pins the profile's host to anything but its bundled container, in
+ * any spelling namesBundledContainer accepts. The pin outranks the saved file at every boot, so a container started
+ * for that profile would run with nothing using it.
  */
 export function hostPinnedElsewhere(profile: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const [key, value] = BUNDLED_SERVICE_ENV[profile] ?? [];
-  return key !== undefined && isEnvPinned(key) && env[key] !== value;
+  const [key] = BUNDLED_SERVICE_ENV[profile] ?? [];
+  return key !== undefined && isEnvPinned(key) && !namesBundledContainer(profile, env[key]);
 }
 
 interface ContainerInfo {
