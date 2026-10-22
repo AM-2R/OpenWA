@@ -302,6 +302,31 @@ describe('LoggerService', () => {
     });
   });
 
+  // Object.entries lists one entry per byte of a Buffer, so a few megabytes cost seconds and hundreds of megabytes.
+  describe('a Buffer of 5 million bytes', () => {
+    const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+
+    it('is written as [Truncated] at once in the first levels, with the rest of the line kept', () => {
+      const file = Buffer.alloc(5_000_000);
+
+      const started = Date.now();
+      logger.log('saved', { sessionId: 's1', file });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(parsed()).toMatchObject({ message: 'saved', sessionId: 's1', file: '[Truncated]' });
+    });
+
+    it('is written as [Truncated] at once below the fifth level, with the rest of the line kept', () => {
+      const file = Buffer.alloc(5_000_000);
+
+      const started = Date.now();
+      logger.log('saved', { sessionId: 's1', a: { b: { c: { d: { e: { file } } } } } });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(parsed()).toMatchObject({ sessionId: 's1', a: { b: { c: { d: { e: { file: '[Truncated]' } } } } } });
+    });
+  });
+
   describe('an array given as the metadata itself', () => {
     const parsed = (): Record<string, unknown> => getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
 
@@ -801,6 +826,36 @@ describe('redactSecrets', () => {
       expect(redactSecrets(deep(zeros(999)))).toEqual(deep(zeros(999)));
       expect(redactSecrets(deep(zeros(1000)))).toEqual(deep('[Truncated]'));
     });
+
+    // A typed array lists one entry per element, as an array does, and an object one per key.
+    describe('a typed array or a wide object', () => {
+      const deep = (list: unknown): unknown => ({ a: { b: { c: { d: { list } } } } });
+      const keysOf = (copy: unknown): number =>
+        Object.keys((copy as { a: { b: { c: { d: { list: object } } } } }).a.b.c.d.list).length;
+      const wide = (keys: number): Record<string, number> =>
+        Object.fromEntries(Array.from({ length: keys }, (_, key) => [`k${key}`, key]));
+
+      it('copies a deep typed array that fits in what is left of the node budget and writes a longer one as [Truncated]', () => {
+        expect(keysOf(redactSecrets(deep(new Uint8Array(999))))).toBe(999);
+        expect(redactSecrets(deep(new Uint8Array(1000)))).toEqual(deep('[Truncated]'));
+        expect(redactSecrets(deep(Buffer.alloc(1000)))).toEqual(deep('[Truncated]'));
+      });
+
+      it('copies a deep object whose keys fit in what is left of the node budget and writes a wider one as [Truncated]', () => {
+        expect(keysOf(redactSecrets(deep(wide(999))))).toBe(999);
+        expect(redactSecrets(deep(wide(1000)))).toEqual(deep('[Truncated]'));
+      });
+
+      it('copies a wide object whole in the first five levels', () => {
+        const copy = redactSecrets({ list: wide(5000) }) as { list: object };
+
+        expect(Object.keys(copy.list)).toHaveLength(5000);
+      });
+
+      it('writes a small typed array in the first levels as one entry per element, as before', () => {
+        expect(redactSecrets({ list: Buffer.from([1, 2, 3]) })).toEqual({ list: { 0: 1, 1: 2, 2: 3 } });
+      });
+    });
   });
 
   describe('the bounds of the copy', () => {
@@ -826,12 +881,28 @@ describe('redactSecrets', () => {
     });
 
     it('copies exactly 1000 objects of the sixth level and writes the rest as [Truncated]', () => {
-      const rows = rowsIn(redactSecrets(rowsBelow(4, objects(1500))), 4);
+      const rows = rowsIn(
+        redactSecrets(
+          rowsBelow(
+            4,
+            Array.from({ length: 1500 }, () => ({})),
+          ),
+        ),
+        4,
+      );
 
       expect(rows).toHaveLength(1500);
-      expect(rows[999]).toEqual({ id: 999 });
+      expect(rows[999]).toEqual({});
       expect(rows[1000]).toBe('[Truncated]');
       expect(rows.filter(row => row === '[Truncated]')).toHaveLength(500);
+    });
+
+    it('leaves the last of the 1000 nodes no room for an object that has a key', () => {
+      const rows = rowsIn(redactSecrets(rowsBelow(4, objects(1500))), 4);
+
+      expect(rows[998]).toEqual({ id: 998 });
+      expect(rows[999]).toBe('[Truncated]');
+      expect(rows.filter(row => row === '[Truncated]')).toHaveLength(501);
     });
 
     it('writes an object met again inside itself as [Circular], however many objects lie between', () => {

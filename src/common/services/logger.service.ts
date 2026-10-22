@@ -35,7 +35,8 @@ const REDACT_FULL_DEPTH = 5;
 const REDACT_DEEP_NODES = 1000;
 // Array.prototype.map visits every index, holes included, so a sparse array costs its length however little it
 // holds (2**32 - 1 takes tens of seconds). An array longer than this, or below the whole levels longer than what is
-// left of the node budget, is written as [Truncated] before any index is visited.
+// left of the node budget, is written as [Truncated] before any index is visited. The same goes for a typed array (a
+// Buffer included), which lists one entry per element, and below the whole levels for an object, one per key.
 const REDACT_MAX_ARRAY_LENGTH = 1_000_000;
 
 export interface RedactOptions {
@@ -64,16 +65,21 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     if (deep && --budget.nodes < 0) return '[Truncated]';
     const parents = [...path, node];
     const copy = (child: unknown): unknown => (typeof child === 'bigint' ? child.toString() : walk(child, parents));
+    const room = deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH;
     if (Array.isArray(node)) {
-      if (node.length > (deep ? budget.nodes : REDACT_MAX_ARRAY_LENGTH)) return '[Truncated]';
+      if (node.length > room) return '[Truncated]';
       // A plain Array read by index: map would build the copy through the constructor of an Array subclass.
       return Array.from({ length: node.length }, (_, index) => copy(node[index]));
     }
+    if (ArrayBuffer.isView(node) && ((node as { length?: number }).length ?? 0) > room) return '[Truncated]';
     const props = node as Record<string, unknown>;
     const source =
       errors && node instanceof Error ? { name: node.name, message: node.message, stack: node.stack, ...props } : props;
+    const keys = Object.keys(source);
+    if (deep && keys.length > budget.nodes) return '[Truncated]';
     const out: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(source)) {
+    for (const key of keys) {
+      const val = source[key];
       // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
       if (key === 'toJSON' && typeof val === 'function') continue;
       out[key] = isSecretKey(key) ? marker : copy(val);

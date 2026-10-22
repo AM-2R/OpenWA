@@ -130,6 +130,18 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(line).toContain('"password":"[redacted]","visible":"v"');
   });
 
+  it('writes a Buffer of 5 million bytes as [Truncated] at once, in the first levels and below the fifth', () => {
+    const file = Buffer.alloc(5_000_000);
+
+    const started = Date.now();
+    const shallow = write({ file, jid: 'j' }, 'x');
+    const deep = write({ a: { b: { c: { d: { e: { file } } } } } }, 'x');
+
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(shallow).toMatchObject({ file: '[Truncated]', jid: 'j', msg: 'x' });
+    expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: '[Truncated]' } } } } }, msg: 'x' });
+  });
+
   it('writes a record that is an array longer than the limit as one [Truncated] field', () => {
     const line = write(new Array<number>(1_000_001).fill(0), 'x');
 
