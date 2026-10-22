@@ -53,6 +53,9 @@ const REDACT_MAX_ENTRIES = 2_000_000;
 // not fit is written as [Truncated]. It is far above any line a caller writes on purpose (a million entries of 64
 // characters fit), and below what V8 can build.
 const REDACT_MAX_CHARS = 2 ** 26;
+// Building the text of a BigInt costs more per digit the longer it is: about 20 times what writing a character of a
+// string costs at 100,000 digits and 80 times at 4 million. So a BigInt of more than 2**22 digits does not fit even
+// alone, and a line under 2**26 characters that holds one is still cut.
 const REDACT_BIGINT_WEIGHT = 16;
 
 export interface RedactOptions {
@@ -167,7 +170,7 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
     const parents = [...path, node];
     const copy = (child: unknown): unknown => {
       if (typeof child !== 'bigint') return walk(child, parents);
-      // Its text costs far more to build than a string of that length costs to write (ten times or more), and
+      // Its text costs far more to build than a string of that length costs to write (see REDACT_BIGINT_WEIGHT), and
       // none is built once the budget is spent.
       if (budget.chars < 0) return '[Truncated]';
       const text = child.toString();

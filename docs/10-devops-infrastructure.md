@@ -1111,7 +1111,8 @@ level), and, at any level, an array, Map or Set of more than a million entries. 
 it is written as: its list of pairs, and each pair an array of two, which below the fifth level is one more of
 those 1000. At every level one call copies at most two million entries in all (the keys of its objects plus the
 lengths of its arrays, so three to a Map's pair: one of more than 666,666 pairs loses its last pairs) and writes at
-most 2^26 (about 67 million) characters of string values, key names and BigInt text (sixteen to the digit); a
+most 2^26 (about 67 million) characters of string values, key names and BigInt text (sixteen to the digit, as
+a long BigInt's text costs that much more to build, so one of more than 2^22 digits is `[Truncated]` even alone); a
 value referenced again is counted again at each use, and what no longer fits is written as `[Truncated]`.
 A value that keeps its data outside its own properties is written readably, at any depth: an Error as its
 `name`, `message` and `stack` before its own properties, a Date as its ISO text (`Invalid Date` when it holds
