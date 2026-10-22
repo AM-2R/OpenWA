@@ -341,22 +341,32 @@ test('NumberChecker: the number field and the bulk list are typed left to right,
   assert.equal(container.querySelector('.nc-textarea')?.getAttribute('dir'), 'ltr');
 });
 
-test('NumberChecker: both result tables sit in a scroll container, so a narrow card does not clip them', async () => {
+// A scroller is not focusable by itself in every browser, and an unnamed one is not announced: Safari users on a keyboard
+// need the tab stop to scroll the columns that do not fit, and a screen reader needs to know what it is on.
+test('NumberChecker: both result tables sit in a named, focusable scroll container that a narrow card does not clip', async () => {
   stubLookups(registered);
   const { container } = renderComponent();
   await rtl.screen.findByRole('option', { name: /Primary Session/ });
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: '919876543210' } });
   rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
   await rtl.screen.findByText('Registered', { selector: '.nc-status-badge' });
+  const wrapper = () => container.querySelector('.nc-history-table')?.parentElement;
   assert.equal(container.querySelectorAll('.nc-history-table').length, 1);
-  assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
+  assert.equal(wrapper()?.className, 'nc-table-wrap');
+  assert.equal(wrapper()?.getAttribute('tabindex'), '0');
+  assert.equal(wrapper()?.getAttribute('role'), 'region');
+  assert.equal(wrapper()?.getAttribute('aria-label'), 'Recent Checks');
+  assert.equal(rtl.screen.getByRole('region', { name: 'Recent Checks' }), wrapper());
 
   rtl.fireEvent.click(rtl.screen.getByRole('tab', { name: /Bulk/i }));
   rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '911111111111' } });
   startBatch();
   await rtl.screen.findByText('+911111111111');
   assert.equal(container.querySelectorAll('.nc-history-table').length, 1);
-  assert.equal(container.querySelector('.nc-history-table')?.parentElement?.className, 'nc-table-wrap');
+  assert.equal(wrapper()?.className, 'nc-table-wrap');
+  assert.equal(wrapper()?.getAttribute('tabindex'), '0');
+  assert.equal(wrapper()?.getAttribute('role'), 'region');
+  assert.equal(wrapper()?.getAttribute('aria-label'), 'Bulk Number Checker');
 });
 
 test('NumberChecker: the Message Tester button reads as a plain link, because it passes no number along', async () => {

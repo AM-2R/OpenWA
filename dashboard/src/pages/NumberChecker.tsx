@@ -662,7 +662,7 @@ export function NumberChecker() {
                 </button>
               </div>
 
-              <div className="nc-table-wrap">
+              <div className="nc-table-wrap" tabIndex={0} role="region" aria-label={t('numberChecker.recent.title')}>
                 <table className="nc-history-table">
                   <thead>
                     <tr>
@@ -955,7 +955,7 @@ export function NumberChecker() {
                 </div>
               </div>
 
-              <div className="nc-table-wrap">
+              <div className="nc-table-wrap" tabIndex={0} role="region" aria-label={t('numberChecker.bulk.title')}>
                 <table className="nc-history-table">
                   <thead>
                     <tr>
