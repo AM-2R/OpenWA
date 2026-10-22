@@ -424,6 +424,46 @@ describe('Session content lifetime', () => {
     }
   }, 60000);
 
+  // The SQLite driver resolves every statement within the same tick, so the yield between the batches is the
+  // only thing that lets timers, requests and engine callbacks run during a long delete. Each batch statement
+  // queues a macrotask; the next one must find it already run. (On PostgreSQL the driver's own I/O gives the
+  // loop its turns, so this holds there with or without the yield.)
+  it('lets the event loop run between the batch statements of a delete', async () => {
+    const doomed = await createSession();
+    const messages = db.getRepository(Message);
+    const batch =
+      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const total = batch * 2 + 50;
+    for (let from = 0; from < total; from += 200) {
+      const size = Math.min(200, total - from);
+      await messages.insert(
+        Array.from({ length: size }, (_, i) => ({
+          sessionId: doomed.id,
+          chatId: '10000000001@c.us',
+          from: 'me',
+          to: '10000000001@c.us',
+          body: `m${from + i}`,
+        })),
+      );
+    }
+    const remove = messages.delete.bind(messages);
+    let turnRan = true;
+    const turnsBeforeStatement: boolean[] = [];
+    jest.spyOn(messages, 'delete').mockImplementation(criteria => {
+      turnsBeforeStatement.push(turnRan);
+      turnRan = false;
+      setImmediate(() => {
+        turnRan = true;
+      });
+      return remove(criteria);
+    });
+
+    await controls.delete(doomed.id);
+
+    expect(await messages.countBy({ sessionId: doomed.id })).toBe(0);
+    expect(turnsBeforeStatement).toEqual([true, true, true]);
+  }, 60000);
+
   // The write scopes a delete closes stay retired when it fails: a batch running for the session stops at
   // its next item without recording anything. The session is still there, so its row would stay PROCESSING.
   describe('a delete that fails after closing the session writes', () => {
