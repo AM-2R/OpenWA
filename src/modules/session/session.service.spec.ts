@@ -114,6 +114,15 @@ function createMockSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+/** A query builder whose chain methods return itself and whose raw read finds nothing unless told otherwise. */
+function chainableQuery(): Record<string, jest.Mock> {
+  const query: Record<string, jest.Mock> = { getRawMany: jest.fn().mockResolvedValue([]) };
+  for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit']) {
+    query[name] = jest.fn().mockReturnValue(query);
+  }
+  return query;
+}
+
 describe('SessionService', () => {
   let service: SessionService;
   // The engine-lifecycle verbs/state moved out of SessionService (god-object split); the white-box
@@ -153,6 +162,7 @@ describe('SessionService', () => {
     messageRepository = {
       find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue(null),
+      createQueryBuilder: jest.fn().mockImplementation(chainableQuery),
       // `create()` in TypeORM just builds the entity instance; it does NOT populate @PrimaryGeneratedColumn
       // or @CreateDateColumn. Mirror that: return the input as-is (no id/createdAt) so tests see the same
       // shape the production code does before the `insert()` generated-maps merge.
@@ -1405,21 +1415,52 @@ describe('SessionService', () => {
       const BATCH = SESSION_DELETE_BATCH_SIZE_SQLITE;
       const ids = (from: number, count: number): Array<{ id: string }> =>
         Array.from({ length: count }, (_, i) => ({ id: `m${from + i}` }));
+      // The messages are read through the query builder: first the pages of rows that have a timestamp, in
+      // (timestamp, id) order, then the pages of rows that have none. Each page the script holds is one read.
+      const stamped = (from: number, count: number): Array<{ id: string; timestamp: string }> =>
+        Array.from({ length: count }, (_, i) => ({ id: `m${from + i}`, timestamp: String(1700000000 + from + i) }));
+      const messageQuery = (...pages: Array<Array<{ id: string; timestamp?: string }>>) => {
+        const query = chainableQuery();
+        for (const page of pages) query.getRawMany.mockResolvedValueOnce(page);
+        (messageRepository.createQueryBuilder as jest.Mock).mockReturnValue(query);
+        return query;
+      };
+
+      /** The page sizes the loop asked for, in order. */
+      const takes = (query: Record<string, jest.Mock>): number[] =>
+        (query.limit.mock.calls as Array<[number]>).map(([take]) => take);
 
       it('are removed in batches ahead of the transaction, not by one statement', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        (messageRepository.find as jest.Mock)
-          .mockResolvedValueOnce(ids(0, BATCH))
-          .mockResolvedValueOnce(ids(BATCH, BATCH))
-          .mockResolvedValueOnce(ids(2 * BATCH, 20));
+        const query = messageQuery(stamped(0, BATCH), stamped(BATCH, BATCH), stamped(2 * BATCH, 20));
 
         await service.delete('sess-uuid-1');
 
-        expect(messageRepository.find).toHaveBeenCalledTimes(3);
-        expect(messageRepository.find).toHaveBeenCalledWith({
-          select: { id: true },
-          where: { sessionId: 'sess-uuid-1' },
-          take: BATCH,
+        // Three pages of rows with a timestamp, then one read that finds no row without one.
+        expect(query.getRawMany).toHaveBeenCalledTimes(4);
+        expect(query.limit).toHaveBeenCalledTimes(4);
+        for (const [take] of query.limit.mock.calls) expect(take).toBe(BATCH);
+        expect(query.where).toHaveBeenNthCalledWith(1, expect.stringContaining('message.sessionId = :sessionId'), {
+          sessionId: 'sess-uuid-1',
+        });
+        // Each page starts after the last row of the one before it, not from the head of the session again.
+        // In the order of the cursor: without it the database may hand the rows out in any order and the cursor
+        // would skip some.
+        expect(query.orderBy).toHaveBeenCalledTimes(4);
+        expect(query.addOrderBy).toHaveBeenCalledTimes(4);
+        for (const [column, direction] of query.orderBy.mock.calls)
+          expect([column, direction]).toEqual(['message.timestamp', 'ASC']);
+        for (const [column, direction] of query.addOrderBy.mock.calls)
+          expect([column, direction]).toEqual(['message.id', 'ASC']);
+        const after = '(message.timestamp, message.id) > (:timestamp, :id)';
+        expect(query.andWhere).toHaveBeenCalledTimes(2);
+        expect(query.andWhere).toHaveBeenNthCalledWith(1, after, {
+          timestamp: 1700000000 + BATCH - 1,
+          id: `m${BATCH - 1}`,
+        });
+        expect(query.andWhere).toHaveBeenNthCalledWith(2, after, {
+          timestamp: 1700000000 + 2 * BATCH - 1,
+          id: `m${2 * BATCH - 1}`,
         });
         const del = messageRepository.delete as jest.Mock;
         expect(del).toHaveBeenCalledTimes(3);
@@ -1432,6 +1473,25 @@ describe('SessionService', () => {
         expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder[0]);
       });
 
+      it('without a timestamp follow the ones with, paged by id', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const query = messageQuery(stamped(0, 5), ids(100, BATCH), ids(100 + BATCH, 4));
+
+        await service.delete('sess-uuid-1');
+
+        const del = messageRepository.delete as jest.Mock;
+        expect(del).toHaveBeenCalledTimes(3);
+        expect(del).toHaveBeenNthCalledWith(1, { id: In(stamped(0, 5).map(row => row.id)) });
+        expect(del).toHaveBeenNthCalledWith(2, { id: In(ids(100, BATCH).map(row => row.id)) });
+        expect(del).toHaveBeenNthCalledWith(3, { id: In(ids(100 + BATCH, 4).map(row => row.id)) });
+        // The short page of the first kind of row ends its pass; the second pass pages after its last id.
+        expect(query.where).toHaveBeenNthCalledWith(2, expect.stringContaining('message.timestamp IS NULL'), {
+          sessionId: 'sess-uuid-1',
+        });
+        expect(query.andWhere).toHaveBeenCalledTimes(1);
+        expect(query.andWhere).toHaveBeenCalledWith('message.id > :lastId', { lastId: `m${100 + BATCH - 1}` });
+      });
+
       // PostgreSQL's statement time follows the bytes of the rows (inline media payloads), so it keeps the smaller
       // batch; SQLite pays per batch and keeps the larger one. Both values are pinned here on purpose.
       it.each([
@@ -1440,18 +1500,14 @@ describe('SessionService', () => {
       ])('takes %s batches of %i rows', async (type: string, size: number) => {
         (dataSource as { options: unknown }).options = { type };
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        (messageRepository.find as jest.Mock).mockResolvedValueOnce(ids(0, size)).mockResolvedValueOnce(ids(size, 3));
+        const query = messageQuery(stamped(0, size), stamped(size, 3));
 
         await service.delete('sess-uuid-1');
 
         expect(SESSION_DELETE_BATCH_SIZE_SQLITE).toBe(2000);
         expect(SESSION_DELETE_BATCH_SIZE_POSTGRES).toBe(500);
-        expect(messageRepository.find).toHaveBeenCalledWith({
-          select: { id: true },
-          where: { sessionId: 'sess-uuid-1' },
-          take: size,
-        });
-        expect(messageRepository.find).toHaveBeenCalledTimes(2);
+        expect(query.limit).toHaveBeenCalledWith(size);
+        expect(query.getRawMany).toHaveBeenCalledTimes(3);
         expect(messageRepository.delete).toHaveBeenCalledTimes(2);
         for (const repo of [outboxRepository, failureRepository]) {
           expect(repo.find).toHaveBeenCalledWith({
@@ -1463,26 +1519,29 @@ describe('SessionService', () => {
       });
 
       it.each([
-        ['a session with a partial last batch', 2 * BATCH + 7, 3, 3],
-        ['a session that fills its last batch exactly', 2 * BATCH, 3, 2],
-        ['a session that fits in one batch', 12, 1, 1],
-        ['a session without messages', 0, 1, 0],
+        ['a session with a partial last batch', 2 * BATCH + 7, 4, 3],
+        ['a session that fills its last batch exactly', 2 * BATCH, 4, 2],
+        ['a session that fits in one batch', 12, 2, 1],
+        ['a session without messages', 0, 2, 0],
       ])(
         'need a bounded number of statements for %s',
         async (_name: string, total: number, expectedReads: number, expectedDeletes: number) => {
           (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-          const find = messageRepository.find as jest.Mock;
-          // A stand-in for the table: every read returns the next page of what is left.
+          const query = messageQuery();
+          // A stand-in for the table: every read returns the next page of what is left. The last read of a
+          // pass that fills its final page exactly finds nothing, and the pass of rows without a timestamp
+          // costs one read more.
           let left = total;
-          find.mockImplementation(({ take }: { take: number }) => {
-            const page = ids(total - left, Math.min(left, take));
+          query.getRawMany.mockImplementation(() => {
+            const take = takes(query)[takes(query).length - 1];
+            const page = stamped(total - left, Math.min(left, take));
             left -= page.length;
             return Promise.resolve(page);
           });
 
           await service.delete('sess-uuid-1');
 
-          expect(find).toHaveBeenCalledTimes(expectedReads);
+          expect(query.getRawMany).toHaveBeenCalledTimes(expectedReads);
           const del = messageRepository.delete as jest.Mock;
           expect(del).toHaveBeenCalledTimes(expectedDeletes);
           let removed = 0;
@@ -1537,7 +1596,7 @@ describe('SessionService', () => {
 
       it('give up the delete when a batch fails, leaving the session row for a retry to finish', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        (messageRepository.find as jest.Mock).mockResolvedValueOnce(ids(0, BATCH));
+        messageQuery(stamped(0, BATCH));
         (messageRepository.delete as jest.Mock).mockRejectedValueOnce(new Error('canceling statement'));
 
         await expect(service.delete('sess-uuid-1')).rejects.toThrow('canceling statement');

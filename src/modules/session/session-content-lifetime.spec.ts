@@ -424,6 +424,66 @@ describe('Session content lifetime', () => {
     }
   }, 60000);
 
+  // Each page of messages starts after the last row of the one before, in (timestamp, id) order with the rows
+  // that have no timestamp last. A select that restarted from the head of the session's range would hand out the
+  // first page again when its rows are still there, and walk every deleted entry of the index when they are not.
+  // The deletes are suppressed here so the only thing that can move the second page on is the cursor.
+  it('reads each page of messages after the last row of the previous one', async () => {
+    const doomed = await createSession();
+    const kept = await db.getRepository(Session).save({ name: 'kept-session', config: {} });
+    const messages = db.getRepository(Message);
+    const batch =
+      db.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const stamped = batch * 2 + 50;
+    const unstamped = 30;
+    const seed = async (sessionId: string, from: number, rows: number, timestamp: (i: number) => number | null) => {
+      for (let done = 0; done < rows; done += 200) {
+        const size = Math.min(200, rows - done);
+        await messages.insert(
+          Array.from({ length: size }, (_, i) => ({
+            sessionId,
+            chatId: '10000000001@c.us',
+            from: 'me',
+            to: '10000000001@c.us',
+            body: `m${from + done + i}`,
+            // Seven rows share each timestamp, so a page boundary falls inside a run of equal timestamps.
+            timestamp: timestamp(from + done + i) as number,
+          })),
+        );
+      }
+    };
+    await seed(doomed.id, 0, stamped, i => 1700000000 + Math.floor(i / 7));
+    await seed(doomed.id, stamped, unstamped, () => null);
+    await seed(kept.id, 0, 3, i => 1700000000 + i);
+    const stored = new Map(
+      (await messages.find({ where: { sessionId: doomed.id }, select: { id: true, timestamp: true } })).map(row => [
+        row.id,
+        row.timestamp === null ? null : Number(row.timestamp),
+      ]),
+    );
+    const pages: string[][] = [];
+    jest.spyOn(messages, 'delete').mockImplementation(criteria => {
+      if (pages.length >= 20) throw new Error('the pages are not advancing');
+      pages.push((criteria as unknown as { id: { value: string[] } }).id.value.slice());
+      return Promise.resolve({ raw: [], affected: 0 });
+    });
+    jest.spyOn(db, 'transaction').mockRejectedValue(new Error('closing transaction not under test'));
+
+    await expect(controls.delete(doomed.id)).rejects.toThrow('closing transaction not under test');
+
+    const walked = pages.flat();
+    expect(new Set(walked).size).toBe(walked.length);
+    expect([...walked].sort()).toEqual([...stored.keys()].sort());
+    // Two full pages and a short one of stamped rows, then the short page of rows without a timestamp.
+    expect(pages.map(page => page.length)).toEqual([batch, batch, 50, unstamped]);
+    const stamps = walked.map(id => stored.get(id));
+    const firstUnstamped = stamps.indexOf(null);
+    expect(firstUnstamped).toBe(stamped);
+    expect(stamps.slice(firstUnstamped).every(stamp => stamp === null)).toBe(true);
+    const ordered = stamps.slice(0, firstUnstamped) as number[];
+    expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
+  }, 60000);
+
   // The SQLite driver resolves every statement within the same tick, so the yield between the batches is the
   // only thing that lets timers, requests and engine callbacks run during a long delete. Each batch statement
   // queues a macrotask; the next one must find it already run. (On PostgreSQL the driver's own I/O gives the

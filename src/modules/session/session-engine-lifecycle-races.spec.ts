@@ -263,7 +263,13 @@ describe('SessionEngineLifecycle races', () => {
 
     beforeEach(() => {
       gates = [];
-      const rows = { find: jest.fn(() => gates.shift()?.promise ?? Promise.resolve([])), delete: jest.fn() };
+      const read = jest.fn(() => gates.shift()?.promise ?? Promise.resolve([]));
+      // The messages of a session are read through a query builder: every chain call returns itself.
+      const query: Record<string, jest.Mock> = { getRawMany: read };
+      for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit']) {
+        query[name] = jest.fn().mockReturnValue(query);
+      }
+      const rows = { find: read, createQueryBuilder: jest.fn(() => query), delete: jest.fn() };
       const manager = { delete: jest.fn().mockResolvedValue({ affected: 0 }), remove: jest.fn() };
       transaction = jest.fn((work: (m: unknown) => Promise<void>) => work(manager));
       Object.assign(dataSource, {

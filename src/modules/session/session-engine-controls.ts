@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { In, Repository, DataSource } from 'typeorm';
+import { EntityTarget, In, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -56,12 +56,14 @@ export const SESSION_DELETE_BATCH_SIZE_SQLITE = 2000;
 
 /**
  * The same on PostgreSQL, where a statement does not hold the process and a larger batch buys little (a million
- * small rows on an analyzed table delete in about the same few seconds at 500 or 2000 rows; without statistics
- * 2000 rows is about 2.5 times faster). What bounds a statement there is its time under the statement timeout,
- * and that follows the bytes of the rows it deletes: a message that keeps its media inline stores megabytes per
- * row. So it keeps the smaller batch and its headroom.
+ * small rows on an analyzed table delete in about the same few seconds at 500 or 2000 rows). What bounds a
+ * statement there is its time under the statement timeout, and that follows the bytes of the rows it deletes: a
+ * message that keeps its media inline stores megabytes per row. So it keeps the smaller batch and its headroom.
  */
 export const SESSION_DELETE_BATCH_SIZE_POSTGRES = 500;
+
+/** One table's pass of the batched delete: the repository to delete from and the reader of the next page of ids. */
+type TrafficPass = { rows: Repository<{ id: string }>; next: (take: number) => Promise<string[]> };
 
 /** A start refused because an operator stopped the session. Same 409 on the wire as any conflict. */
 export class SessionStoppedException extends ConflictException {}
@@ -949,20 +951,83 @@ export class SessionEngineControls {
    * statistics are missing or stale), which made a long history take longer than linear.
    */
   private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
+    const dataSource = this.host.dataSource();
     const size =
-      this.host.dataSource().options.type === 'postgres'
-        ? SESSION_DELETE_BATCH_SIZE_POSTGRES
-        : SESSION_DELETE_BATCH_SIZE_SQLITE;
-    for (const entity of [Message, WebhookOutboxEvent, WebhookDeliveryFailure]) {
-      const rows = this.host.dataSource().getRepository<{ id: string; sessionId: string }>(entity);
+      dataSource.options.type === 'postgres' ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_SIZE_SQLITE;
+    const head = (entity: EntityTarget<{ id: string; sessionId: string }>): TrafficPass => ({
+      rows: dataSource.getRepository(entity),
+      next: async take =>
+        (await dataSource.getRepository(entity).find({ select: { id: true }, where: { sessionId }, take })).map(
+          row => row.id,
+        ),
+    });
+    const messages = dataSource.getRepository(Message);
+    const passes: TrafficPass[] = [
+      { rows: messages, next: this.stampedMessageIds(sessionId) },
+      { rows: messages, next: this.unstampedMessageIds(sessionId) },
+      head(WebhookOutboxEvent),
+      head(WebhookDeliveryFailure),
+    ];
+    for (const { rows, next } of passes) {
       for (;;) {
-        const batch = await rows.find({ select: { id: true }, where: { sessionId }, take: size });
-        if (batch.length === 0) break;
-        await rows.delete({ id: In(batch.map(row => row.id)) });
-        if (batch.length < size) break;
+        const ids = await next(size);
+        if (ids.length === 0) break;
+        await rows.delete({ id: In(ids) });
+        if (ids.length < size) break;
         await new Promise<void>(resolve => setImmediate(resolve));
       }
     }
+  }
+
+  /**
+   * The messages that carry a timestamp, a page at a time in the order of IDX_messages_session_timestamp_id,
+   * each page starting after the last row of the one before. A select that restarted from the head of the
+   * session's range every time stepped over every entry the earlier batches had deleted: PostgreSQL keeps
+   * those in the index until a vacuum removes them, so the cost of the loop grew with the square of the history.
+   */
+  private stampedMessageIds(sessionId: string): (take: number) => Promise<string[]> {
+    const messages = this.host.dataSource().getRepository(Message);
+    let last: { timestamp: number; id: string } | undefined;
+    return async take => {
+      const query = messages
+        .createQueryBuilder('message')
+        .select('message.id', 'id')
+        .addSelect('message.timestamp', 'timestamp')
+        .where('message.sessionId = :sessionId AND message.timestamp IS NOT NULL', { sessionId });
+      if (last) query.andWhere('(message.timestamp, message.id) > (:timestamp, :id)', last);
+      const page = await query
+        .orderBy('message.timestamp', 'ASC')
+        .addOrderBy('message.id', 'ASC')
+        .limit(take)
+        .getRawMany<{ id: string; timestamp: string | number }>();
+      const end = page[page.length - 1];
+      if (end) last = { timestamp: Number(end.timestamp), id: end.id };
+      return page.map(row => row.id);
+    };
+  }
+
+  /**
+   * The messages without a timestamp (a send that was never acknowledged), after the stamped ones, paged by
+   * id. Ordering by the null timestamp as well is what lets PostgreSQL read the index in order instead of
+   * sorting every remaining row for each page.
+   */
+  private unstampedMessageIds(sessionId: string): (take: number) => Promise<string[]> {
+    const messages = this.host.dataSource().getRepository(Message);
+    let lastId: string | undefined;
+    return async take => {
+      const query = messages
+        .createQueryBuilder('message')
+        .select('message.id', 'id')
+        .where('message.sessionId = :sessionId AND message.timestamp IS NULL', { sessionId });
+      if (lastId !== undefined) query.andWhere('message.id > :lastId', { lastId });
+      const page = await query
+        .orderBy('message.timestamp', 'ASC')
+        .addOrderBy('message.id', 'ASC')
+        .limit(take)
+        .getRawMany<{ id: string }>();
+      if (page.length > 0) lastId = page[page.length - 1].id;
+      return page.map(row => row.id);
+    };
   }
 
   /**
