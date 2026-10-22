@@ -902,12 +902,13 @@ test('NumberChecker: a gateway refusal stops the batch and the numbers never rea
 
 const STOP_REASON: Record<number, RegExp> = {
   400: /The session is not connected \(HTTP 400\)/,
+  502: /The gateway refused a lookup \(HTTP 502\)/,
   409: /The session is not connected \(HTTP 409\)/,
   429: /The gateway rate limit was reached \(HTTP 429\)/,
   503: /WhatsApp did not answer a lookup \(HTTP 503\)/,
 };
 
-for (const status of [400, 409, 429, 503]) {
+for (const status of [400, 409, 429, 502, 503]) {
   test(`NumberChecker: HTTP ${status} on the first lookup stops the batch before the second`, async () => {
     const lookups = stubLookups(() =>
       jsonResponse({ message: status === 400 ? 'Session is not started' : `refused ${status}` }, status),

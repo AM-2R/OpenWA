@@ -11,9 +11,11 @@ export interface GroupPickerRow {
 export type GroupSendPlan = { mode: 'single'; chatId: string } | { mode: 'sequential'; chatIds: string[] };
 
 // Answers the next call of the same run gets too: 409 an engine that is not ready, which fails every group alike,
-// 429 the rate limit, 503 WhatsApp not answering. A 400 is not listed because the gateway also answers it for one chat
-// alone (a send a plugin vetoed); it counts only when it says the session is not running, see SESSION_NOT_RUNNING.
-const GATEWAY_REFUSAL_STATUSES: readonly number[] = [409, 429, 503];
+// 429 the rate limit, 502 a reverse proxy that cannot reach the gateway, 503 WhatsApp not answering. A 504 is left out:
+// the proxy reached the gateway and stopped waiting, so that request may still be running. A 400 is not listed because
+// the gateway also answers it for one chat alone (a send a plugin vetoed); it counts only when it says the session is
+// not running, see SESSION_NOT_RUNNING.
+const GATEWAY_REFUSAL_STATUSES: readonly number[] = [409, 429, 502, 503];
 
 // How the gateway words a 400 for a session with no engine: "Session '<id>' is not active. Start the session first."
 // on the send routes, "Session is not started" on the contact and group routes.

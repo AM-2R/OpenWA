@@ -340,6 +340,21 @@ test('a send answered without a message id fails that group and the run goes on'
   assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
 });
 
+test('a 502 from a reverse proxy stops the run, since the gateway behind it is down', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    502,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 502');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
 test('an empty message or a media type with no file or URL keeps Send disabled', async () => {
   stubGroupGateway([
     { id: 'g1@g.us', name: 'Family' },

@@ -82,10 +82,14 @@ test('a stopped session, a refusal and a fetch with no answer end a run, other f
   const withStatus = (status: number, message = 'refused') => Object.assign(new Error(message), { status });
   assert.equal(isGatewayRefusal(withStatus(409)), true);
   assert.equal(isGatewayRefusal(withStatus(429)), true);
+  // A reverse proxy answers 502 for a gateway it cannot reach, and 503 as the gateway does.
+  assert.equal(isGatewayRefusal(withStatus(502)), true);
   assert.equal(isGatewayRefusal(withStatus(503)), true);
   assert.equal(isGatewayRefusal(new TypeError('Failed to fetch')), true);
   assert.equal(isGatewayRefusal(withStatus(404)), false);
   assert.equal(isGatewayRefusal(withStatus(500)), false);
+  // A 504 means the proxy reached the gateway and stopped waiting, so the request may still be running.
+  assert.equal(isGatewayRefusal(withStatus(504)), false);
   // An error the page raised itself, or an answer it could not read, is not a fetch that got no answer.
   assert.equal(isGatewayRefusal(new Error('offline')), false);
   assert.equal(isGatewayRefusal(new SyntaxError('Unexpected token')), false);
