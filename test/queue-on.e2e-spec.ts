@@ -43,12 +43,13 @@ if (!REDIS_AVAILABLE && process.env.GITHUB_ACTIONS === 'true') {
 const describeQueueOn = REDIS_AVAILABLE ? describe : describe.skip;
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Repository } from 'typeorm';
@@ -60,16 +61,27 @@ import { json, urlencoded, Request } from 'express';
 import { AppModule } from '../src/app.module';
 import { applyGlobalValidation } from '../src/config/app-validation';
 import { PluginLoaderService } from '../src/core/plugins/plugin-loader.service';
+import { PluginStorageService } from '../src/core/plugins/plugin-storage.service';
+import { PluginStatus, PluginType } from '../src/core/plugins/plugin.interfaces';
 import { PluginInstance } from '../src/modules/integration/entities/plugin-instance.entity';
 import { IngressEvent } from '../src/modules/integration/entities/ingress-event.entity';
+import { IntegrationDeliveryFailure } from '../src/modules/integration/entities/integration-delivery-failure.entity';
 import { WebhookOutboxEvent } from '../src/modules/webhook/entities/webhook-outbox-event.entity';
-import { sanitizeIngressJobId } from '../src/modules/integration/ingress-enqueue.service';
+import { resolveIngressJobOptions, sanitizeIngressJobId } from '../src/modules/integration/ingress-enqueue.service';
 import { QUEUE_NAMES } from '../src/modules/queue/queue-names';
 import { IngressJobData } from '../src/modules/queue/processors/ingress.processor';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
 import { Session } from '../src/modules/session/entities/session.entity';
 import { WebhookService } from '../src/modules/webhook/webhook.service';
+
+const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 10000): Promise<void> => {
+  const start = Date.now();
+  while (!(await predicate())) {
+    if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
+    await new Promise(r => setTimeout(r, 10));
+  }
+};
 
 /**
  * Queue-on coverage for the dispatch paths every other e2e suite boots with QUEUE_ENABLED=false:
@@ -132,14 +144,6 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
       prefix: 'sha256=',
     },
     dedupHeader: 'x-chatwoot-delivery',
-  };
-
-  const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 10000): Promise<void> => {
-    const start = Date.now();
-    while (!(await predicate())) {
-      if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
-      await new Promise(r => setTimeout(r, 10));
-    }
   };
 
   beforeAll(async () => {
@@ -353,4 +357,157 @@ describeQueueOn('Queued dispatch paths (e2e, QUEUE_ENABLED=true)', () => {
       redis.disconnect();
     }
   });
+});
+
+/**
+ * The BullMQ workers start while the modules initialise, and PluginLoaderService restores the plugins the
+ * operator had enabled only at bootstrap, after that. A job already waiting in Redis can be taken in between
+ * (on a busy host the bootstrap comes later than the worker's first fetch), so its plugin has to count as
+ * restoring from module init on: held without spending an attempt, while the job of a plugin that is not
+ * being restored is dispatched as usual.
+ */
+describeQueueOn('An ingress job waiting in Redis when the gateway starts (e2e, QUEUE_ENABLED=true)', () => {
+  const PLUGIN = 'restore-held';
+  const run = `${Date.now()}`;
+  const held: IngressJobData = {
+    pluginId: PLUGIN,
+    instanceId: 'acct1',
+    route: 'hook',
+    deliveryId: `restore-held-${run}`,
+    payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+  };
+  const served: IngressJobData = { ...held, pluginId: 'not-restoring', deliveryId: `not-restoring-${run}` };
+  const prevEnv = {
+    PLUGINS_DIR: process.env.PLUGINS_DIR,
+    INGRESS_MAX_ATTEMPTS: process.env.INGRESS_MAX_ATTEMPTS,
+    INGRESS_RETRY_DELAY_MS: process.env.INGRESS_RETRY_DELAY_MS,
+  };
+  let app: INestApplication<App>;
+  let queue: Queue<IngressJobData>;
+  let failures: Repository<IntegrationDeliveryFailure>;
+  let booting: Promise<unknown>;
+  let bootstrap: jest.SpyInstance;
+  let enable: jest.SpyInstance;
+  let dispatch: jest.SpyInstance;
+  // The restore of the plugin stays in flight until the test ends it.
+  let restored = false;
+  let endRestore!: () => void;
+  const restore = new Promise<void>(resolve => (endRestore = resolve));
+
+  beforeAll(async () => {
+    // A single attempt: a job that spends it before the plugin is up is dead-lettered.
+    process.env.INGRESS_MAX_ATTEMPTS = '1';
+    process.env.INGRESS_RETRY_DELAY_MS = '1000';
+
+    // A plugin the operator had enabled before the restart: its package on disk and its decision in the registry.
+    const pluginsDir = join(process.env.PLUGIN_STATE_DIR!, 'plugins');
+    process.env.PLUGINS_DIR = pluginsDir;
+    const manifest = {
+      id: PLUGIN,
+      name: 'Restore Held',
+      version: '1.0.0',
+      type: PluginType.EXTENSION,
+      main: 'index.js',
+    };
+    mkdirSync(join(pluginsDir, PLUGIN), { recursive: true });
+    writeFileSync(join(pluginsDir, PLUGIN, 'manifest.json'), JSON.stringify(manifest));
+    writeFileSync(join(pluginsDir, PLUGIN, 'index.js'), 'module.exports = class {};');
+    new PluginStorageService({
+      get: (k: string) => (k === 'dataDir' ? process.env.PLUGIN_STATE_DIR : undefined),
+    } as unknown as ConfigService).setPluginEntry({
+      ...manifest,
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+      enabledByOperator: true,
+    });
+
+    queue = new Queue<IngressJobData>(QUEUE_NAMES.INGRESS, {
+      connection: { host: REDIS_HOST, port: REDIS_PORT },
+      prefix: 'openwa-e2e',
+    });
+    for (const d of [held, served]) {
+      await queue.add('ingress', d, { jobId: d.deliveryId, ...resolveIngressJobOptions() });
+    }
+
+    // The worker's first fetch, before the bootstrap starts the restore: wait until the worker has decided on the job.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the loader as this
+    const realBootstrap = PluginLoaderService.prototype.onApplicationBootstrap;
+    bootstrap = jest.spyOn(PluginLoaderService.prototype, 'onApplicationBootstrap').mockImplementation(async function (
+      this: PluginLoaderService,
+    ) {
+      await waitFor(async () => !['waiting', 'active'].includes(await queue.getJobState(held.deliveryId)));
+      return realBootstrap.call(this);
+    });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with the loader as this
+    const realEnable = PluginLoaderService.prototype.enablePlugin;
+    enable = jest.spyOn(PluginLoaderService.prototype, 'enablePlugin').mockImplementation(function (
+      this: PluginLoaderService,
+      id: string,
+    ) {
+      return id === PLUGIN ? restore : realEnable.call(this, id);
+    });
+    // As the real dispatch does, it fails while the plugin has no worker yet.
+    dispatch = jest
+      .spyOn(PluginLoaderService.prototype, 'dispatchWebhookForInstance')
+      .mockImplementation((d: IngressJobData) =>
+        d.pluginId === PLUGIN && !restored
+          ? Promise.reject(new Error(`no live sandbox host for plugin ${PLUGIN}`))
+          : Promise.resolve(),
+      );
+
+    app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
+    failures = app.get(getRepositoryToken(IntegrationDeliveryFailure, 'data'));
+    // init() waits for the restore, so it settles only once the test has ended the restore.
+    booting = app.init();
+  }, 60000);
+
+  afterAll(async () => {
+    restored = true;
+    endRestore();
+    try {
+      await booting;
+      await app?.close();
+    } catch {
+      /* ignore teardown-only multi-datasource quirk */
+    }
+    // A job left behind by a failed run would be dispatched by the next run's first suite.
+    await Promise.allSettled([held, served].map(d => queue?.remove(d.deliveryId)));
+    await queue?.close();
+    bootstrap?.mockRestore();
+    enable?.mockRestore();
+    dispatch?.mockRestore();
+    for (const [key, value] of Object.entries(prevEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('holds the job of a plugin still being restored without spending its attempt, and serves the others', async () => {
+    // The worker has taken the job and put it back while the restore is in flight. A held job comes back at
+    // every retry delay, so the state is read once.
+    let state = '';
+    await waitFor(async () => !['waiting', 'active'].includes((state = await queue.getJobState(held.deliveryId))));
+    expect(state).toBe('delayed');
+    expect((await queue.getJob(held.deliveryId))?.attemptsStarted).toBeGreaterThanOrEqual(1);
+    expect((await queue.getJob(held.deliveryId))?.attemptsMade).toBe(0);
+    expect(dispatch.mock.calls.map(([d]: [IngressJobData]) => d.deliveryId)).not.toContain(held.deliveryId);
+    expect(await failures.countBy({ deliveryId: held.deliveryId })).toBe(0);
+
+    // A plugin that is not being restored is not held.
+    await waitFor(async () => (await queue.getJobState(served.deliveryId)) === 'completed');
+    expect((await queue.getJob(served.deliveryId))?.attemptsMade).toBe(1);
+
+    await waitFor(() => enable.mock.calls.some(([id]: [string]) => id === PLUGIN));
+    restored = true;
+    endRestore();
+    await booting;
+
+    await waitFor(async () => (await queue.getJobState(held.deliveryId)) === 'completed', 15000);
+    expect((await queue.getJob(held.deliveryId))?.attemptsMade).toBe(1);
+    expect(dispatch.mock.calls.filter(([d]: [IngressJobData]) => d.deliveryId === held.deliveryId)).toHaveLength(1);
+    expect(await failures.countBy({ deliveryId: held.deliveryId })).toBe(0);
+  }, 60000);
 });
