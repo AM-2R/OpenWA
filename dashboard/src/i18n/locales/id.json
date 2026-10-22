@@ -171,6 +171,16 @@
       "backgroundColor": "Warna latar",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Teks sistem",
+        "script": "Tulisan tangan",
+        "bold": "Tebal",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "atau",
       "post": "Posting",
       "posted": "Status diposting",

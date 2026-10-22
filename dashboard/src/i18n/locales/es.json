@@ -175,6 +175,16 @@
       "backgroundColor": "Color de fondo",
       "font": "Fuente",
       "fontDefault": "Predeterminada",
+      "fonts": {
+        "system": "Sistema",
+        "systemText": "Texto del sistema",
+        "script": "Manuscrita",
+        "bold": "Negrita",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "o",
       "post": "Publicar",
       "posted": "Estado publicado",

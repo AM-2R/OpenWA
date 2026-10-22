@@ -180,6 +180,16 @@
       "backgroundColor": "צבע רקע",
       "font": "גופן",
       "fontDefault": "ברירת מחדל",
+      "fonts": {
+        "system": "מערכת",
+        "systemText": "טקסט מערכת",
+        "script": "כתב יד",
+        "bold": "מודגש",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "או",
       "post": "פרסם",
       "posted": "הסטטוס פורסם",

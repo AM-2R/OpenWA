@@ -171,6 +171,16 @@
       "backgroundColor": "पृष्ठभूमि का रंग",
       "font": "फ़ॉन्ट",
       "fontDefault": "डिफ़ॉल्ट",
+      "fonts": {
+        "system": "सिस्टम",
+        "systemText": "सिस्टम टेक्स्ट",
+        "script": "स्क्रिप्ट",
+        "bold": "बोल्ड",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "या",
       "post": "पोस्ट करें",
       "posted": "स्टेटस पोस्ट किया गया",

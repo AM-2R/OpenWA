@@ -171,6 +171,16 @@
       "backgroundColor": "Arka plan rengi",
       "font": "Yazı Tipi",
       "fontDefault": "Varsayılan",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Sistem metni",
+        "script": "El yazısı",
+        "bold": "Kalın",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "veya",
       "post": "Paylaş",
       "posted": "Durum paylaşıldı",

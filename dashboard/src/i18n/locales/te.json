@@ -171,6 +171,16 @@
       "backgroundColor": "నేపథ్య రంగు",
       "font": "ఫాంట్",
       "fontDefault": "డిఫాల్ట్",
+      "fonts": {
+        "system": "సిస్టమ్",
+        "systemText": "సిస్టమ్ టెక్స్ట్",
+        "script": "స్క్రిప్ట్",
+        "bold": "బోల్డ్",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "లేదా",
       "post": "పోస్ట్ చేయండి",
       "posted": "స్టేటస్ పోస్ట్ చేయబడింది",

@@ -171,6 +171,16 @@
       "backgroundColor": "Background color",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "System",
+        "systemText": "System text",
+        "script": "Script",
+        "bold": "Bold",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "or",
       "post": "Post",
       "posted": "Status posted",

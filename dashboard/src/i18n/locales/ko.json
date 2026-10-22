@@ -171,6 +171,16 @@
       "backgroundColor": "배경색",
       "font": "글꼴",
       "fontDefault": "기본값",
+      "fonts": {
+        "system": "시스템",
+        "systemText": "시스템 텍스트",
+        "script": "필기체",
+        "bold": "굵게",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "또는",
       "post": "게시",
       "posted": "상태가 게시되었습니다",

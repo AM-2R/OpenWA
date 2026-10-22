@@ -188,6 +188,16 @@
       "backgroundColor": "لون الخلفية",
       "font": "الخط",
       "fontDefault": "افتراضي",
+      "fonts": {
+        "system": "النظام",
+        "systemText": "نص النظام",
+        "script": "خط يدوي",
+        "bold": "غامق",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "أو",
       "post": "نشر",
       "posted": "تم نشر الحالة",

@@ -171,6 +171,16 @@
       "backgroundColor": "背景颜色",
       "font": "字体",
       "fontDefault": "默认",
+      "fonts": {
+        "system": "系统",
+        "systemText": "系统文本",
+        "script": "手写体",
+        "bold": "粗体",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "或",
       "post": "发布",
       "posted": "状态已发布",

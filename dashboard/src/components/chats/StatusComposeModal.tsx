@@ -9,6 +9,7 @@ import { Modal } from '../Modal';
 import { MEDIA_UPLOAD_MAX_BYTES } from '../../utils/mediaUpload';
 import { captionLength } from '../../utils/bulkMedia';
 import { matches } from '../../utils/chatFilters';
+import { statusFontsFor } from '../../utils/statusFonts';
 
 // Mirrors @ArrayMaxSize(256) on the send-status DTOs — the picker caps selection client-side so the
 // user can't build a list the backend is guaranteed to reject.
@@ -237,11 +238,10 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
               <label htmlFor="scm-3">{t('chats.status.font')}</label>
               <select id="scm-3" value={composeFont} onChange={e => setComposeFont(e.target.value)}>
                 <option value="">{t('chats.status.fontDefault')}</option>
-                {/* The WhatsApp status font enum: 6 is the bold system face; 3–5 don't exist on
-                    the wire and the backend rejects them. */}
-                {[0, 1, 2, 6, 7, 8, 9, 10].map(f => (
-                  <option key={f} value={f}>
-                    {f}
+                {/* The WhatsApp status font enum; 3 to 5 don't exist on the wire and the backend rejects them. */}
+                {statusFontsFor(engineType).map(f => (
+                  <option key={f.id} value={f.id}>
+                    {t(f.labelKey)}
                   </option>
                 ))}
               </select>
