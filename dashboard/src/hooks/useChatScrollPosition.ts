@@ -312,6 +312,9 @@ export function useChatScrollPosition(
         ? anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - anchor.top
         : el.scrollHeight - prevScrollHeightRef.current;
     if (grew > 0) {
+      // The offset a pending restore wants is from before the page; the reader is held on their message now, and
+      // a decode that applied it again would take them to the top of what just landed.
+      pendingRestoreRef.current = null;
       const corrected = el.scrollTop + grew;
       writeScrollTop(el, corrected);
       // writeScrollTop marks this as a programmatic write, so the scroll listener's own

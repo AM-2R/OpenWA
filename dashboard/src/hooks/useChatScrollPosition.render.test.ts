@@ -787,3 +787,39 @@ test('a chat left at the bottom after an older page landed under the reader come
     restore();
   }
 });
+
+// A chat comes back at a saved spot near the top of its loaded history. The restore stays pending until the reader
+// scrolls. An older page lands and holds the reader on their message, and a decode after it must not take them back
+// to the offset from before the page, which is now the top of what landed.
+test('a decode after an older page landed does not apply the saved spot from before the page', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 0); // the reader leaves A at the top of its loaded history
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+
+    g.height = 2000; // back to A, its media not decoded
+    rerender(createElement(Probe, { chatId: 'A' }));
+    fireEvent.scroll(el); // the restore wrote 0
+    hook().onOlderMessagesRequested(); // the thread asks for an older page by itself
+    rerender(createElement(Probe, { chatId: 'A', fetching: true }));
+    g.height += 3000; // the page lands
+    rerender(createElement(Probe, { chatId: 'A', fetching: false }));
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'the landing did not hold the reader on their message');
+    fireEvent.scroll(el);
+
+    g.height += 600; // the media decodes
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, 3000, 'a decode took the reader above the page they were held on');
+  } finally {
+    restore();
+  }
+});
