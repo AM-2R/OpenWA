@@ -1265,6 +1265,25 @@ describe('Baileys inbound messages held for storage', () => {
       expect(handedOver).toEqual([{ body, originalBody }]);
     });
 
+    it.each([
+      ['an edit', 'fixed caption', true],
+      ['an edit that repeats the text', 'caption', undefined],
+    ])('marks the row edited for %s only if it changed the text', async (_, body, edited) => {
+      const h = heldProjector({ unique: true, sqlite });
+      const { events } = build(4, h.callbacks);
+      const release = download();
+      upsert(events, media('M', CHAT, { caption: 'caption' }));
+      await flush();
+      upsert(events, edit('E', 'M', body));
+      await flush();
+      release();
+      await flush();
+
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'M', body })]);
+      expect((h.rows[0].metadata as Row).edited).toBe(edited);
+      expect(h.announcedAs('message.edited')).toEqual([expect.objectContaining({ messageId: 'M', body })]);
+    });
+
     it(
       sqlite
         ? 'announces them once the message has been handed on'

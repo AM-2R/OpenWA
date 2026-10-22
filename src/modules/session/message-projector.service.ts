@@ -123,6 +123,11 @@ interface InFlightEntry {
   // Set when the revoke came from the engine, so message.revoked went out for it.
   revokeAnnounced?: boolean;
   editedBody?: string;
+  // The text the message arrived with, which an edit is compared with: one that repeats the text so far changes
+  // nothing. Unset while the message is admitted but not yet emitted.
+  body?: string;
+  // An edit held for the message changed its text, or was asked for: the row it lands on is marked edited.
+  edited?: boolean;
   ackStatus?: MessageStatus;
   // Latest reaction per sender; '' means the sender withdrew theirs.
   reactions?: Record<string, string>;
@@ -412,6 +417,7 @@ export class MessageProjector {
     const inFlight = turn
       ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
+    this.arrive(inFlight, message.originalBody ?? message.body);
 
     const onFailure = (err: unknown): null => {
       this.logger.error(`onMessage handler failed for ${id}`, String(err));
@@ -484,9 +490,10 @@ export class MessageProjector {
   }
 
   /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
-  private trackInFlight(key: string, message: InboundMessageData) {
-    const { ref, revoked, revokeAnnounced, editedBody, ackStatus, reactions } = this.inboundInFlight.get(key) ?? {};
-    const inFlight = {
+  private trackInFlight(key: string, message: InboundMessageData): InFlightEntry {
+    const { ref, revoked, revokeAnnounced, editedBody, edited, ackStatus, reactions } =
+      this.inboundInFlight.get(key) ?? {};
+    const inFlight: InFlightEntry = {
       quote: quoteOf(message),
       // The first delivery of an id says whose message it is: a repeat sent from another chat must not
       // take that over from it, or a change aimed through the repeat would be judged by the wrong rule.
@@ -494,11 +501,25 @@ export class MessageProjector {
       revoked,
       revokeAnnounced,
       editedBody,
+      edited,
       ackStatus,
       reactions,
     };
     this.inboundInFlight.set(key, inFlight);
     return inFlight;
+  }
+
+  /** The engine handed the message over: an edit held until now is compared with the text it arrived with. */
+  private arrive(entry: InFlightEntry, arrivedWith: string): void {
+    entry.body = arrivedWith;
+    if (entry.editedBody !== undefined && entry.editedBody !== arrivedWith) entry.edited = true;
+  }
+
+  /** Keep an edit for the row of a message not written yet. One that repeats the text so far changes nothing. */
+  private holdEdit(entry: InFlightEntry, body: string): void {
+    const soFar = entry.editedBody ?? entry.body;
+    if (soFar !== undefined && body !== soFar) entry.edited = true;
+    entry.editedBody = body;
   }
 
   /** Drop the entry once its commit ended, unless a re-fire of the same id replaced it. */
@@ -749,7 +770,7 @@ export class MessageProjector {
     if (entry?.revoked) Object.assign(dbMessage, REVOKED_ROW_PATCH);
     else if (entry?.editedBody !== undefined) {
       dbMessage.body = entry.editedBody;
-      dbMessage.metadata = { ...dbMessage.metadata, edited: true };
+      if (entry.edited) dbMessage.metadata = { ...dbMessage.metadata, edited: true };
     }
     return entry?.revoked === true;
   }
@@ -867,11 +888,12 @@ export class MessageProjector {
   ): Promise<void> {
     if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
     try {
-      const edited = pending.editedBody !== undefined;
-      if (edited) await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
+      if (pending.editedBody !== undefined) {
+        await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
+      }
       if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
       // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
-      if (edited) await this.mutationProjector.markMessageEdited(id, waMessageId);
+      if (pending.edited) await this.mutationProjector.markMessageEdited(id, waMessageId);
     } catch (err) {
       this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
     }
@@ -1059,6 +1081,7 @@ export class MessageProjector {
     const inFlight = turn
       ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
+    this.arrive(inFlight, message.originalBody ?? message.body);
     // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
     // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
     const prepared = this.startHookChain(id, engine, turn, messageData, () =>
@@ -1416,7 +1439,7 @@ export class MessageProjector {
       // See applyReactionQueued: judged foreign, it is not kept for the row, and a stored row decides.
       const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
       if (this.foreignToInFlight(inFlight, source)) needsRow = true;
-      else inFlight.editedBody = message.body;
+      else this.holdEdit(inFlight, message.body);
     }
     this.mutationProjector.applyMessageEditQueued(id, message, needsRow);
   }
@@ -1453,7 +1476,11 @@ export class MessageProjector {
     // With a `source`, the message still arriving takes the edit only if it agrees with it, and the row
     // only if it is not foreign to it, as for recordRevoke.
     const inFlight = this.inboundInFlight.get(`${sessionId}:${messageId}`);
-    if (inFlight && !(source && this.foreignToInFlight(inFlight, source))) inFlight.editedBody = body;
+    if (inFlight && !(source && this.foreignToInFlight(inFlight, source))) {
+      this.holdEdit(inFlight, body);
+      // Asked for by the caller, and marked as the stored row is: the text it carries does not matter.
+      inFlight.edited = true;
+    }
     return this.mutationProjector.recordOutboundMessageEdit(sessionId, messageId, body, source);
   }
 

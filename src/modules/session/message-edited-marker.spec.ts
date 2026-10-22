@@ -276,6 +276,85 @@ describe('edited marker for a message whose row is not written yet', () => {
     });
   });
 
+  it('leaves an edit that repeats the text unmarked while the insert is out, and announces it', async () => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    await flush();
+
+    projector.applyMessageEditQueued('s1', editOf('A', 'original'));
+    await flush();
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: 'original', metadata: null }));
+    expect(announced.filter(a => a.event === 'message.edited')).toHaveLength(1);
+  });
+
+  it('marks a message edited and then restored to its text while the insert is out', async () => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    await flush();
+
+    projector.applyMessageEditQueued('s1', editOf('A', 'v1'));
+    projector.applyMessageEditQueued('s1', editOf('A', 'original'));
+    await flush();
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: 'original', metadata: { edited: true } }));
+  });
+
+  it('keeps the mark of an edit that restored the text when the message is delivered again', async () => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    await flush();
+    projector.applyMessageEditQueued('s1', editOf('A', 'v1'));
+    projector.applyMessageEditQueued('s1', editOf('A', 'original'));
+    projector.handleInboundMessage('s1', engine, incoming('A'));
+    await flush();
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: 'original', metadata: { edited: true } }));
+  });
+
+  // The engine applied the edit before the hand-over and told the session of it, so the text the message was
+  // handed over with is already the edited one.
+  it('compares an edit with the text the message arrived with, not the one it was handed over with', async () => {
+    const insert = deferred<void>();
+    stalled.set('A', insert.promise);
+    stalled.set('B', insert.promise);
+    projector.handleInboundMessage('s1', engine, incoming('A', { body: 'fixed', originalBody: 'original' }));
+    projector.handleInboundMessage('s1', engine, incoming('B', { body: 'original' }));
+    await flush();
+
+    projector.applyMessageEditQueued('s1', editOf('A', 'fixed'));
+    projector.applyMessageEditQueued('s1', editOf('B', 'original'));
+    await flush();
+    insert.resolve();
+    await flush();
+
+    expect(await stored('A')).toEqual(expect.objectContaining({ body: 'fixed', metadata: { edited: true } }));
+    expect(await stored('B')).toEqual(expect.objectContaining({ body: 'original', metadata: null }));
+  });
+
+  // A REST edit is asked for by the caller, and the stored row is marked for it whatever the text.
+  it('marks a send a REST edit reaches while its insert is out, even when the edit repeats the text', async () => {
+    const insert = deferred<void>();
+    stalled.set('S', insert.promise);
+    projector.handleOwnSendEcho('s1', engine, incoming('S', { fromMe: true, body: 'sent' }));
+    await flush();
+
+    await projector.recordOutboundMessageEdit('s1', 'S', 'sent', { kind: 'edit', chatId: CHAT, fromMe: true });
+    insert.resolve();
+    await flush();
+
+    expect(await stored('S')).toEqual(expect.objectContaining({ body: 'sent', metadata: { edited: true } }));
+  });
+
   it('marks a message edited while it waits behind an earlier message of its chat', async () => {
     const insert = deferred<void>();
     stalled.set('A', insert.promise);

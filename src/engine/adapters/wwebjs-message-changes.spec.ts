@@ -109,13 +109,15 @@ describe.each([
   let rows: Row[];
   let dispatch: jest.Mock;
   let client: EventEmitter;
-  // The bodies the message:received and message:sent hooks were given.
+  // The bodies the message:received and message:sent hooks were given, and a gate that holds the first of them.
   let hooked: string[];
+  let hookGate: Promise<void> | undefined;
 
   beforeEach(() => {
     process.env.INBOUND_MEDIA_CONCURRENCY = '1';
     rows = [];
     hooked = [];
+    hookGate = undefined;
     // The real projector over a stand-in `messages` table, wired as the database wires it: only PostgreSQL
     // admits a message on arrival.
     const repo = {
@@ -150,9 +152,10 @@ describe.each([
       new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
       { dispatch } as unknown as WebhookService,
       {
-        execute: jest.fn((event: string, data: unknown) => {
+        execute: jest.fn(async (event: string, data: unknown) => {
           if (event === 'message:received' || event === 'message:sent') hooked.push(String((data as Row).body));
-          return Promise.resolve({ continue: true, data });
+          if (event === 'message:received') await hookGate;
+          return { continue: true, data };
         }),
       } as unknown as HookManager,
       { ingest: jest.fn() } as unknown as StatusStoreService,
@@ -402,25 +405,50 @@ describe.each([
     expect(events('message.sent').map(m => m.body)).toEqual(['sent again']);
   });
 
-  // PostgreSQL holds the message in the session, which takes such an edit itself. Here the adapter holds it, and
-  // an edit that repeats the text the message carries so far changes nothing: it goes through at once, as it did
-  // before, and leaves no mark.
-  if (type === 'better-sqlite3') {
-    it('announces an edit that repeats the text at once, and does not mark the message edited', async () => {
-      const contact = deferred<null>();
-      client.emit('message', incoming('A', 'same', { contact: contact.promise }));
-      await flush();
-      editEvent(client, 'A', 'same');
-      await flush();
+  // An edit that repeats the text the message carries changes nothing: it is announced, and leaves no mark.
+  it('announces an edit that repeats the text during the contact lookup, and does not mark the message edited', async () => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'same', { contact: contact.promise }));
+    await flush();
+    editEvent(client, 'A', 'same');
+    await flush();
 
-      expect(events('message.edited')).toHaveLength(1);
-      contact.resolve(null);
-      await flush();
+    expect(events('message.edited')).toHaveLength(1);
+    contact.resolve(null);
+    await flush();
 
-      expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'same' })]);
-      expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
-    });
-  }
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'same' })]);
+    expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
+  });
+
+  // The hook of message:received can run for a while, and the row is written when it returns.
+  it('announces an edit that repeats the text while the hook runs, and does not mark the message edited', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    client.emit('message', incoming('A', 'same'));
+    await flush();
+    editEvent(client, 'A', 'same');
+    await flush();
+    hook.resolve();
+    await flush();
+
+    expect(events('message.edited')).toHaveLength(1);
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'same' })]);
+    expect(rows[0].metadata ?? {}).not.toHaveProperty('edited');
+  });
+
+  it('stores an edit that changes the text while the hook runs, marked edited', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    client.emit('message', incoming('A', 'orig'));
+    await flush();
+    editEvent(client, 'A', 'fixed');
+    await flush();
+    hook.resolve();
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } })]);
+  });
 });
 
 describe('changes kept while whatsapp-web.js processes a message (adapter level)', () => {

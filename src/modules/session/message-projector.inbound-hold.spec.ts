@@ -264,6 +264,56 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(dispatched('message.received')[0]).toEqual(expect.objectContaining({ body: 'edited' }));
   });
 
+  // An edit that repeats the text the message carries changes nothing, so it leaves no mark, though it is announced.
+  it.each([
+    ['before the emit', false],
+    ['after the emit, while the insert is out', true],
+  ])('leaves an edit that repeats the text unmarked, %s', async (_when, afterEmit) => {
+    const stall = deferred<void>();
+    if (afterEmit) insertGate = () => stall.promise;
+    const t = admit(arrival('A', 'chat1'));
+    if (!afterEmit) projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'original' } as never);
+    projector.handleInboundMessage('s1', engine, message('A', 'chat1', { body: 'original' }), t);
+    if (afterEmit) {
+      await flush();
+      projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'original' } as never);
+      await flush();
+      stall.resolve();
+    }
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ body: 'original', metadata: undefined })]);
+    expect(persistedHooks()[0]).toEqual(expect.objectContaining({ body: 'original', metadata: undefined }));
+    expect(eventsGateway.emitMessageEdited).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks an edit that restores the text after another one, before the emit', async () => {
+    const t = admit(arrival('A', 'chat1'));
+    projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'v1' } as never);
+    projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'original' } as never);
+    projector.handleInboundMessage('s1', engine, message('A', 'chat1', { body: 'original' }), t);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ body: 'original', metadata: { edited: true } })]);
+  });
+
+  // The engine applied the edit and told the session of it before the hand-over, so the message is handed over
+  // already edited, with the text it arrived with beside it.
+  it('compares an edit held before the emit with the text the message arrived with', async () => {
+    const t = admit(arrival('A', 'chat1'));
+    projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'fixed' } as never);
+    projector.handleInboundMessage('s1', engine, message('A', 'chat1', { body: 'fixed', originalBody: 'original' }), t);
+    const same = admit(arrival('B', 'chat1'));
+    projector.applyMessageEditQueued('s1', { messageId: 'B', body: 'original' } as never);
+    projector.handleInboundMessage('s1', engine, message('B', 'chat1', { body: 'original' }), same);
+    await flush();
+
+    expect(rows).toEqual([
+      expect.objectContaining({ waMessageId: 'A', body: 'fixed', metadata: { edited: true } }),
+      expect.objectContaining({ waMessageId: 'B', body: 'original', metadata: undefined }),
+    ]);
+  });
+
   it('marks a message edited while its insert is out, where nothing holds the arrival (SQLite)', async () => {
     build('better-sqlite3');
     const stall = deferred<void>();
