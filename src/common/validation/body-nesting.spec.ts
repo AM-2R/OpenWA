@@ -21,7 +21,13 @@ const mixedText = (levels: number): string => {
 };
 const scan = (text: string): boolean => exceedsJsonNesting(Buffer.from(text));
 
-describe('the nesting limit on the raw bytes', () => {
+// The documented limit is written as a literal on purpose, the way field-limits.dto.spec.ts pins the other
+// documented limits: the 400 text and the release notes say 100, so moving the cap has to fail a test here.
+describe('the documented nesting limit', () => {
+  it('is 100 levels', () => {
+    expect(MAX_BODY_NESTING).toBe(100);
+  });
+
   it.each([
     ['objects', objectText],
     ['arrays', arrayText],
@@ -30,17 +36,17 @@ describe('the nesting limit on the raw bytes', () => {
     expect(scan(build(100))).toBe(false);
     expect(scan(build(101))).toBe(true);
   });
-});
 
-describe('exceedsBodyNesting', () => {
   it.each([
     ['objects', objects],
     ['arrays', arrays],
-  ])('passes %s nested to the cap and refuses one level more', (_kind, build) => {
-    expect(exceedsBodyNesting(build(MAX_BODY_NESTING))).toBe(false);
-    expect(exceedsBodyNesting(build(MAX_BODY_NESTING + 1))).toBe(true);
+  ])('admits a parsed value of 100 levels of %s and refuses 101', (_kind, build) => {
+    expect(exceedsBodyNesting(build(100))).toBe(false);
+    expect(exceedsBodyNesting(build(101))).toBe(true);
   });
+});
 
+describe('exceedsBodyNesting', () => {
   it('measures the deepest branch, not the breadth or the number of nodes', () => {
     const wide = { items: Array.from({ length: 5000 }, () => ({ tags: ['a', 'b'], meta: { k: [1] } })) };
     expect(exceedsBodyNesting(wide)).toBe(false);

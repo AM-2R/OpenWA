@@ -28,7 +28,6 @@ import { DASHBOARD_CSP_NONCE_PLACEHOLDER } from '../src/config/dashboard-csp';
 import { ActiveKeyIndex } from '../src/modules/auth/active-key-index';
 import { ShutdownService } from '../src/common/services/shutdown.service';
 import { documentErrorResponses, ERROR_RESPONSE_SCHEMA } from '../src/config/swagger.config';
-import { MAX_BODY_NESTING } from '../src/common/validation/body-nesting';
 import { SendTextMessageDto } from '../src/modules/message/dto/send-message.dto';
 
 /**
@@ -223,19 +222,24 @@ describe('production HTTP surface (configureApp)', () => {
   // '{"a":{}}' is two.
   const nestedObjects = (levels: number): string => '{"a":'.repeat(levels - 1) + '{}' + '}'.repeat(levels - 1);
 
-  it('admits a body nested to the cap and refuses one level more with 400', async () => {
+  // The documented limit is 100 levels, written as a literal here so that moving the cap fails a test.
+  it('admits a body nested 100 levels and refuses 101 with 400', async () => {
     const post = (body: string) => request(app.getHttpServer()).post('/api/echo').type('json').send(body);
 
-    expect((await post(nestedObjects(MAX_BODY_NESTING))).status).toBe(201);
+    expect((await post(nestedObjects(100))).status).toBe(201);
 
     const res = await request(app.getHttpServer())
       .post('/api/echo')
       .type('json')
       .set('Origin', 'https://allowed.example')
-      .send(nestedObjects(MAX_BODY_NESTING + 1))
+      .send(nestedObjects(101))
       .expect(400);
-    expect(res.body).toMatchObject({ statusCode: 400, error: 'Bad Request' });
-    expect(res.body).toHaveProperty('message', expect.stringContaining(String(MAX_BODY_NESTING)));
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Request body must not nest objects or arrays more than 100 levels deep',
+    });
     expect(res.headers['x-request-id']).toBeDefined();
     // A browser can read the refusal only if it carries the CORS headers.
     expect(res.headers['access-control-allow-origin']).toBe('https://allowed.example');
