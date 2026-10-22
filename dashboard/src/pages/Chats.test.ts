@@ -3220,18 +3220,22 @@ test('a live sidebar row survives movement outside a paginated reconnect snapsho
 // ── Reading position of a thread ─────────────────────────────────────────────
 
 const ROOM_HEIGHT = 600;
+/** What a reaction badge adds to the thread. */
+const BADGE_PX = 20;
 
 /**
  * Scroll geometry for every `.room-messages` the page mounts, clamped to the content as a browser clamps it. The
  * room unmounts when a session switch closes its chat, so a shim on one element (makeScrollable) would arrive
  * after the restore it is meant to see. Content height is the bubbles, as in makeScrollable.
  */
-function installRoomGeometry(): () => void {
+function installRoomGeometry(bubblePx: number = BUBBLE_PX): () => void {
   const proto = window.HTMLDivElement.prototype;
   const inherited = Object.getOwnPropertyDescriptors(window.Element.prototype);
   const tops = new WeakMap<Element, number>();
   const isRoom = (el: Element): boolean => el.classList.contains('room-messages');
-  const contentHeight = (el: Element): number => el.querySelectorAll('.message-bubble').length * BUBBLE_PX;
+  const contentHeight = (el: Element): number =>
+    el.querySelectorAll('.message-bubble').length * bubblePx +
+    el.querySelectorAll('.message-reactions-badge').length * BADGE_PX;
   const maxTop = (el: Element): number => Math.max(0, contentHeight(el) - ROOM_HEIGHT);
   Object.defineProperties(proto, {
     scrollHeight: {
@@ -3382,6 +3386,94 @@ test('a message sent from the page scrolls the thread to it, whatever the reader
         'the thread stayed where the reader was',
       ),
     );
+  } finally {
+    restoreGeometry();
+  }
+});
+
+// A message that merges into a row the thread already holds adds no row, so it must not leave the thread waiting for
+// one: the next commit that grows it would be taken for that row.
+test('the echo of a send from the page, after its response, does not take a reader paging upward to the bottom', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  // Bubbles are 8px, so the older page is about as tall as the thread's whole scroll range, as a page of 100 rows is.
+  const bubblePx = 8;
+  const restoreGeometry = installRoomGeometry(bubblePx);
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'reply from the page' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await within(thread).findByText('reply from the page');
+    await waitFor(() => assert.ok(findFetchCall('POST', `/api/sessions/${SESSION.id}/messages/send-text`)));
+    await flush(); // the response has reconciled the placeholder under its real id
+    receiveEvent('message.sent', {
+      id: sendTextId,
+      chatId: CHAT_2.id,
+      from: 'me',
+      to: CHAT_2.id,
+      body: 'reply from the page',
+      type: 'text',
+      fromMe: true,
+      timestamp: 1_700_001_500,
+    });
+    await flush();
+    assert.equal(within(thread).getAllByText('reply from the page').length, 1, 'the echo added a second row');
+
+    // The reader goes back through the history; the older page lands above them.
+    const releaseOlderPage = holdOlderPage();
+    thread.scrollTop = 0;
+    fireEvent.scroll(thread);
+    await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+    releaseOlderPage();
+    await within(thread).findByText('paged message 0');
+    await waitFor(() => assert.equal(thread.querySelector('.messages-loading-older') === null, true));
+    assert.equal(
+      thread.scrollTop,
+      PAGED_OLDEST.length * bubblePx,
+      'the reader was not held on the message they were on',
+    );
+  } finally {
+    restoreGeometry();
+  }
+});
+
+test('a message delivered twice leaves a reader just above the bottom where they are when the thread grows', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+    thread.scrollTop = thread.scrollHeight - thread.clientHeight - 60; // inside the 100px band that follows
+    fireEvent.scroll(thread);
+    const reader = thread.scrollTop;
+
+    // The newest row arrives again: the cache merges it, and the thread does not grow.
+    receiveEvent('message.received', {
+      id: 'wamid.paged.119',
+      chatId: CHAT_2.id,
+      from: CHAT_2.id,
+      to: 'me',
+      body: 'paged message 119',
+      type: 'text',
+      fromMe: false,
+      timestamp: 1_700_001_119,
+    });
+    await flush();
+    assert.equal(thread.querySelectorAll('.message-bubble').length, PAGE_SIZE, 'the duplicate added a row');
+
+    // Something else grows the thread: a reaction badge under a bubble.
+    receiveEvent('message.reaction', {
+      messageId: 'wamid.paged.119',
+      chatId: CHAT_2.id,
+      reaction: '👍',
+      senderId: CHAT_2.id,
+      reactions: { [CHAT_2.id]: '👍' },
+    });
+    await waitFor(() => assert.ok(thread.querySelector('.message-reactions-badge')));
+    await within(thread).findByText('paged message 119');
+    assert.equal(thread.scrollTop, reader, 'the reader was taken to the bottom by a commit that was not a new message');
   } finally {
     restoreGeometry();
   }

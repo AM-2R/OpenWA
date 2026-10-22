@@ -755,6 +755,12 @@ export function Chats() {
         kind: newMsg.kind,
       };
 
+      // A message the thread already holds merges into its row and adds none (the echo of a send after its response,
+      // a message delivered twice), so the scroll heuristic below is not told to expect one.
+      const addsRow =
+        cachedSessionThreads(queryClient, event.sessionId, m => m.chatId === newMsg.chatId && byMessageId(newMsg.id)(m))
+          .length === 0;
+
       // Always write to the React Query cache for this message's session — keeps non-active chats
       // up to date so re-opening them shows fresh data without a refetch.
       appendMessage(event.sessionId, newMsg.chatId, mappedMessage);
@@ -764,7 +770,7 @@ export function Chats() {
       // this page scrolled through the composer, and its echo finds the reader there already.
       if (activeChat && newMsg.chatId === activeChat.id) {
         markChatRead(activeChat.id);
-        onMessageAppended('incoming');
+        if (addsRow) onMessageAppended('incoming');
       }
 
       // Update sidebar chat list. Whether the chat is missing is decided against the list on screen,
