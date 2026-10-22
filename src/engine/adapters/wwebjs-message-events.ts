@@ -309,6 +309,16 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
 
   client.on('message_edit', (message, newBody) => {
     try {
+      // Raised for any change of a message's body or caption attribute, with `message` read after it. Users edit
+      // only texts and captions, and `message.body` is the text shown: for a message with a file its caption, as
+      // the body attribute holds a thumbnail WhatsApp Web may replace. Any other change is no edit.
+      if ((message.type !== MessageTypes.TEXT && !message.hasMedia) || String(newBody ?? '') !== message.body) {
+        host.logger.debug('Ignoring a message_edit that is no edit of a text or caption', {
+          msgId: message.id?._serialized,
+          type: message.type,
+        });
+        return;
+      }
       // whatsapp-web.js keeps `message.timestamp` at the ORIGINAL creation time. Consumers need
       // occurrence time for ordering multiple edits, so stamp the edit at receipt and project the
       // otherwise-normal message fields through the same adapter mapper used by inbound messages.
@@ -317,7 +327,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         id: message.id,
         from: message.from,
         to: message.to,
-        body: String(newBody),
+        body: message.body,
         type: message.type,
         timestamp: editTimestamp,
         fromMe: message.fromMe,

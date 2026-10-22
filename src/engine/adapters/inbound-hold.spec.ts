@@ -1624,7 +1624,14 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
       } else {
         client.emit(
           'message_edit',
-          { id: { _serialized: 't2' }, from: '628111@c.us', to: '628123@c.us', type: 'chat', fromMe: false },
+          {
+            id: { _serialized: 't2' },
+            from: '628111@c.us',
+            to: '628123@c.us',
+            body: 'corrected',
+            type: 'chat',
+            fromMe: false,
+          },
           'corrected',
         );
       }

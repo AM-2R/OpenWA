@@ -4131,6 +4131,30 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
     return { onMessageEdited, client };
   };
 
+  // The client emits `new Message(client, model)` with the model serialized inside WhatsApp Web's change:body or
+  // change:caption handler, so it holds the values after the change (Client.js, onEditMessageEvent). Built here
+  // with the real structure, whose `body` is the caption of a message with a file and the body attribute otherwise.
+  const WwebjsMessage = jest.requireActual<{ Message: new (client: unknown, data: object) => unknown }>(
+    'whatsapp-web.js',
+  ).Message;
+  const changed = (client: EventEmitter, model: Record<string, unknown>, newBody: unknown, prevBody: unknown): void => {
+    client.emit(
+      'message_edit',
+      new WwebjsMessage(client, {
+        id: { id: 'EDIT1', remote: 'peer@c.us', fromMe: false, _serialized: 'false_peer@c.us_EDIT1' },
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        t: 1700000080,
+        ...model,
+      }),
+      newBody,
+      prevBody,
+    );
+  };
+  const editedBodies = (onMessageEdited: jest.Mock): string[] =>
+    (onMessageEdited.mock.calls as Array<[EditedMessage]>).map(([edit]) => edit.body);
+  const THUMB = '/9j/4AAQSkZJRgABAQAAAQABAAD';
+
   it('emits onMessageEdited with the new body and mapped fields', () => {
     const { onMessageEdited, client } = wireEditHandler();
     const now = jest.spyOn(Date, 'now').mockReturnValue(1700000089123);
@@ -4138,18 +4162,16 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
     try {
       client.emit(
         'message_edit',
-        {
-          id: { _serialized: 'MSG_EDIT_1' },
+        new WwebjsMessage(client, {
+          id: { id: 'MSG_EDIT_1', remote: 'peer@c.us', fromMe: false, _serialized: 'MSG_EDIT_1' },
           from: 'peer@c.us',
           to: 'me@c.us',
           author: 'peer@c.us',
-          body: 'Old text',
+          body: 'Edited new text',
           type: 'chat',
-          fromMe: false,
-          hasMedia: false,
-          mentionedIds: ['mentioned@c.us'],
-          timestamp: 1700000080,
-        },
+          mentionedJidList: ['mentioned@c.us'],
+          t: 1700000080,
+        }),
         'Edited new text',
         'Old text',
       );
@@ -4174,6 +4196,56 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
       mentionedIds: ['mentioned@c.us'],
       timestamp: 1700000089,
     });
+  });
+
+  it('emits the new caption of a media message whose caption changed', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(
+      client,
+      { type: 'image', body: THUMB, caption: 'new caption', directPath: '/v/t62/1', mimetype: 'image/jpeg' },
+      'new caption',
+      'old caption',
+    );
+
+    expect(editedBodies(onMessageEdited)).toEqual(['new caption']);
+    const [[edit]] = onMessageEdited.mock.calls as Array<[EditedMessage]>;
+    expect(edit).toEqual(expect.objectContaining({ type: 'image', hasMedia: true }));
+  });
+
+  it.each([
+    ['the thumbnail of a captioned image', { type: 'image', caption: 'cap', directPath: '/v/t62/1' }],
+    [
+      'the thumbnail of a forwarded video',
+      { type: 'video', caption: 'cap', directPath: '/v/t62/2', isForwarded: true },
+    ],
+    ['the thumbnail of an image without a caption', { type: 'image', directPath: '/v/t62/3' }],
+  ])('emits nothing when only %s changed', (_what, model) => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { ...model, body: `${THUMB}new` }, `${THUMB}new`, `${THUMB}old`);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a changed location preview, which no user edits', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'location', body: `${THUMB}new`, lat: 1, lng: 2 }, `${THUMB}new`, `${THUMB}old`);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a changed caption attribute of a text message, which shows its body', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'chat', body: 'hello', caption: 'stray' }, 'stray', undefined);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a media message WhatsApp Web holds no file for, whose body attribute is its thumbnail', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'image', body: `${THUMB}new`, caption: 'cap' }, `${THUMB}new`, `${THUMB}old`);
+    changed(client, { type: 'image', body: THUMB, caption: 'new caption' }, 'new caption', 'cap');
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
   });
 });
 

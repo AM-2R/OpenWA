@@ -75,19 +75,32 @@ const incoming = (
   hasQuotedMsg: false,
 });
 
-const editEvent = (client: EventEmitter, id: string, body: string, opts: { media?: boolean; fromMe?: boolean } = {}) =>
+/**
+ * A `message_edit` as whatsapp-web.js raises it: the message as it is after the change, whose `body` is its text
+ * (the caption of a media message), and the new value of the attribute that changed, which is that text unless
+ * `attribute` says otherwise (the thumbnail a media message keeps in its body attribute).
+ */
+const editEvent = (
+  client: EventEmitter,
+  id: string,
+  body: string,
+  opts: { media?: boolean; fromMe?: boolean; attribute?: string } = {},
+) =>
   client.emit(
     'message_edit',
     {
       id: { _serialized: id },
       from: opts.fromMe ? SELF : CHAT,
       to: opts.fromMe ? CHAT : SELF,
+      body,
       type: opts.media ? 'image' : 'chat',
       fromMe: Boolean(opts.fromMe),
       hasMedia: Boolean(opts.media),
     },
-    body,
+    opts.attribute ?? body,
   );
+
+const THUMBNAIL = '/9j/4AAQSkZJRgABAQAAAQABAAD';
 
 const revokeEvent = (client: EventEmitter, id: string, opts: { fromMe?: boolean } = {}) =>
   client.emit(
@@ -278,6 +291,46 @@ describe.each([
     ]);
     expect(hooked).toEqual(['new cap']);
     expect(events('message.received').map(m => m.body)).toEqual(['new cap']);
+  });
+
+  it('keeps the caption of a message whose thumbnail changed during the media download, and announces no edit', async () => {
+    const media = download();
+    client.emit('message', incoming('M', 'cap', { page: media.page }));
+    await flush();
+    editEvent(client, 'M', 'cap', { media: true, attribute: THUMBNAIL });
+    await flush();
+    media.finish();
+    await flush();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        waMessageId: 'M',
+        body: 'cap',
+        metadata: { media: expect.objectContaining({ mimetype: 'image/png' }) as unknown },
+      }),
+    ]);
+    expect(hooked).toEqual(['cap']);
+    expect(events('message.received').map(m => m.body)).toEqual(['cap']);
+    expect(events('message.edited')).toEqual([]);
+  });
+
+  it('keeps the stored caption of a message whose thumbnail changed, and announces no edit', async () => {
+    client.emit(
+      'message',
+      incoming('M', 'cap', { page: jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' }) }),
+    );
+    await flush();
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'M', body: 'cap' })]);
+    editEvent(client, 'M', 'cap', { media: true, attribute: THUMBNAIL });
+    await flush();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        body: 'cap',
+        metadata: { media: expect.objectContaining({ mimetype: 'image/png' }) as unknown },
+      }),
+    ]);
+    expect(events('message.edited')).toEqual([]);
   });
 
   it('applies the edits of one message in the order they arrived', async () => {
