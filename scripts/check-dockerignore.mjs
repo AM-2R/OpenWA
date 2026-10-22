@@ -195,9 +195,24 @@ function copyInputs(source) {
     .filter(entry => name.test(entry))
     .map(entry => dir + entry);
 }
+// The words of an instruction's arguments. The exec form, COPY ["src", "dest"], is a JSON array after any
+// flags and the only form that can name a path with a blank; text that does not parse as JSON is the shell
+// form, as it is in BuildKit.
+function argumentWords(args) {
+  const text = args.trim();
+  const json = /^((?:--\S+\s+)*)(\[.*\])$/.exec(text);
+  if (json) {
+    try {
+      return [...json[1].split(/\s+/).filter(Boolean), ...JSON.parse(json[2]).map(String)];
+    } catch {
+      // not JSON
+    }
+  }
+  return text.split(/\s+/);
+}
 const copied = [];
 for (const [, args] of dockerfile.matchAll(/^[ \t]*(?:COPY|ADD)[ \t]+(.+)$/gim)) {
-  const words = args.trim().split(/\s+/);
+  const words = argumentWords(args);
   if (words.some(word => word.startsWith('--from='))) continue;
   const sources = words.filter(word => !word.startsWith('--')).slice(0, -1);
   copied.push(...sources.flatMap(copyInputs));

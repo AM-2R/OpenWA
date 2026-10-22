@@ -126,6 +126,30 @@ test('a comment ends with its line, whatever it ends in, and is not part of a co
   }
 });
 
+test('the JSON array form of COPY and ADD names its sources', () => {
+  // Real BuildKit builds COPY ["package.json", "./"], and it is the only form that can name a path with a blank.
+  const forms = [
+    ['COPY ["new.txt", "./"]', 'new.txt'],
+    ['COPY ["scripts/new.js", "./scripts/"]', 'scripts/new.js'],
+    ['COPY --chown=openwa:openwa ["new.txt", "./"]', 'new.txt'],
+    ['ADD ["new.txt", "./"]', 'new.txt'],
+    ['COPY ["dir with blank/new.txt", "./"]', 'dir with blank/new.txt'],
+  ];
+  for (const [line, source] of forms) {
+    const run = runGate({
+      Dockerfile: `COPY control.txt ./\n${line}\n`,
+      '.dockerignore': `${REAL_DOCKERIGNORE}\n${source}\n`,
+    });
+    assert.equal(run.status, 1, `${line} is dropped by a rule and the gate passed: ${run.out}`);
+    assert.match(run.out, new RegExp(`rejects '${source.replaceAll('.', '\\.')}'`), `${line}: ${run.out}`);
+  }
+});
+
+test('text that looks like the JSON form but is not JSON is read as the shell form, not as a crash', () => {
+  const run = runGate({ Dockerfile: 'COPY control.txt ./\nCOPY [not json]\n', '.dockerignore': REAL_DOCKERIGNORE });
+  assert.equal(run.status, 0, run.out);
+});
+
 test('an indented or lower-case instruction is read like any other', () => {
   for (const line of [
     '  COPY ./scripts/new.js ./scripts/',
@@ -177,6 +201,7 @@ test('only the context files a COPY or ADD reads are build inputs', () => {
       [
         'COPY --chown=openwa:openwa src-a.txt dest-1/',
         'COPY --from=builder /stage-src /stage-dest',
+        'COPY --from=builder ["/stage-json", "/stage-json-dest"]',
         'COPY ./src-b.txt dest-2',
         'ADD https://example.com/tool.tgz /opt/',
         'ADD git@example.com:org/repo.git /opt/repo',
