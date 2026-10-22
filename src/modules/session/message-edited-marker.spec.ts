@@ -105,6 +105,31 @@ describe('persisted edited message marker', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
+  // The row can be inserted after the read that found none, so the write compares the text, not the read.
+  it.each([
+    ['before the write of a new text', 'findOne', 'new', 'new', { ...metadata, edited: true }],
+    ['before the write of the same text', 'findOne', 'old', 'old', metadata],
+    ['after the write of a new text', 'update', 'new', 'old', metadata],
+    ['after the write of the same text', 'update', 'old', 'old', metadata],
+  ] as const)(
+    'marks a row the insert lands on %s only where the write changed its text',
+    async (_, after, body, stored, marked) => {
+      const real = repository[after].bind(repository) as (...args: unknown[]) => Promise<unknown>;
+      jest.spyOn(repository, after).mockImplementationOnce((async (...args: unknown[]) => {
+        const result = await real(...args);
+        await seed();
+        return result;
+      }) as never);
+      projector.applyMessageEditQueued('s1', { ...edit, body });
+      await drain();
+
+      const row = await repository.findOneByOrFail({ waMessageId: edit.messageId });
+      expect(row.body).toBe(stored);
+      expect(row.metadata).toEqual(marked);
+      expect(emit).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('marks an edit of a row stored without a text', async () => {
     await seed();
     await repository.update({ waMessageId: edit.messageId }, { body: () => 'NULL' });

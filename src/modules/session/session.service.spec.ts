@@ -3,7 +3,7 @@ import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, QueryFailedError } from 'typeorm';
+import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, Or, QueryFailedError } from 'typeorm';
 import {
   NotFoundException,
   ConflictException,
@@ -8740,7 +8740,12 @@ describe('SessionService', () => {
       await new Promise(resolve => setImmediate(resolve));
 
       expect(messageRepository.update).toHaveBeenCalledWith(
-        { sessionId: 'sess-uuid-1', waMessageId: 'WA_MSG_EDIT_1', type: Not('revoked') },
+        {
+          sessionId: 'sess-uuid-1',
+          waMessageId: 'WA_MSG_EDIT_1',
+          type: Not('revoked'),
+          body: Or(Not('New edited text'), IsNull()),
+        },
         { body: 'New edited text' },
       );
       expect(eventsGateway.emitMessageEdited).not.toHaveBeenCalled();

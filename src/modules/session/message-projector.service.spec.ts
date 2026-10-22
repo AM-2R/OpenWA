@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { Not, type Repository } from 'typeorm';
+import { IsNull, Not, Or, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { Session } from './entities/session.entity';
 import { EventsGateway } from '../events/events.gateway';
@@ -1210,7 +1210,10 @@ describe('MessageProjector (inbound projection)', () => {
       await flush();
 
       const guarded = { ...where, type: Not('revoked') };
-      expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'late' });
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        { ...guarded, body: Or(Not('late'), IsNull()) },
+        { body: 'late' },
+      );
       expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'later' });
     });
 

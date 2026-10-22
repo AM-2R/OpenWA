@@ -48,6 +48,10 @@ const matches = (row: Row, where: Record<string, unknown>): boolean =>
     if (key === 'metadata') return true;
     const op = want as { _type?: string; _value?: unknown } | null;
     if (op && typeof op === 'object' && op._type === 'not') return row[key] !== op._value;
+    if (op && typeof op === 'object' && op._type === 'or') {
+      return (op._value as unknown[]).some(alternative => matches(row, { [key]: alternative }));
+    }
+    if (op && typeof op === 'object' && op._type === 'isNull') return row[key] == null;
     return row[key] === want;
   });
 
