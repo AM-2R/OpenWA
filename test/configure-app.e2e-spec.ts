@@ -28,6 +28,7 @@ import { DASHBOARD_CSP_NONCE_PLACEHOLDER } from '../src/config/dashboard-csp';
 import { ActiveKeyIndex } from '../src/modules/auth/active-key-index';
 import { ShutdownService } from '../src/common/services/shutdown.service';
 import { documentErrorResponses, ERROR_RESPONSE_SCHEMA } from '../src/config/swagger.config';
+import * as bodyNesting from '../src/common/validation/body-nesting';
 import { SendTextMessageDto } from '../src/modules/message/dto/send-message.dto';
 
 /**
@@ -310,6 +311,42 @@ describe('production HTTP surface (configureApp)', () => {
     const res = await postBytes('application/json; charset=utf-16le', Buffer.from(nestedObjects(levels), 'utf16le'));
 
     expect(res.status).toBe(status);
+  });
+
+  // In UTF-16 a backslash escapes only the first byte of the next character, so scanning its bytes as if they
+  // were UTF-8 would read the quote after an escaped one as the end of the string and count the brackets that
+  // follow as structure. The body below nests one level.
+  it('does not scan the bytes of a UTF-16 body: an escaped quote and brackets inside its string are not nesting', async () => {
+    const json = `{"t":"say \\"${'['.repeat(150)}"}`;
+    const res = await postBytes('application/json; charset=utf-16le', Buffer.from(json, 'utf16le'));
+
+    expect(res.status).toBe(201);
+  });
+
+  // A body the raw scan has read must not be walked again after the parse: that second pass is the cost the
+  // scan exists to remove. A body in another charset has not been read and is walked once it is parsed.
+  describe('the walk after the parse', () => {
+    const walk = jest.spyOn(bodyNesting, 'exceedsBodyNesting');
+    beforeEach(() => walk.mockClear());
+    afterAll(() => walk.mockRestore());
+
+    it('is skipped for a UTF-8 body that was scanned', async () => {
+      await request(app.getHttpServer())
+        .post('/api/echo')
+        .type('json')
+        .send({ small: [1, 2, 3] })
+        .expect(201);
+
+      expect(walk).not.toHaveBeenCalled();
+    });
+
+    it('runs on the parsed value of a UTF-16 body', async () => {
+      const res = await postBytes('application/json; charset=utf-16le', Buffer.from('{"small":[1,2,3]}', 'utf16le'));
+
+      expect(res.status).toBe(201);
+      expect(walk).toHaveBeenCalled();
+      expect(walk.mock.calls[0][0]).toEqual({ small: [1, 2, 3] });
+    });
   });
 
   it('answers a DTO route 400, not 500, for a body nested thousands of levels deep', async () => {
