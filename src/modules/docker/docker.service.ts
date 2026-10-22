@@ -568,9 +568,13 @@ export class DockerService implements OnModuleInit {
    * startService()/createService() simply restart the retained container. Stop-only is also
    * strictly less destructive (a remove with `v: true` discards anonymous volumes).
    *
-   * Caveat: a retained container keeps its original env. If the service's credentials changed
-   * while it was disabled, remove the container from the host (`docker rm <name>`) before
-   * re-enabling so it is recreated fresh. To reclaim disk space, likewise remove it manually.
+   * Caveat: a retained container keeps its original env, and recreating it applies new credentials
+   * only to a service that reads them at every start. MinIO does: after they change, remove the
+   * container (`docker rm <name>`) before re-enabling. PostgreSQL does not: POSTGRES_PASSWORD seeds
+   * the role only when the data volume is first initialized, so a recreated container still
+   * authenticates with the password stored in the volume. Change it with `ALTER ROLE openwa
+   * PASSWORD '...'` in the running container, or re-initialize the volume (which discards the data).
+   * Redis runs without credentials. To reclaim disk space, remove the container manually.
    */
   async stopManagedService(profile: string): Promise<boolean> {
     this.logger.log(`Stopping service with profile: ${profile} (container retained, not removed)`);
