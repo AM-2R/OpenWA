@@ -195,6 +195,8 @@ export function useChatScrollPosition(
   // Box height of each mounted media element, recorded at DOM insertion: the one moment a browser
   // guarantees is before the decode. A WeakMap so entries die with the nodes on a chat switch.
   const mediaHeights = useRef(new WeakMap<Element, number>());
+  // Media whose load arrived since the last frame, for the reading-position correction in onMediaLoad.
+  const decodedMediaRef = useRef<Element[]>([]);
 
   const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
     el.scrollTop = top;
@@ -452,23 +454,35 @@ export function useChatScrollPosition(
       if (awaitingOlderPageRef.current) return;
       // Which element grew, and by how much, decides whether the reader moved at all.
       const media = event?.currentTarget ?? null;
-      if (!media) return;
-      const seeded = mediaHeights.current.get(media);
-      if (seeded === undefined) return;
-      const rect = media.getBoundingClientRect();
-      // Re-seed before the frame: the element has finished growing, so its current box is the
-      // baseline for any later change (a re-decode on a src swap, a lazy dimension arriving).
-      mediaHeights.current.set(media, rect.height);
-      const grew = correctionForMediaGrowth(seeded, rect.height, rect.bottom, el.getBoundingClientRect().top);
-      if (grew === null) return;
+      if (!media || !mediaHeights.current.has(media)) return;
+      // Measured in the frame, top to bottom, each after the corrections above it: read when its load event fires,
+      // an element can sit below another that grew in the same frame and was not corrected yet, and then reads as
+      // below the reader by that growth.
+      const decoded = decodedMediaRef.current;
+      decoded.push(media);
+      if (decoded.length > 1) return;
       requestAnimationFrame(() => {
+        const batch = decoded
+          .splice(0)
+          .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
         const cur = containerRef.current;
         if (!cur || !onScreen()) return;
-        // Add to the LIVE scrollTop, not a value captured at event time: a sibling element decoding
-        // in the same frame has its own rAF that already moved scrollTop, and this one must stack on
-        // top of it. A captured absolute would re-assert the pre-sibling position and lose the sum.
-        writeScrollTop(cur, cur.scrollTop + grew);
-        if (activeChatId !== null) rememberPosition(activeChatId, cur);
+        const containerTop = cur.getBoundingClientRect().top;
+        let moved = false;
+        for (const grown of batch) {
+          const seeded = mediaHeights.current.get(grown);
+          if (seeded === undefined) continue;
+          const rect = grown.getBoundingClientRect();
+          // The element has finished growing, so its current box is the baseline for any later change (a re-decode
+          // on a src swap, a lazy dimension arriving).
+          mediaHeights.current.set(grown, rect.height);
+          const grew = correctionForMediaGrowth(seeded, rect.height, rect.bottom, containerTop);
+          if (grew === null) continue;
+          // Added to the LIVE scrollTop, so each correction stacks on the ones applied above it.
+          writeScrollTop(cur, cur.scrollTop + grew);
+          moved = true;
+        }
+        if (moved && activeChatId !== null) rememberPosition(activeChatId, cur);
       });
     },
     [activeChatId, followBottom, rememberPosition, writeScrollTop],

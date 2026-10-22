@@ -1276,3 +1276,47 @@ test('a reader who scrolls to where no message is in view while an older page is
     restore();
   }
 });
+
+// Images above the reader that decode in one frame each push them down by their own growth, whatever order their load
+// events come in: a later event reads its element after an earlier one grew above it.
+for (const scenario of [
+  { name: 'one after the other, the upper first', order: ['a10', 'a11'], together: false },
+  { name: 'together, the upper reported first', order: ['a10', 'a11'], together: true },
+  { name: 'together, the lower reported first', order: ['a11', 'a10'], together: true },
+  { name: 'one after the other, the lower first', order: ['a11', 'a10'], together: false },
+]) {
+  test(`two images above the reader that decode in one frame hold them: ${scenario.name}`, async () => {
+    const { render, screen, fireEvent, cleanup } = rtl;
+    cleanup();
+    const t: Thread = { rows: textRows('a', 46), top: 0 };
+    t.rows[10] = { id: 'a10', h: 100, img: 0 };
+    t.rows[11] = { id: 'a11', h: 100, img: 0 };
+    const restore = installRows(t);
+    try {
+      const { container } = render(createElement(RowsProbe, { chatId: 'A', rows: t.rows }));
+      const el = screen.getByTestId('thread');
+      fireEvent.scroll(el);
+      readerScrollsTo(el, 1210); // a12 is the first row the reader sees, both images just above it
+
+      const decode = (id: string) => {
+        const i = t.rows.findIndex(r => r.id === id);
+        t.rows[i] = { ...t.rows[i], img: 300 };
+      };
+      const loaded = (id: string) =>
+        hook().onMediaLoad({ currentTarget: container.querySelector(`img[data-img="${id}"]`) });
+      if (scenario.together) {
+        for (const id of scenario.order) decode(id);
+        for (const id of scenario.order) loaded(id);
+      } else {
+        for (const id of scenario.order) {
+          decode(id);
+          loaded(id);
+        }
+      }
+      await nextFrame();
+      assert.equal(el.scrollTop, 1210 + 600, 'the reader was moved off the row they were on');
+    } finally {
+      restore();
+    }
+  });
+}
