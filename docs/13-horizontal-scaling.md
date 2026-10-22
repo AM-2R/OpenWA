@@ -158,11 +158,12 @@
 > disconnected, plus its reconnect backoff of up to 5 s once Redis is back, are dropped for the clients
 > connected to the other replicas: they are not delivered late and not twice. Clients connected to the node
 > that raised an event are served directly, and webhooks do not use this path, so neither is affected. Memory
-> is bounded in two ways. A Redis that sends nothing for 10 s has the connection destroyed, which releases
-> what the node held for it: at most 10 s of events. A Redis that keeps answering, but slower than events are
-> raised, is never silent for 10 s, so the node holds at most 12,000 unanswered events (10 s at 1,000 events a
-> second, with a fifth to spare) and drops further frames for the other replicas, with one warning per burst,
-> until Redis catches up. A replica whose own Redis connection is reconnecting also misses what the others
+> is bounded in two ways. A Redis that sends nothing for 10 s has the connection destroyed, and the node holds
+> nothing more for it; what it had already held, at most 10 s of events, is freed once the node has reconnected.
+> A Redis that keeps answering, but slower than events are raised, is never silent for 10 s, so the node holds
+> at most 12,000 unanswered events (10 s at 1,000 events a second, with a fifth to spare) and drops further
+> frames for the other replicas until Redis catches up, with a warning when dropping starts and another, with
+> the count, when it ends. A replica whose own Redis connection is reconnecting also misses what the others
 > publish meanwhile.
 >
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The

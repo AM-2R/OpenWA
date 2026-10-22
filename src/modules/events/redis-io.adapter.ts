@@ -19,11 +19,12 @@ export const WS_REDIS_COMMAND_TIMEOUT_MS = 2000;
 
 /**
  * How long the publish client's socket may stay silent after a write before it is destroyed, which is what
- * releases what a stalled Redis left in the client. The timer runs on this process's own event loop, so a healthy
+ * stops a stalled Redis from filling the client. The timer runs on this process's own event loop, so a healthy
  * Redis looks silent whenever the loop stays blocked for that long right after a write, and the connection would
  * be dropped for nothing. That is why it sits far above any block this process runs, and above the command
- * timeout. It bounds a Redis that sends nothing: after this long the socket is destroyed and what the client
- * holds is released. A Redis that answers, however slowly, resets it with every reply, and is bounded by
+ * timeout. It bounds a Redis that sends nothing: after this long the socket is destroyed and nothing more is
+ * held. What was already held, at most this many seconds of events, stays until the client has reconnected. A
+ * Redis that answers, however slowly, resets the timer with every reply, and is bounded by
  * WS_REDIS_MAX_UNANSWERED instead.
  */
 export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
@@ -31,9 +32,10 @@ export const WS_REDIS_SOCKET_TIMEOUT_MS = 10_000;
 /**
  * Most commands the publisher keeps written and unanswered. A Redis that answers slower than events are raised
  * never trips the socket deadline, so without a cap the backlog grows with the load for as long as the slowness
- * lasts. Frames raised above the cap are dropped for the other replicas, once warned per burst, until the queue
- * drains. 12,000 holds a full socket deadline of traffic at 1,000 events a second with a fifth to spare, which
- * measured about 25 MB of heap with 1 KiB frames. It counts commands, not bytes: events with inline media are larger.
+ * lasts. Frames raised above the cap are dropped for the other replicas until the queue drains, with a warning
+ * when dropping starts and another, with the count, when Redis catches up. 12,000 holds a full socket deadline of
+ * traffic at 1,000 events a second with a fifth to spare, which measured about 25 MB of heap with 1 KiB frames.
+ * It counts commands, not bytes: events with inline media are larger.
  */
 export const WS_REDIS_MAX_UNANSWERED = 12_000;
 
