@@ -7,6 +7,7 @@ import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import ChatAvatar from './ChatAvatar';
+import { normalizePhoneText } from '../../utils/phone';
 
 type Mode = 'chat' | 'group';
 
@@ -41,7 +42,7 @@ const GROUP_NAME_MAX_LENGTH = 100;
 const toInternationalDigits = (input: string): string | null => {
   const trimmed = input.trim();
   if (!trimmed || /[a-z]/i.test(trimmed)) return null;
-  let digits = trimmed.replace(/\D/g, '');
+  let digits = normalizePhoneText(trimmed).replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   else if (!trimmed.startsWith('+') && digits.startsWith('0')) return null;
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
@@ -117,7 +118,7 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
   }, [contactsQuery.data]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const queryDigits = query.replace(/\D/g, '');
+  const queryDigits = normalizePhoneText(query).replace(/\D/g, '');
   const visibleContacts = normalizedQuery
     ? contacts.filter(
         c =>
