@@ -1098,6 +1098,50 @@ test("dismissing a dialog a row's menu opened returns focus to the row's menu bu
   assert.equal(focusedName(), 'Actions for Alice', 'focus fell to the page');
 });
 
+test("the contact dialog opens on its first name field, and closing it returns focus to the row's menu button", async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  const trigger = screen.getByRole('button', { name: 'Actions for Alice' });
+  trigger.focus();
+  fireEvent.click(trigger);
+  const item = await screen.findByRole('button', { name: 'Rename contact' });
+  item.focus();
+  fireEvent.click(item);
+  const dialog = await screen.findByRole('dialog');
+  const first = within(dialog).getByLabelText('First name');
+  assert.equal(document.activeElement === first, true, `focus is on "${focusedName()}", not on the first name field`);
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+  assert.equal(focusedName(), 'Actions for Alice', 'focus fell to the page');
+});
+
+test('the contact dialog opened from the room menu returns focus to the room menu button', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const trigger = container.querySelector('.room-menu-trigger') as HTMLButtonElement;
+  trigger.focus();
+  fireEvent.click(trigger);
+  const item = await within(container.querySelector('.room-menu-popover') as HTMLElement).findByRole('button', {
+    name: 'Rename contact',
+  });
+  item.focus();
+  fireEvent.click(item);
+  const dialog = await screen.findByRole('dialog');
+  assert.equal(
+    document.activeElement === within(dialog).getByLabelText('First name'),
+    true,
+    'the dialog did not open on its first name field',
+  );
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.ok(!screen.queryByRole('dialog')));
+  assert.equal(focusedName(), 'More actions', 'focus fell to the page after the contact dialog');
+});
+
 test("dismissing a dialog the room's menu opened, or the menu itself, returns focus to its button", async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   const { container } = renderPage();

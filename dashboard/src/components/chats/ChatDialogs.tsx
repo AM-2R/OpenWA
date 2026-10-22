@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { Modal } from '../Modal';
@@ -89,6 +89,9 @@ export function SaveContactDialog({
   const canSave = firstName.trim().length > 0 && !busy;
   // The footer's Save button belongs to the form through this id, so Enter in a name field presses it.
   const formId = useId();
+  // The dialog opens on the first name, so typing and Enter work at once; the modal focuses it after it has
+  // recorded the opener (autoFocus would have it recorded as the opener instead).
+  const firstRef = useRef<HTMLInputElement | null>(null);
   return (
     <Modal
       open
@@ -96,6 +99,7 @@ export function SaveContactDialog({
       title={saved ? t('chats.rowActions.renameContact') : t('chats.rowActions.saveContact')}
       className="confirm-modal"
       closeLabel={t('common.close')}
+      initialFocusRef={firstRef}
       footer={
         <>
           <button className="btn-secondary" onClick={onClose} disabled={busy}>
@@ -118,11 +122,11 @@ export function SaveContactDialog({
         <label>
           <span>{t('chats.rowActions.firstName')}</span>
           <input
+            ref={firstRef}
             type="text"
             value={firstName}
             maxLength={NAME_MAX_LENGTH}
             onChange={e => setFirstName(e.target.value)}
-            autoFocus
           />
         </label>
         <label>

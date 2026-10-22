@@ -100,6 +100,33 @@ test('moves initial focus to the first visible focusable in the dialog', () => {
   unbind();
 });
 
+test('moves initial focus to the element the dialog names, and records the opener before that', () => {
+  const { doc, card, focusables, makeElement } = makeWorld(3);
+  const opener = makeElement();
+  opener.focus();
+  const unbind = bindModalA11y(
+    doc as never,
+    card as never,
+    () => {},
+    () => focusables[2] as never,
+  );
+  assert.equal(doc.activeElement, focusables[2] as never);
+  unbind();
+  assert.equal(doc.activeElement, opener as never, 'focus did not return to the opener');
+});
+
+test('falls back to the first focusable when the named initial focus is not there', () => {
+  const { doc, card, focusables } = makeWorld(3);
+  const unbind = bindModalA11y(
+    doc as never,
+    card as never,
+    () => {},
+    () => null,
+  );
+  assert.equal(doc.activeElement, focusables[0] as never);
+  unbind();
+});
+
 test('focuses the card itself when the dialog has nothing focusable', () => {
   const { doc, card } = makeWorld(0);
   const unbind = bindModalA11y(doc as never, card as never, () => {});
