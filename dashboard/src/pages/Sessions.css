@@ -684,7 +684,7 @@
 }
 
 /* The detail badge spells the status out beside its own label, so it takes the 10 percent tint of the other
-   badges: --warning-text is 4.76:1 on it, 4.34:1 on the pill's 22 percent. In the dialog it then differs from
+   badges: --warning-text is 5.02:1 on it, 4.57:1 on the pill's 22 percent. In the dialog it then differs from
    the in-progress amber badges by hue only. */
 .sessions-page .status-badge.action_required {
   background: rgba(245, 158, 11, 0.1);

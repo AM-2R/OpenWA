@@ -6,9 +6,9 @@ import { dirname, join } from 'node:path';
 
 // --error is the fill and border red. As a text colour it measures 3.76:1 on white and 3.08:1 on the 12 percent
 // error tint of a banner, under the 4.5:1 AA needs; --error-text is the same hue darkened (lightened in the
-// dark theme). In the light theme it clears 4.5:1 on white and on a 10 percent tint over white (4.58:1), and
-// measures 4.28 to 4.46:1 on the heavier tints of the banners and the Failed pill; in the dark theme it clears
-// 4.5:1 on every tint. Foreground colours use --error-text.
+// dark theme). In the light theme it clears 4.5:1 on white and on the tints over white up to the 15 percent of the
+// Failed pill (4.88:1 at 10 percent, 4.57:1 at 15 percent); in the dark theme it clears 4.5:1 on every tint.
+// Foreground colours use --error-text.
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 

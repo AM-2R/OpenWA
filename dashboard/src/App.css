@@ -2,11 +2,10 @@
   --primary: #25d366;
   /* The brand green as FOREGROUND is 1.98:1 on white, far under the 4.5:1 AA needs for text.
      It stays the fill colour; anything rendering it as text or an icon uses --primary-text, the same
-     hue darkened until it clears 4.5:1 on the three light backgrounds it lands on most: 4.95:1 on white,
-     4.73:1 on --bg-light, and 4.52:1 on --primary-soft, which is the tightest of the three and the
-     one the active sidebar item uses. On the heavier green tints some badges paint (15 to 18 percent)
-     it measures 4.3 to 4.4:1. */
-  --primary-text: #17813e;
+     hue darkened until it clears 4.5:1 on the light backgrounds it lands on: 5.28:1 on white, 5.04:1 on
+     --bg-light, and 4.82:1 on --primary-soft (4.63:1 over --bg-light), the tint the active sidebar item
+     uses. On the heaviest green tint a badge paints (18 percent over white) it measures 4.61:1. */
+  --primary-text: #167c3b;
   --primary-hover: #1da851;
   --primary-soft: rgba(37, 211, 102, 0.12);
   --bg-light: #f8fafc;
@@ -21,12 +20,12 @@
   --warning: #f59e0b;
   /* Status colours as FOREGROUND fail AA on light: error 3.76:1, success 2.28:1, warning 2.15:1.
      They stay the fill/border colours; text and icons use these darkened twins. Each clears 4.5:1 on
-     white and on a 10 percent tint of its own hue. The heavier 12 to 22 percent tints that some badges
-     paint behind them do not all hold: the twins measure 4.29 to 4.46:1 there (error-text 4.29:1 on the
-     15 percent red of the Failed pill, warning-text 4.34:1 on the 22 percent amber of Action required). */
-  --error-text: #c63838;
-  --success-text: #157c3b;
-  --warning-text: #986207;
+     white and on the heaviest tint of its own hue that a badge paints over white: error-text 4.57:1 on the
+     15 percent red of the Failed pill, success-text 4.58:1 on an 18 percent green and warning-text 4.57:1 on
+     the 22 percent amber of Action required. A heavier tint needs a darker twin. */
+  --error-text: #bf3535;
+  --success-text: #157b3b;
+  --warning-text: #935f06;
   --info: #2563eb; /* Blue 600 — info/permission/log badges + qr-ready pill */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
@@ -91,7 +90,7 @@
     --success-text: var(--success);
     --warning-text: var(--warning);
     --primary-soft: color-mix(in srgb, var(--primary) 18%, transparent);
-    /* Must be restated here, not inherited: the light value (#17813e) measures 2.96:1 on Slate 800
+    /* Must be restated here, not inherited: the light value (#167c3b) measures 2.77:1 on Slate 800
        and would fail worse than the brand green it replaced. On dark the brand green is 7.38:1. */
     --primary-text: var(--primary);
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);

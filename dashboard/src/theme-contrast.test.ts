@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -132,9 +132,8 @@ test('the action required pill clears 4.5:1 on its tint in the dark theme, with 
   }
 });
 
-// The detail modal repeats the status as a badge beside its own "Status" label. The 22 percent tint the card pill
-// uses leaves --warning-text at 4.34:1 on white there, so the badge takes the 10 percent tint every other
-// status badge has.
+// The detail modal repeats the status as a badge beside its own "Status" label, on the 10 percent tint every other
+// status badge has (--warning-text is 5.02:1 on it over white) rather than the card pill's 22 percent (4.57:1).
 test('the action required badge in the session details clears 4.5:1 on its tint in every theme', () => {
   const rule =
     /\.sessions-page \.status-badge\.action_required\s*\{[^}]*background:\s*rgba\(245,\s*158,\s*11,\s*([\d.]+)\)/.exec(
@@ -149,6 +148,42 @@ test('the action required badge in the session details clears 4.5:1 on its tint 
       assert.ok(ratio >= 4.5, `${anchor} badge text on ${rule[1]} over ${surface} is ${ratio.toFixed(2)}:1`);
     }
   }
+});
+
+// A status badge, pill or hover state paints a translucent tint of its own hue behind a text twin. The twins have to hold
+// on the heaviest tint any rule paints over white (error 15 percent, success 18, warning 22), not only on the 10
+// percent one: a rule with a heavier tint needs a darker twin, or a lighter tint.
+const cssFiles = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return cssFiles(full);
+    return entry.name.endsWith('.css') ? [full] : [];
+  });
+
+test('every status text twin clears 4.5:1 on the translucent fill its own rule paints over white', () => {
+  const root = dirname(fileURLToPath(import.meta.url));
+  const light = blockAfter(LIGHT);
+  const white = rgb(hexOf(light, '--bg-white'));
+  let checked = 0;
+  const offenders: string[] = [];
+  for (const file of cssFiles(root)) {
+    const css = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const color = /(?:^|;)\s*color:\s*var\((--(?:error|success|warning|primary)-text)\)/.exec(rule[2]);
+      const fill = /(?:^|;)\s*background(?:-color)?:\s*rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/.exec(rule[2]);
+      if (!color || !fill) continue;
+      checked++;
+      const tint = mix([Number(fill[1]), Number(fill[2]), Number(fill[3])], Number(fill[4]), white);
+      const ratio = contrast(rgb(hexOf(light, color[1])), tint);
+      if (ratio < 4.5) {
+        offenders.push(
+          `${file.slice(root.length + 1)}: ${rule[1].trim()} ${color[1]} ${ratio.toFixed(2)}:1 on ${fill[4]}`,
+        );
+      }
+    }
+  }
+  assert.ok(checked > 40, `the scan saw ${checked} rules`);
+  assert.deepEqual(offenders, []);
 });
 
 test('the search match and the Number Checker highlight pill clear AA in both themes', () => {

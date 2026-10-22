@@ -110,7 +110,7 @@
   padding: 0.0625rem 0.4375rem;
   font-size: 0.6875rem;
   font-weight: 600;
-  color: var(--primary-text, #17813e);
+  color: var(--primary-text, #167c3b);
   background: color-mix(in srgb, var(--primary, #25d366) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary, #25d366) 35%, transparent);
   border-radius: 999px;
@@ -1116,7 +1116,7 @@
 }
 
 .plugins-page .catalog-badge.update {
-  color: var(--primary-text, #17813e);
+  color: var(--primary-text, #167c3b);
 }
 
 .plugins-page .catalog-row-action {
