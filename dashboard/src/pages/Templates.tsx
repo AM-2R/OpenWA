@@ -143,7 +143,9 @@ export function Templates() {
       body: template.body,
       footer: template.footer || '',
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // An explicit smooth ignores the CSS scroll-behavior, so the preference is asked for here.
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
   };
 
   const handleSave = async () => {

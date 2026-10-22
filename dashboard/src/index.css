@@ -412,6 +412,19 @@ select:disabled {
   animation: spin 1s linear infinite;
 }
 
+/* For a user who asked the OS to reduce motion: every animation and transition runs once, instantly. The
+   spinners are left alone, since without them a wait shows no sign of progress. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin, .spin-slow),
+  *:not(.animate-spin, .spin-slow)::before,
+  *:not(.animate-spin, .spin-slow)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Code element styling */
 code {
   background: var(--bg-light, #f1f5f9);
