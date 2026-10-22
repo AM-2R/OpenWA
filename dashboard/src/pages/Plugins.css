@@ -851,6 +851,20 @@
   border-radius: 10px;
 }
 
+/* The config dialog's strip is a direct child of the dialog card, which is 90% of the window. As one unbreakable row
+   it was wider than the card at 320px (15px past each edge in English, 17px in German, more in Spanish and Turkish)
+   and cut off its outer tabs. It now keeps a margin on each side and wraps its tabs onto a second row when their
+   labels do not fit in one. */
+.plugins-page .config-modal .modal-tabs {
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 1rem);
+}
+
+.plugins-page .config-modal .modal-tab {
+  flex: 1 1 auto;
+}
+
 /* Three-item header (title + tabs + close), drawn in the order of its markup so that keyboard focus runs the way the
    eye reads. On a narrow viewport the title has a row of its own (flex-wrap on the header) and the tabs share the
    next one with the close button, without the standalone-row margins that would push the title up or leave a gap. */
@@ -950,6 +964,14 @@
   .plugins-page .install-tab {
     min-width: 0;
     padding-inline: 0.6rem;
+  }
+}
+
+/* The card is 90% of the window. Up to 380px the regular tab padding leaves no room for the three labels of English,
+   German or Spanish in one row, so the padding is cut; wider, only a longer set (Turkish) wraps. */
+@media (max-width: 380px) {
+  .plugins-page .config-modal .modal-tab {
+    padding-inline: 0.35rem;
   }
 }
 

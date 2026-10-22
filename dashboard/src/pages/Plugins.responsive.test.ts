@@ -85,6 +85,39 @@ test('the tabs lose their 128px minimum below 700px', () => {
   assert.equal(decl(phone[0].body, 'min-width'), '0');
 });
 
+// The Configuration/Sessions/Instances strip is a direct child of the config dialog's card, 288px wide in a 320px
+// window. A single unbreakable row of tabs padded 0.9rem was 317px wide there in English and 322px in German, so it
+// stuck out of the card on both sides and cut off its outer labels. It keeps a margin inside the card, its tabs are
+// padded less on the narrowest phones so that English and German still share one row, and a longer label set wraps
+// onto a second row.
+const CONFIG_PILL = '.plugins-page .config-modal .modal-tabs';
+const CONFIG_TAB = '.plugins-page .config-modal .modal-tab';
+
+test('the config dialog tab strip stays inside the dialog and wraps its tabs', () => {
+  const wrap = rules.filter(r => r.selectors.includes(CONFIG_PILL) && decl(r.body, 'flex-wrap'));
+  assert.equal(wrap.length, 1, 'expected one rule that lets the strip wrap');
+  assert.equal(wrap[0].media, '', 'the strip wraps at every width');
+  assert.equal(decl(wrap[0].body, 'flex-wrap'), 'wrap');
+  assert.match(
+    decl(wrap[0].body, 'max-width') ?? '',
+    /^calc\(100% - [\d.]+rem\)$/,
+    'the strip needs a margin in the card',
+  );
+  // The pill is a flex item of the card (a column): wrapped rows are centered, and a tab grows to fill its row.
+  assert.equal(decl(wrap[0].body, 'justify-content'), 'center');
+  const tab = rules.filter(r => !r.media && r.selectors.includes(CONFIG_TAB) && decl(r.body, 'flex'));
+  assert.equal(tab.length, 1, 'expected one rule for the tab flex');
+  assert.equal(decl(tab[0].body, 'flex'), '1 1 auto');
+});
+
+test('the config dialog tabs are padded less on a narrow phone', () => {
+  const phone = rules.filter(r => r.media === '@media (max-width: 380px)' && r.selectors.includes(CONFIG_TAB));
+  assert.equal(phone.length, 1, 'expected one phone rule for the tab');
+  assert.equal(decl(phone[0].body, 'padding-inline'), '0.35rem');
+  // A zero minimum would let a label run out of its tab rather than push the tab onto the next row.
+  assert.equal(decl(phone[0].body, 'min-width'), undefined);
+});
+
 // Beside the 280px status rail the card grid keeps a 320px minimum track. With the sidebar open that needs 948px
 // of viewport; from 861px up to there the cards were wider than their column and lost their right edge and their
 // action buttons. Below that the rail stacks above the cards.
