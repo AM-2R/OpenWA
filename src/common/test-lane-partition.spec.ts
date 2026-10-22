@@ -153,6 +153,7 @@ describe('Test lane partition', () => {
   const dialectSwitchedSpecs = [
     'src/modules/session/session-content-lifetime.spec.ts',
     'src/modules/session/session-delete-claim.spec.ts',
+    'src/engine/identity/lid-mapping-store.spec.ts',
   ];
 
   it.each(['ci.yml', 'release.yml'])('runs the dialect-switched specs in the %s test-postgres job', file => {

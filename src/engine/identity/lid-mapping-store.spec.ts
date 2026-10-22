@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { DataSource, FindOperator, In, Repository } from 'typeorm';
 import { LidMappingStoreService } from './lid-mapping-store.service';
 import { LidMapping } from './lid-mapping.entity';
@@ -802,13 +803,34 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     return { release, reached };
   }
 
+  // SQLite in memory; on PostgreSQL (DATABASE_TYPE=postgres, the test-postgres job) a schema of its own, on
+  // the search_path as the app sets it, since the statements differ by dialect.
+  const pg = process.env.DATABASE_TYPE === 'postgres';
+  const server = {
+    type: 'postgres' as const,
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: Number(process.env.DATABASE_PORT || 5432),
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+    database: process.env.DATABASE_NAME || 'openwa',
+  };
+  let schema = '';
+  const onServer = async (sql: string): Promise<void> => {
+    const admin = await new DataSource(server).initialize();
+    await admin.query(sql).finally(() => admin.destroy());
+  };
+
   beforeEach(async () => {
-    ds = await new DataSource({
-      type: 'better-sqlite3',
-      database: ':memory:',
-      entities: [LidMapping, Session],
-      synchronize: true,
-    }).initialize();
+    const entities = [LidMapping, Session];
+    if (pg) {
+      schema = `lid_store_${randomUUID().replace(/-/g, '')}`;
+      await onServer(`CREATE SCHEMA "${schema}"`);
+    }
+    ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
     await ds.getRepository(Session).insert([s1, s2, s3, s9].map(id => ({ id, name: id })));
     repo = ds.getRepository(LidMapping);
     store = new LidMappingStoreService(repo);
@@ -818,8 +840,9 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
   });
 
   afterEach(async () => {
-    expect(warn).not.toHaveBeenCalled();
     await ds.destroy();
+    if (pg) await onServer(`DROP SCHEMA "${schema}" CASCADE`);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('records a negative for a lid with no row', async () => {
