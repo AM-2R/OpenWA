@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import {
   FALLBACK_BUILT_IN,
   FILE_STATES,
+  HOST_SPELLINGS,
   PIN_STATES,
   SERVICES,
   SERVICE_NAMES,
@@ -449,6 +450,40 @@ describe('InfraStatusController.getStatus running bundled containers', () => {
     const status = await build({ database: false, cache: false, storage: false }).getStatus();
 
     expect([status.database.running, status.redis.running, status.storage.running]).toEqual([false, false, false]);
+  });
+
+  // A running bundled container backs the service when its host reaches the container in any spelling.
+  describe.each([
+    ['database', 'dataDatabase.host', 'database'],
+    ['redis', 'redis.host', 'cache'],
+    ['storage', 'storage.s3.endpoint', 'storage'],
+  ] as const)('%s built-in under another spelling of its host', (service, configKey, container) => {
+    const statusFor = async (host: string) => {
+      const values: Record<string, unknown> = {
+        'dataDatabase.type': 'postgres',
+        'storage.type': 's3',
+        'storage.s3.endpoint': 'https://s3.ext.example',
+        [configKey]: host,
+      };
+      const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
+      const running = { database: false, cache: false, storage: false, [container]: 'compose' };
+      return new InfraStatusController(
+        { get: (k: string, def?: unknown) => values[k] ?? def } as never,
+        ds as never,
+        ds as never,
+        { create: jest.fn() } as never,
+        { isDockerAvailable: () => true, getRunningBuiltinServices: jest.fn().mockResolvedValue(running) } as never,
+        { isAvailable: jest.fn().mockResolvedValue(false) } as never,
+        { refreshS3Availability: jest.fn().mockResolvedValue(true) } as never,
+        undefined as never,
+      ).getStatus();
+    };
+    it.each([
+      ...HOST_SPELLINGS[service].reach.map(host => [host, true] as const),
+      ...HOST_SPELLINGS[service].elsewhere.filter(Boolean).map(host => [host, false] as const),
+    ])('%j reads built-in: %s', async (host, builtIn) => {
+      expect((await statusFor(host))[service].builtIn).toBe(builtIn);
+    });
   });
 
   // Nothing can be seen or stopped then, so a reader cannot take the absence of a container for a fact.

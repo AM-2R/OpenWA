@@ -1890,6 +1890,36 @@ describe('InfraConfigController.getConfig answers the saved built-in mode for ev
     }
   });
 
+  // A host that reaches the bundled container in another spelling reads as the bundled host, pinned or in the file;
+  // any other host does not.
+  describe.each(SERVICE_NAMES)('%s under another spelling of the bundled host', service => {
+    const spec = SERVICES[service];
+    const inFile = (host: string) => {
+      recordPinnedEnvKeys({});
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(
+        `${spec.selection}=${spec.selected}\n${spec.flag}=false\n${spec.host}=${host}\n`,
+      );
+      return modeOf(newController().getConfig(), service);
+    };
+    const pinned = (host: string) => {
+      process.env[spec.host] = host;
+      pinnedKeys = [spec.host];
+      recordPinnedEnvKeys({ [spec.host]: host });
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(`${spec.selection}=${spec.selected}\n${spec.flag}=false\n`);
+      return modeOf(newController().getConfig(), service);
+    };
+    it.each(HOST_SPELLINGS[service].reach)('%j pinned or in the file reads built-in', host => {
+      expect(inFile(host)).toEqual({ builtIn: true, builtInSet: false });
+      expect(pinned(host)).toEqual({ builtIn: true, builtInSet: false });
+    });
+    it.each(HOST_SPELLINGS[service].elsewhere)('%j pinned or in the file does not', host => {
+      expect(inFile(host)).toEqual({ builtIn: false, builtInSet: true });
+      expect(pinned(host)).toEqual({ builtIn: false, builtInSet: false });
+    });
+  });
+
   // The first boot writes every flag false next to a service that is not selected. With the compose .env pinning
   // the bundled hosts and the containers running, that file must not read as three saved external services.
   it('the first-boot file under the compose .env pins reads as bundled, never as a saved external choice', () => {

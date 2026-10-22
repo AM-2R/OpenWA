@@ -18,7 +18,7 @@ import { Public, RequireRole, RequireUnscopedKey } from '../auth/decorators/auth
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
-import { DockerService } from '../docker';
+import { DockerService, namesBundledContainer } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { createLogger } from '../../common/services/logger.service';
@@ -203,9 +203,11 @@ export class InfraStatusController {
       ? await this.dockerService.getRunningBuiltinServices()
       : null;
     const savedBuiltin = this.readSavedBuiltinFlags();
-    const dbBuiltIn = running ? !!running.database && dbHost === 'postgres' : savedBuiltin.database;
-    const redisBuiltIn = running ? !!running.cache && redisHost === 'redis' : savedBuiltin.cache;
-    const storageBuiltIn = running ? !!running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
+    const dbBuiltIn = running ? !!running.database && namesBundledContainer('postgres', dbHost) : savedBuiltin.database;
+    const redisBuiltIn = running ? !!running.cache && namesBundledContainer('redis', redisHost) : savedBuiltin.cache;
+    const storageBuiltIn = running
+      ? !!running.storage && namesBundledContainer('minio', s3Endpoint)
+      : savedBuiltin.storage;
     // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
     const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 

@@ -1,31 +1,32 @@
 import { isEnvPinned } from '../../config/env-precedence';
+import { namesBundledContainer } from '../docker';
 
 /**
  * The built-in (bundled container) mode the saved configuration states for each datastore, shared by
  * GET /infra/config and the Docker-unreachable fallback of GET /infra/status so the two cannot disagree.
  *
- * `flag` is what the dashboard saves, `host` is what the next boot connects to, and `selection` is the
- * file's own record that the service is in use at all.
+ * `flag` is what the dashboard saves, `host` is what the next boot connects to, `profile` names the bundled container
+ * that host may reach, and `selection` is the file's own record that the service is in use at all.
  */
 const SERVICES = {
   database: {
     flag: 'POSTGRES_BUILTIN',
     host: 'DATABASE_HOST',
-    bundledHost: 'postgres',
+    profile: 'postgres',
     selection: 'DATABASE_TYPE',
     selected: 'postgres',
   },
   redis: {
     flag: 'REDIS_BUILTIN',
     host: 'REDIS_HOST',
-    bundledHost: 'redis',
+    profile: 'redis',
     selection: 'REDIS_ENABLED',
     selected: 'true',
   },
   storage: {
     flag: 'MINIO_BUILTIN',
     host: 'S3_ENDPOINT',
-    bundledHost: 'http://minio:9000',
+    profile: 'minio',
     selection: 'STORAGE_TYPE',
     selected: 's3',
   },
@@ -62,8 +63,8 @@ export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<stri
 /**
  * Rules, in order:
  *  1. A host pinned by the environment (or the project .env) decides, as it does at boot and in
- *     requestRestart: the bundled host is built-in, any other is not, and no saved flag can be a pending
- *     switch because the pin outranks it.
+ *     requestRestart: the bundled host in any spelling that reaches the container is built-in, any other is
+ *     not, and no saved flag can be a pending switch because the pin outranks it.
  *  2. Otherwise the flag counts as saved when the environment pins it, or when the file stores it for a
  *     service the file also selects. A flag that is not true beside the bundled host name in the file is no
  *     choice of an external service, though: the next boot dials the container, so it reads as built-in and
@@ -73,12 +74,12 @@ export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<stri
 export function savedBuiltInMode(service: BuiltInService, saved: Record<string, string>): SavedBuiltInMode {
   const spec = SERVICES[service];
   if (isEnvPinned(spec.host)) {
-    return { builtIn: process.env[spec.host] === spec.bundledHost, builtInSet: false };
+    return { builtIn: namesBundledContainer(spec.profile, process.env[spec.host]), builtInSet: false };
   }
   const flagPinned = isEnvPinned(spec.flag);
   const flag = flagValue(service, saved);
   const selectedInFile = saved[spec.selection] === spec.selected;
-  const dialsBundled = saved[spec.host] === spec.bundledHost;
+  const dialsBundled = namesBundledContainer(spec.profile, saved[spec.host]);
   if (flag !== 'true' && dialsBundled) return { builtIn: true, builtInSet: false };
   return { builtIn: flag === 'true', builtInSet: flag !== undefined && (flagPinned || selectedInFile) };
 }
