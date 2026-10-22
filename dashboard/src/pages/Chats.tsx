@@ -433,6 +433,9 @@ export function Chats() {
     const held = patchedRowsRef.current.get(chatId);
     patchedRowsRef.current.set(chatId, { request: chatsRequestRef.current, patch: { ...held?.patch, ...patch } });
   }, []);
+  // A chat the page deleted, with the newest request number out then. A list asked for at or before that still
+  // holds the chat and would bring it back; one asked for after it is as good as the engine's own answer.
+  const deletedRowsRef = useRef(new Map<string, number>());
   // A chat this page has read shows nothing unread, and a reload asked for before the read keeps it so. That also
   // replaces a Mark as unread still remembered for the chat, which the read has undone. A session switch leaves the
   // open chat the previous account's for one render, and that account's row must not be remembered for this one.
@@ -477,12 +480,18 @@ export function Chats() {
           if (entry.request >= request) patches.set(id, entry.patch);
           else patchedRowsRef.current.delete(id);
         }
+        const gone = new Set<string>();
+        for (const [id, deletedAt] of deletedRowsRef.current) {
+          if (deletedAt >= request) gone.add(id);
+          else deletedRowsRef.current.delete(id);
+        }
+        const listed = data.filter(c => !gone.has(c.id));
         const merge = background && listedSessionRef.current === sessionId;
         listedSessionRef.current = sessionId;
         setChats(prev => {
           const live = new Map(merge ? prev.map(c => [c.id, c] as const) : []);
-          const fetchedIds = new Set(data.map(c => c.id));
-          const rows = [...data, ...prev.filter(c => merge && moved(c.id) && !fetchedIds.has(c.id))];
+          const fetchedIds = new Set(listed.map(c => c.id));
+          const rows = [...listed, ...prev.filter(c => merge && moved(c.id) && !fetchedIds.has(c.id))];
           return rows
             .map(c => {
               const row = live.get(c.id);
@@ -1511,7 +1520,10 @@ export function Chats() {
       } else {
         expectSuccess(await sessionApi.deleteChat(sessionId, chat.id));
         showSuccessToast(t('chats.rowActions.deleted', { name }));
-        if (stillOn(sessionId)) setChats(prev => prev.filter(c => c.id !== chat.id));
+        if (stillOn(sessionId)) {
+          deletedRowsRef.current.set(chat.id, chatsRequestRef.current);
+          setChats(prev => prev.filter(c => c.id !== chat.id));
+        }
         queryClient.removeQueries({ queryKey: messagesQueryKey(sessionId, chat.id) });
       }
       if (!stillOn(sessionId)) return;

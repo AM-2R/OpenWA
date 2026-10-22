@@ -1765,7 +1765,7 @@ for (const kind of ['clear', 'delete'] as const) {
 const chatListReads = () =>
   fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(`/api/sessions/${SESSION.id}/chats?`)).length;
 
-const RELOAD_RACES: Array<{ title: string; act: () => Promise<void>; shows: () => void }> = [
+const RELOAD_RACES: Array<{ title: string; engine?: string; act: () => Promise<void>; shows: () => void }> = [
   {
     title: 'an archive',
     act: async () => pickRowAction('Alice', 'Archive chat'),
@@ -1799,11 +1799,21 @@ const RELOAD_RACES: Array<{ title: string; act: () => Promise<void>; shows: () =
     },
     shows: () => assert.ok(rtl.screen.getByText('Alicia'), 'the renamed chat has its old name back'),
   },
+  {
+    title: 'a delete',
+    engine: 'whatsapp-web.js',
+    act: async () => {
+      pickRowAction('Alice', 'Delete chat');
+      await confirmDialog('Delete chat');
+    },
+    shows: () => assert.ok(!rtl.screen.queryByText('Alice'), 'the deleted chat is back in the sidebar'),
+  },
 ];
 
 for (const race of RELOAD_RACES) {
   test(`a chat list asked for before ${race.title} does not undo it when it answers`, async () => {
     const { screen, waitFor } = rtl;
+    if (race.engine) window.sessionStorage.setItem('openwa_engine_type', race.engine);
     renderPage();
     await screen.findByText('Alice');
     const release = hold('chats');
@@ -1825,6 +1835,31 @@ for (const race of RELOAD_RACES) {
     race.shows();
   });
 }
+
+test('a chat that writes again after its delete is listed by the list that message asks for', async () => {
+  const { screen, waitFor } = rtl;
+  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
+  renderPage();
+  await screen.findByText('Alice');
+  const release = hold('chats');
+  receiveEvent('message.edited', {
+    messageId: 'wamid.edit.2',
+    chatId: CHAT.id,
+    body: 'edited',
+    timestamp: 1_700_001_000,
+  });
+  await waitFor(() => assert.equal(chatListReads(), 2, 'the edit did not ask for the list'));
+
+  pickRowAction('Alice', 'Delete chat');
+  await confirmDialog('Delete chat');
+  await waitFor(() => assert.ok(!screen.queryByText('Alice'), 'the chat was not deleted'));
+  // The conversation is gone, so its next message finds no row and asks for the list again.
+  receiveFromAlice('wamid.after.delete', 'hello again');
+
+  release();
+  await waitFor(() => assert.equal(chatListReads(), 3, 'the message did not ask for the list'));
+  await screen.findByText('Alice');
+});
 
 test('a chat list asked for before Mark as unread does not mark a chat that was opened and read since', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
