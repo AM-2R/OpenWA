@@ -142,10 +142,14 @@ if [ "$DATA_DIR" -ef / ]; then
   log "ERROR: refusing unsafe OPENWA_DATA_DIR target: $DATA_DIR"
   exit 1
 fi
-if [ "$RESOLVED_DATA_DIR" = "$RESOLVED_USER_HOME" ]; then
-  log "ERROR: OPENWA_DATA_DIR must not be the user home directory: $DATA_DIR"
-  exit 1
-fi
+# The home directory, or a parent of it, holds every other home under it as the workspace's parent holds the
+# workspace, so the data dir is refused when it is either.
+case "$RESOLVED_USER_HOME/" in
+  "${RESOLVED_DATA_DIR%/}/"*)
+    log "ERROR: OPENWA_DATA_DIR must not be the user home directory or one of its parent directories: $DATA_DIR"
+    exit 1
+    ;;
+esac
 
 # refuse_unwritable <path> <label>: stop in the snapshot phase, before the first database is replaced.
 refuse_unwritable() {
@@ -198,6 +202,12 @@ replace_tree() {
   case "$RESOLVED_DATA_DIR/" in
     "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the data directory: $target_dir"
+      exit 1
+      ;;
+  esac
+  case "$RESOLVED_USER_HOME/" in
+    "${resolved_target%/}/"*)
+      log "ERROR: refusing to replace $label target that contains the user home directory: $target_dir"
       exit 1
       ;;
   esac

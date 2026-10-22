@@ -69,16 +69,17 @@
 #   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
 #       file cannot pass for the newest backup
 #   (am) restore refuses an OPENWA_DATA_DIR that is ., ./, .., ../, /, the working directory, a parent of
-#       it, a link to it or the home directory, before it reads the archive; and, behind a cp that
-#       stops at /, //, /., /./, /.. and a link to / with or without a trailing .., or a link whose
-#       target ends in one, or a link to / whose name is not valid UTF-8 (the / cases are skipped where
-#       a user can write /); on a filesystem that ignores case, the workspace's parent typed in other case
+#       it, a link to it, the home directory or a parent of it, before it reads the archive; and, behind
+#       a cp that stops at /, //, /., /./, /.. and a link to / with or without a trailing .., or a link
+#       whose target ends in one, or a link to / whose name is not valid UTF-8 (the / cases are skipped
+#       where a user can write /); on a filesystem that ignores case, the workspace's parent typed in
+#       other case
 #   (an) restore refuses to empty a state dir that is ., ./, .., ../, /, a link to / with or without a
 #       trailing .. or through a link whose target ends in one, or whose name is not valid UTF-8, the
 #       working directory (also through such a link), the data dir, the home directory or a directory
-#       around the workspace or the data dir, before it replaces anything (the data-dir safety snapshot
-#       is taken first; the / cases are skipped where a user can write /); on a filesystem that ignores
-#       case or Unicode form, the workspace's parent typed in another spelling
+#       around the workspace, the data dir or the home directory, before it replaces anything (the
+#       data-dir safety snapshot is taken first; the / cases are skipped where a user can write /); on a
+#       filesystem that ignores case or Unicode form, the workspace's parent typed in another spelling
 #   (ao) restore refuses an archive member named ../x, a/../x, a/.. or /x before it extracts anything
 #   (ap) a restore over files other users can read leaves the databases, the admin key and
 #       .env.generated at mode 600
@@ -2389,7 +2390,13 @@ if [ -d "$WORK/AM" ]; then
   am_refused "$AM" "am: parent of the working directory in other case" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$WORK/AM"
 fi
 am_refused "$AM" "am: home directory" 'must not be the user home directory' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AM/home"
-pass "(am) an OPENWA_DATA_DIR that is ., ./, .., ../, the workspace, a parent of it, a link to it or the home directory is refused"
+# A parent of the home directory holds it, and every other home under it, as the workspace's parent holds the
+# workspace. The home is outside the workspace here, so the workspace check is not what refuses it.
+mkdir -p "$AM/homes/u"
+printf 'am-keep\n' >"$AM/homes/keep.txt"
+am_refused "$AM" "am: parent of the home directory" 'must not be the user home directory or one of its parent directories' \
+  "$AM/work" "$ARCHIVE_AM" HOME="$AM/homes/u" OPENWA_DATA_DIR="$AM/homes"
+pass "(am) an OPENWA_DATA_DIR that is ., ./, .., ../, the workspace, a parent of it, a link to it, the home directory or a parent of it is refused"
 if [ "$ROOT_SAFE" -eq 1 ]; then
   am_refused "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
   pass "(am) / is refused as OPENWA_DATA_DIR"
@@ -2486,6 +2493,11 @@ refused_restore "$AN" "an: around the workspace" 'whatsapp-web.js sessions targe
   "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$AN"
 refused_restore "$AN" "an: around the data dir" 'whatsapp-web.js sessions target that contains the data directory' \
   "$AN/work" "$ARCHIVE_AM" OPENWA_DATA_DIR="$AN/vol/data" SESSION_DATA_PATH="$AN/vol"
+# The same for a parent of the home directory, with the home outside the workspace and the data dir.
+mkdir -p "$AN/homes/u"
+printf 'an-keep\n' >"$AN/homes/keep.txt"
+refused_restore "$AN" "an: around the home directory" 'whatsapp-web.js sessions target that contains the user home directory' \
+  "$AN/work" "$ARCHIVE_AM" HOME="$AN/homes/u" SESSION_DATA_PATH="$AN/homes"
 # The workspace reached through a link whose target goes down a link and back up: the kernel ends in the working
 # directory, where a reading that folds the .. inside the target ends in a directory beside the links.
 mkdir -p "$AN/work/q/x" "$AN/z/y"
@@ -2521,7 +2533,7 @@ refused_restore "$AN" "an: missing dir and .." "$AN_BROAD" "$AN/work" "$ARCHIVE_
 for literal in . ./ .. ../; do
   refused_restore "$AN" "an: $literal" "$AN_UNSAFE: $literal" "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH="$literal"
 done
-pass "(an) a state dir that is ., ./, .., ../, the workspace, the data dir, the home directory or around the workspace or the data dir is refused"
+pass "(an) a state dir that is ., ./, .., ../, the workspace, the data dir, the home directory or around the workspace, the data dir or the home directory is refused"
 if [ "$ROOT_SAFE" -eq 1 ]; then
   refused_restore "$AN" "an: /" 'refusing to replace unsafe whatsapp-web.js sessions target: /' \
     "$AN/work" "$ARCHIVE_AM" SESSION_DATA_PATH=/
