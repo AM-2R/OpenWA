@@ -511,7 +511,7 @@
 .message-tester .batch-badge.pending,
 .message-tester .batch-badge.processing {
   background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  color: var(--info);
 }
 
 .message-tester .batch-badge.completed {

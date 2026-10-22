@@ -206,7 +206,6 @@
 .infrastructure-page .form-group small {
   font-size: 0.75rem;
   color: var(--text-muted);
-  opacity: 0.85;
 }
 
 /* Toggle */
@@ -233,7 +232,6 @@
   font-size: 0.75rem;
   font-weight: 400;
   color: var(--text-muted); /* Slate 500 */
-  opacity: 0.85;
 }
 
 .infrastructure-page .toggle-switch {

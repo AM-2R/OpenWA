@@ -177,6 +177,11 @@
   background: var(--primary-soft);
 }
 
+/* The muted gray is 4.17:1 on the selected row's tint. */
+.templates-page .template-list-item.selected .template-list-meta {
+  color: var(--text-secondary);
+}
+
 .templates-page .template-list-title {
   overflow: hidden;
   color: var(--text-primary);

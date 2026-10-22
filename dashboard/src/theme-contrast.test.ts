@@ -134,3 +134,63 @@ test('the search match and the Number Checker highlight pill clear AA in both th
     assert.ok(onTint >= 4.5, `${anchor} pill text on the green tint is ${onTint.toFixed(2)}:1`);
   }
 });
+
+// Opacity over --text-muted is a second fade on a colour that already sits at 4.5:1: at 0.7 it is 2.72:1.
+test('text that uses --text-muted is not faded again with opacity', () => {
+  const components = join(dirname(fileURLToPath(import.meta.url)), 'components');
+  const sources: [string, string, string][] = [
+    ['Layout.css', readFileSync(join(components, 'Layout.css'), 'utf8'), '.brand-version'],
+    ['Chats.css', read('Chats.css'), '.chats-page .room-contact-jid'],
+    ['Chats.css', read('Chats.css'), '.chats-page .chat-item-snippet .no-message'],
+    ['Infrastructure.css', read('Infrastructure.css'), '.infrastructure-page .form-group small'],
+    ['Infrastructure.css', read('Infrastructure.css'), '.infrastructure-page .toggle-info small'],
+  ];
+  for (const [file, css, selector] of sources) {
+    const rule = new RegExp(`(?:^|})\\s*${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`).exec(
+      css.replace(/\/\*[\s\S]*?\*\//g, ''),
+    );
+    assert.ok(rule, `${file} has no ${selector} rule`);
+    assert.doesNotMatch(rule[1], /opacity:/, `${file} ${selector} fades its text`);
+  }
+});
+
+test('muted text on a tinted row uses --text-secondary, which clears AA on the tint in both themes', () => {
+  // [stylesheet, selector, tint alpha in light, tint alpha in dark, surface under the tint]
+  const rules: [string, string, number, number, string][] = [
+    ['Chats.css', '.chats-page .chat-item-card.active .chat-item-time', 0.08, 0.08, '--bg-white'],
+    ['Chats.css', '.chats-page .chat-item-card.active .chat-item-snippet', 0.08, 0.08, '--bg-white'],
+    // The selected template row is --primary-soft: 12 percent in light, 18 percent in dark.
+    ['Templates.css', '.templates-page .template-list-item.selected .template-list-meta', 0.12, 0.18, '--bg-light'],
+  ];
+  for (const [file, selector, light, dark, surface] of rules) {
+    const rule = new RegExp(`${selector.replace(/[.]/g, '\\.')}[^{]*\\{[^}]*color:\\s*var\\((--[\\w-]+)\\)`).exec(
+      read(file),
+    );
+    assert.ok(rule, `${file} has no colour for ${selector}`);
+    assert.equal(rule[1], '--text-secondary', `${file} ${selector}`);
+    for (const [anchor, alpha] of [
+      [LIGHT, light],
+      [DARK, dark],
+    ] as const) {
+      const block = blockAfter(anchor);
+      const tint = mix(rgb(hexOf(blockAfter(LIGHT), '--primary')), alpha, rgb(hexOf(block, surface)));
+      const ratio = contrast(rgb(hexOf(block, '--text-secondary')), tint);
+      assert.ok(ratio >= 4.5, `${anchor} ${selector} is ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('the batch badge uses --info, which clears the twins range on its tint in both themes', () => {
+  const rule = /\.batch-badge\.pending,\s*\.message-tester \.batch-badge\.processing\s*\{[^}]*color:\s*([^;]+);/.exec(
+    read('MessageTester.css'),
+  );
+  assert.ok(rule, 'MessageTester.css no longer styles the pending badge');
+  assert.equal(rule[1].trim(), 'var(--info)');
+  for (const anchor of [LIGHT, DARK]) {
+    const block = blockAfter(anchor);
+    // The batch panel is --bg-light; the badge paints 12 percent of the blue over it.
+    const tint = mix([59, 130, 246], 0.12, rgb(hexOf(block, '--bg-light')));
+    const ratio = contrast(rgb(hexOf(block, '--info')), tint);
+    assert.ok(ratio >= 4.29, `${anchor} --info on the batch badge is ${ratio.toFixed(2)}:1 (the raw blue was 3.08:1)`);
+  }
+});
