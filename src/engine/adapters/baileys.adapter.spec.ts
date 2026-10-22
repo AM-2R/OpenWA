@@ -1936,6 +1936,17 @@ describe('BaileysAdapter messaging', () => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });
 
+  // The library's own write timeout (promiseTimeout) carries statusCode 408 and an object data, not a numeric
+  // WhatsApp code. Its frame may already be on the socket, so it must not become a retryable 503.
+  it('leaves the local socket-write timeout of a send unmapped', async () => {
+    const adapter = await readyAdapter();
+    const timedOut = new Boom('Timed Out', { statusCode: 408, data: { stack: 'Error\n    at x' } });
+    fakeSock.sendMessage.mockRejectedValue(timedOut);
+    const rejection = adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    await expect(rejection).rejects.toBe(timedOut);
+    await expect(rejection).rejects.not.toBeInstanceOf(EngineTransportError);
+  });
+
   it('leaves any other WhatsApp refusal code to propagate untouched', async () => {
     const adapter = await readyAdapter();
     const refusal = new Boom('forbidden', { data: 403 });
