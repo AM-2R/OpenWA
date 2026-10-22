@@ -29,7 +29,11 @@
 #   PLUGIN_STATE_DIR  root whose plugins/ holds the plugin registry and ctx.storage (default: the
 #                     data dir)
 #   BOOTSTRAP_KEY_FILE  where the plaintext admin key goes (default: <data dir>/.api-key)
-#                     These paths resolve through the same layers as the databases.
+#                     These paths resolve through the same layers as the databases. One that
+#                     comes from the archive's .env.generated has to stay in the data dir, unless it
+#                     is the default: the restore stops at one that leads elsewhere, naming the key,
+#                     before it copies anything. Set the key in the environment or ./.env to restore
+#                     outside the data dir.
 #   OPENWA_RESTORE_SNAPSHOT_DIR
 #                     where the safety snapshots go (default: next to the data dir, and next to
 #                     each target outside it); needed when a parent is read-only, as in the
@@ -341,7 +345,9 @@ trap 'rm -rf "$STAGE"' EXIT
 
 log "Extracting $ARCHIVE"
 # Refuse archive path names that could escape STAGE. This restore command accepts archives produced by
-# backup.sh; path validation is an additional traversal guard, not a general untrusted-tar verifier.
+# backup.sh and installs their keys, plugins and configuration as they are; it is not a general
+# untrusted-tar verifier. Where it writes does not rest on the archive, though: a member name that could
+# escape STAGE is refused here, and a path from its .env.generated that leads out of the data dir below.
 while IFS= read -r entry; do
   case "$entry" in
     /* | ../* | */../* | */..)
@@ -354,10 +360,10 @@ tar -xzf "$ARCHIVE" -C "$STAGE"
 
 # Targets resolve exactly like the app: an explicit environment value, then ./.env, then the
 # dashboard's .env.generated, else the app's ./data defaults under OPENWA_DATA_DIR. They may
-# legitimately live outside it. The archive's .env.generated replaces the target's further down, so
-# when it carries one, that copy is the third layer: the restored app reads its paths, and state
-# placed where the replaced file pointed would never be opened. Resolved before anything is
-# validated or written.
+# legitimately live outside it, where the environment or ./.env says so (see archive_target). The
+# archive's .env.generated replaces the target's further down, so when it carries one, that copy is
+# the third layer: the restored app reads its paths, and state placed where the replaced file
+# pointed would never be opened. Resolved before anything is validated or written.
 if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
@@ -395,6 +401,100 @@ for member in sessions baileys media plugin-packages plugin-state; do
     log "       re-take the backup with this version of backup.sh, or extract the archive and restore by hand"
     exit 1
   fi
+done
+
+# The environment and ./.env are the operator's own; the archive's .env.generated is not, yet the paths it names
+# are where the restore empties directories and writes files. Such a path has to lie inside the data dir as the
+# kernel resolves it, unless it is where the app goes without it (a default, which the operator's own links may
+# lead elsewhere). Inside the data dir, two ways out remain closed: a link that does not resolve, which a copy
+# follows wherever it points, and a target inside or around a directory refilled from the archive, whose links
+# are in place before the other target is written. Setting the key in the environment or ./.env lifts this.
+from_archive() {
+  [ "$OPENWA_GENERATED_ENV" = "$STAGE/.env.generated" ] && [ -z "$(printenv "$1" 2>/dev/null || true)" ] &&
+    ! openwa_env_file_value ./.env "$1" >/dev/null 2>&1 &&
+    openwa_env_file_value "$OPENWA_GENERATED_ENV" "$1" >/dev/null 2>&1
+}
+
+refuse_archive_path() {
+  log "ERROR: $1 from the archive's .env.generated $3: $2"
+  log "       nothing has been restored yet; to restore there, set $1 in the environment or ./.env and re-run"
+  exit 1
+}
+
+TARGET_KEYS=()
+TARGET_PATHS=()
+TARGET_KINDS=()
+TARGET_CHOSEN=()
+# archive_target <key> <path> <file|dir> <default>...: note a target the restore replaces, refusing it when the
+# archive's .env.generated chose it and it leads out of the data dir.
+archive_target() {
+  local key="$1" path="$2" kind="$3" resolved chosen=0 p
+  shift 3
+  resolved="$(resolve_path "$path")"
+  if from_archive "$key"; then
+    chosen=1
+    for p in "$@"; do
+      [ "$resolved" != "$(resolve_path "$p")" ] || chosen=0
+    done
+  fi
+  if [ "$chosen" -eq 1 ]; then
+    case "$resolved" in
+      "${RESOLVED_DATA_DIR%/}/"?*) ;;
+      *) refuse_archive_path "$key" "$path" "is not inside the data directory" ;;
+    esac
+    p="$path"
+    while [ ! -e "$p" ]; do
+      [ ! -L "$p" ] || refuse_archive_path "$key" "$path" "goes through a link that does not resolve ($p)"
+      p="$(dirname "$p")"
+    done
+  fi
+  TARGET_KEYS+=("$key")
+  TARGET_PATHS+=("$resolved")
+  TARGET_KINDS+=("$kind")
+  TARGET_CHOSEN+=("$chosen")
+}
+if [ -f "$STAGE/main.sqlite" ]; then
+  archive_target MAIN_DATABASE_NAME "$MAIN_DB" file "${DATA_DIR%/}/main.sqlite"
+fi
+if [ -f "$STAGE/openwa.sqlite" ]; then
+  archive_target DATABASE_NAME "$DATA_DB" file "${DATA_DIR%/}/openwa.sqlite"
+fi
+if [ -d "$STAGE/sessions" ]; then
+  archive_target SESSION_DATA_PATH "$SESSIONS_DIR" dir "$DATA_DIR/sessions"
+fi
+if [ -d "$STAGE/baileys" ]; then
+  archive_target BAILEYS_AUTH_DIR "$BAILEYS_DIR" dir "$DATA_DIR/baileys"
+fi
+# A leftover ./uploads stays where the app itself keeps media (openwa_media_dir), so it counts as a default.
+if [ -d "$STAGE/media" ]; then
+  archive_target STORAGE_LOCAL_PATH "$MEDIA_DIR" dir "$DATA_DIR/media" ./uploads
+fi
+if [ -d "$STAGE/plugin-packages" ]; then
+  archive_target PLUGINS_DIR "$PLUGIN_PACKAGES_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -d "$STAGE/plugin-state" ]; then
+  archive_target PLUGIN_STATE_DIR "$PLUGIN_STATE_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -f "$STAGE/.api-key" ]; then
+  archive_target BOOTSTRAP_KEY_FILE "$ADMIN_KEY_FILE" file "$DATA_DIR/.api-key"
+fi
+i=0
+while [ "$i" -lt "${#TARGET_KEYS[@]}" ]; do
+  j=0
+  while [ "$j" -lt "${#TARGET_KEYS[@]}" ]; do
+    if [ "${TARGET_KINDS[j]}" = dir ] && [ "${TARGET_CHOSEN[i]}${TARGET_CHOSEN[j]}" != 00 ]; then
+      case "${TARGET_PATHS[i]}" in
+        "${TARGET_PATHS[j]%/}/"?*)
+          key="${TARGET_KEYS[i]}"
+          [ "${TARGET_CHOSEN[i]}" -eq 1 ] || key="${TARGET_KEYS[j]}"
+          refuse_archive_path "$key" "${TARGET_PATHS[i]}" \
+            "puts the ${TARGET_KEYS[i]} target inside the ${TARGET_KEYS[j]} directory, which is refilled from the archive"
+          ;;
+      esac
+    fi
+    j=$((j + 1))
+  done
+  i=$((i + 1))
 done
 
 # A backup taken without sqlite3 .backup carries this marker: the database snapshots were

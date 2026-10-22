@@ -801,13 +801,17 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > first, then `./.env`, then `<data dir>/.env.generated`. Settings made through Dashboard >
 > Infrastructure therefore apply without being restated on the command line. A restore reads that
 > third layer from the archive's `.env.generated` when the archive carries one, because that copy
-> replaces the target's and is the one the restored app reads. A relative `./data/...` path in
-> `./.env` or `.env.generated`, such as the `PLUGINS_DIR=./data/plugins` that `.env.example` sets or
-> the `STORAGE_LOCAL_PATH=./data/media` the app writes on first run, names a path in the app's data
-> directory and is read under `OPENWA_DATA_DIR`, as are the `./data` database and state defaults; a
-> path from the environment is read against the current directory. When operating directly on the
-> host mount, a path recorded inside the container (`/app/data/...`) is not host-visible, so override
-> it in the environment.
+> replaces the target's and is the one the restored app reads. A path that copy names has to stay in
+> the data directory unless it is the default (a leftover `./uploads` included): the restore stops,
+> naming the key and before it copies anything, at one that leads elsewhere, whether outside the
+> directory, through `..`, a link or a link that does not resolve, or inside or around another
+> directory it refills from the archive. Set that key in the environment or `./.env` to restore
+> there. A relative `./data/...` path in `./.env` or `.env.generated`, such as the
+> `PLUGINS_DIR=./data/plugins` that `.env.example` sets or the `STORAGE_LOCAL_PATH=./data/media` the
+> app writes on first run, names a path in the app's data directory and is read under
+> `OPENWA_DATA_DIR`, as are the `./data` database and state defaults; a path from the environment is
+> read against the current directory. When operating directly on the host mount, a path recorded
+> inside the container (`/app/data/...`) is not host-visible, so override it in the environment.
 >
 > A leftover `STORAGE_LOCAL_PATH=./uploads` (which v0.2.0 to v0.7.3 wrote to `.env.generated`), in
 > `./.env` or `.env.generated`, is read as `<OPENWA_DATA_DIR>/media` whenever `OPENWA_DATA_DIR` is
@@ -903,8 +907,9 @@ tar -tzf "$(ls -t ./backups/openwa-backup-*.tar.gz | head -n 1)"
 
 Use the repo's `scripts/restore.sh`. It restores `main.sqlite` (auth/audit) and a SQLite data store;
 for PostgreSQL it stages `database.sql` for the explicit import below. It also restores
-whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files. It snapshots
-the current data dir first so a bad restore can be undone:
+whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files, all as the
+archive holds them, so restore only archives you made. It snapshots the current data dir first so a
+bad restore can be undone:
 
 ```bash
 # 1. Stop the app (so files are quiescent)

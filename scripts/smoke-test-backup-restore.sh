@@ -93,6 +93,10 @@
 #   (as) restore refuses a MAIN_DATABASE_NAME, DATABASE_NAME or BOOTSTRAP_KEY_FILE that names an
 #       existing directory (the workspace's parent, the data dir, another directory, a link to one),
 #       before it copies, writes into or changes the mode of it
+#   (at) restore refuses a path from the archive's .env.generated that leads out of the data dir (outside
+#       it, through .., a link or a link that does not resolve, or inside or around a directory refilled
+#       from the archive) before it copies anything, and restores there when the environment or ./.env
+#       sets that key; a default reached through the operator's link is still followed
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -347,13 +351,13 @@ echo "==> (f) data/.env.generated supplies paths the environment does not"
 # alone then archives the abandoned file and exits 0 — a backup that only reveals itself as wrong
 # during a restore. A missing default would at least fail loudly; a stale one does not.
 F="$WORK/f"
-mkdir -p "$F/state" "$F/live" "$F/data" "$F/extract" "$F/restore/state"
-make_fixture "$F/live/auth.sqlite" "foxtrot-live-main"
-make_fixture "$F/live/store.sqlite" "foxtrot-live-data"
+mkdir -p "$F/state/live" "$F/data" "$F/extract" "$F/restore"
+make_fixture "$F/state/live/auth.sqlite" "foxtrot-live-main"
+make_fixture "$F/state/live/store.sqlite" "foxtrot-live-data"
 make_fixture "$F/data/main.sqlite" "STALE-main"
 make_fixture "$F/data/openwa.sqlite" "STALE-data"
 printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
-  "$F/live/auth.sqlite" "$F/live/store.sqlite" >"$F/state/.env.generated"
+  "$F/state/live/auth.sqlite" "$F/state/live/store.sqlite" >"$F/state/.env.generated"
 (
   cd "$F"
   OPENWA_DATA_DIR="$F/state" BACKUP_DIR="$F/out" "$BACKUP" >/dev/null
@@ -369,21 +373,22 @@ fi
 # restore.sh must read the same layer, from the file in effect AFTER the restore: the archive's
 # .env.generated replaces the target's, so databases placed where the target's old file pointed
 # would be ones the restored app never opens. Here the live databases are gone, as in a disaster
-# recovery, and the target's own file still names other paths.
-rm -f "$F/live/auth.sqlite" "$F/live/store.sqlite"
+# recovery, and the data dir's own file now names other paths. (at) covers an archive path outside
+# the data dir.
+rm -f "$F/state/live/auth.sqlite" "$F/state/live/store.sqlite"
 printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
-  "$F/restore/auth.sqlite" "$F/restore/store.sqlite" >"$F/restore/state/.env.generated"
+  "$F/state/other/auth.sqlite" "$F/state/other/store.sqlite" >"$F/state/.env.generated"
 (
   cd "$F/restore"
-  OPENWA_DATA_DIR="$F/restore/state" "$RESTORE" "$ARCHIVE_F" >/dev/null
+  OPENWA_DATA_DIR="$F/state" "$RESTORE" "$ARCHIVE_F" >/dev/null
 )
-if [ "$(db_fingerprint "$F/live/auth.sqlite")" != "foxtrot-live-main" ]; then
+if [ "$(db_fingerprint "$F/state/live/auth.sqlite")" != "foxtrot-live-main" ]; then
   fail "(f) restore ignored the MAIN_DATABASE_NAME in the archive's data/.env.generated"
 fi
-if [ "$(db_fingerprint "$F/live/store.sqlite")" != "foxtrot-live-data" ]; then
+if [ "$(db_fingerprint "$F/state/live/store.sqlite")" != "foxtrot-live-data" ]; then
   fail "(f) restore ignored the DATABASE_NAME in the archive's data/.env.generated"
 fi
-if [ -e "$F/restore/auth.sqlite" ] || [ -e "$F/restore/store.sqlite" ]; then
+if [ -e "$F/state/other/auth.sqlite" ] || [ -e "$F/state/other/store.sqlite" ]; then
   fail "(f) restore wrote the databases where the replaced data/.env.generated pointed"
 fi
 # An explicit environment value must still win — that is the app's precedence, not ours to change.
@@ -2744,6 +2749,121 @@ for target in 'MAIN_DATABASE_NAME auth/audit DB' 'DATABASE_NAME data store' 'BOO
   done
 done
 pass "(as) MAIN_DATABASE_NAME, DATABASE_NAME and BOOTSTRAP_KEY_FILE naming a directory are refused before anything is copied or changed"
+
+echo ""
+echo "==> (at) a path from the archive's .env.generated stays in the data dir unless the operator names the key"
+# The archive's own .env.generated says where the restore empties directories and writes files, and the archive
+# need not be one the operator made. A path it names that leads out of the data dir, through .., a link, a link
+# that does not resolve, or a directory the restore refills from the archive, is refused before anything is
+# copied, unless the environment or ./.env sets that key. A default, which the operator's own link may lead
+# elsewhere, is still followed.
+AT="$WORK/at"
+mkdir -p "$AT/src/data/sessions/session-1" "$AT/src/data/baileys/b1" "$AT/src/data/media" "$AT/src/data/plugins/p1" \
+  "$AT/work/data/sessions/old" "$AT/home/.ssh" "$AT/victim" "$AT/stage"
+make_fixture "$AT/src/data/main.sqlite" "at-main"
+make_fixture "$AT/src/data/openwa.sqlite" "at-data"
+printf 'at-session\n' >"$AT/src/data/sessions/session-1/marker"
+printf 'at-baileys\n' >"$AT/src/data/baileys/b1/creds.json"
+printf 'at-media\n' >"$AT/src/data/media/a.jpg"
+printf '{}\n' >"$AT/src/data/plugins/p1/manifest.json"
+printf 'at-key\n' >"$AT/src/data/.api-key"
+(
+  cd "$AT/src"
+  BACKUP_DIR="$AT/out" "$BACKUP" >/dev/null 2>&1
+)
+ARCHIVE_AT="$(ls "$AT"/out/openwa-backup-*.tar.gz)"
+printf 'at-keep\n' >"$AT/work/data/keep.txt"
+printf 'at-precious\n' >"$AT/victim/precious.txt"
+# at_archive <name> <.env.generated text> [<name in sessions/> <link target>]: the backup.sh archive above with that
+# .env.generated, and a link planted in its sessions/ when asked.
+at_archive() {
+  rm -rf "${AT:?}/stage" && mkdir -p "$AT/stage"
+  tar -xzf "$ARCHIVE_AT" -C "$AT/stage"
+  printf '%b' "$2" >"$AT/stage/.env.generated"
+  if [ -n "${3:-}" ]; then
+    ln -s "$4" "$AT/stage/sessions/$3"
+  fi
+  tar -czf "$AT/$1.tar.gz" -C "$AT/stage" .
+}
+# at_refused <label> <message> <archive> [VAR=value ...]: refused like refused_restore, and before the data-dir
+# safety snapshot, the first copy a restore makes.
+at_refused() {
+  local label="$1" message="$2" archive="$3"
+  shift 3
+  refused_restore "$AT" "$label" "$message" "$AT/work" "$archive" OPENWA_DATA_DIR="$AT/work/data" "$@"
+  if printf '%s' "$OUT" | grep -q 'Snapshotting' || [ -n "$(find "$AT" -name '*.pre-restore-*' -print -quit)" ]; then
+    fail "($label) the restore took a snapshot before it refused: $OUT"
+  fi
+}
+AT_OUT="from the archive's .env.generated is not inside the data directory"
+for at_key in MAIN_DATABASE_NAME DATABASE_NAME SESSION_DATA_PATH BAILEYS_AUTH_DIR STORAGE_LOCAL_PATH PLUGINS_DIR \
+  PLUGIN_STATE_DIR BOOTSTRAP_KEY_FILE; do
+  at_archive outside "$at_key=$AT/victim/x\n"
+  at_refused "at: $at_key outside" "$at_key $AT_OUT" "$AT/outside.tar.gz"
+done
+at_archive key "BOOTSTRAP_KEY_FILE=$AT/home/.ssh/authorized_keys\n"
+at_refused "at: key file in another directory" "BOOTSTRAP_KEY_FILE $AT_OUT" "$AT/key.tar.gz"
+at_archive dotdot 'SESSION_DATA_PATH=./data/../../victim\n'
+at_refused "at: .. out of the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/dotdot.tar.gz"
+at_archive sibling 'SESSION_DATA_PATH=./data-sessions\n'
+at_refused "at: a sibling named like the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/sibling.tar.gz"
+ln -s "$AT/victim" "$AT/work/data/lnk"
+at_archive link 'SESSION_DATA_PATH=./data/lnk\n'
+at_refused "at: link out of the data dir" "SESSION_DATA_PATH $AT_OUT" "$AT/link.tar.gz"
+# A copy onto a link that does not resolve creates the file the link names, wherever that is.
+ln -s "$AT/home/.ssh/authorized_keys" "$AT/work/data/dangling"
+at_archive dangling 'BOOTSTRAP_KEY_FILE=./data/dangling\n'
+at_refused "at: link that does not resolve" "BOOTSTRAP_KEY_FILE from the archive's .env.generated goes through a link that does not resolve" \
+  "$AT/dangling.tar.gz"
+rm -f "$AT/work/data/lnk" "$AT/work/data/dangling"
+# The sessions refilled from the archive bring their links along before the key file is written, and before a
+# directory the environment names under them is emptied.
+at_archive nested 'SESSION_DATA_PATH=./data/s\nBOOTSTRAP_KEY_FILE=./data/s/k\n' k "$AT/home/.ssh/authorized_keys"
+at_refused "at: key file inside the refilled sessions" \
+  "BOOTSTRAP_KEY_FILE from the archive's .env.generated puts the BOOTSTRAP_KEY_FILE target inside the SESSION_DATA_PATH directory" \
+  "$AT/nested.tar.gz"
+at_archive around 'SESSION_DATA_PATH=./data/x\n' b "$AT/victim"
+at_refused "at: sessions around the environment's Baileys dir" \
+  "SESSION_DATA_PATH from the archive's .env.generated puts the BAILEYS_AUTH_DIR target inside the SESSION_DATA_PATH directory" \
+  "$AT/around.tar.gz" BAILEYS_AUTH_DIR="$AT/work/data/x/b"
+# (f)'s archive, from backup.sh, keeps its databases in its own data dir, which is not this one.
+at_refused "at: (f)'s databases into another data dir" "MAIN_DATABASE_NAME $AT_OUT" "$ARCHIVE_F"
+if [ -e "$AT/home/.ssh/authorized_keys" ] || [ "$(ls -A "$AT/victim")" != precious.txt ]; then
+  fail "(at) a refused restore wrote outside the data dir"
+fi
+pass "(at) a path from the archive's .env.generated that leads out of the data dir is refused before anything is copied"
+# The same paths, named by the operator, are restored there.
+at_archive elsewhere "SESSION_DATA_PATH=$AT/elsewhere\n"
+(cd "$AT/work" && HOME="$AT/home" OPENWA_DATA_DIR="$AT/env/data" SESSION_DATA_PATH="$AT/elsewhere" \
+  "$RESTORE" "$AT/elsewhere.tar.gz" >/dev/null 2>&1) || fail "(at) restore with SESSION_DATA_PATH in the environment failed"
+if [ "$(cat "$AT/elsewhere/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the sessions did not land at the SESSION_DATA_PATH the environment names"
+fi
+mkdir -p "$AT/dotenv"
+printf 'SESSION_DATA_PATH=%s\n' "$AT/elsewhere-dotenv" >"$AT/dotenv/.env"
+(cd "$AT/dotenv" && HOME="$AT/home" "$RESTORE" "$AT/elsewhere.tar.gz" >/dev/null 2>&1) ||
+  fail "(at) restore with SESSION_DATA_PATH in ./.env failed"
+if [ "$(cat "$AT/elsewhere-dotenv/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the sessions did not land at the SESSION_DATA_PATH ./.env names"
+fi
+# With both of its keys set, (f)'s archive restores where they point.
+mkdir -p "$AT/other/data"
+(cd "$AT/other" && HOME="$AT/home" MAIN_DATABASE_NAME="$AT/other/auth.sqlite" DATABASE_NAME="$AT/other/store.sqlite" \
+  "$RESTORE" "$ARCHIVE_F" >/dev/null 2>&1) || fail "(at) restore of (f)'s archive with both keys in the environment failed"
+if [ "$(db_fingerprint "$AT/other/auth.sqlite")" != "foxtrot-live-main" ]; then
+  fail "(at) the database did not land where the environment names it"
+fi
+# A default the dashboard writes, through the operator's link to another disk, is followed as before.
+mkdir -p "$AT/disk/sessions" "$AT/linked/data"
+printf 'at-disk-old\n' >"$AT/disk/sessions/old"
+ln -s "$AT/disk/sessions" "$AT/linked/data/sessions"
+at_archive default 'SESSION_DATA_PATH=./data/sessions\nSTORAGE_LOCAL_PATH=./data/media\n'
+(cd "$AT/linked" && HOME="$AT/home" "$RESTORE" "$AT/default.tar.gz" >/dev/null 2>&1) ||
+  fail "(at) restore of the dashboard's default paths through a linked sessions dir failed"
+if [ ! -L "$AT/linked/data/sessions" ] || [ "$(cat "$AT/disk/sessions/session-1/marker" 2>/dev/null || true)" != "at-session" ]; then
+  fail "(at) the default sessions dir was not refilled through the operator's link"
+fi
+pass "(at) the environment, ./.env and the defaults still decide where the restore writes"
 
 echo ""
 echo "All smoke tests passed!"
