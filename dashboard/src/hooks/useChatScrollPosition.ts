@@ -206,10 +206,12 @@ export function useChatScrollPosition(
   );
 
   // A pin that follows the thread (a live message, a decoded image) forgets the chat's remembered offset too: the
-  // reader is at the bottom again, and the offset from before the thread grew would bring them back above it.
+  // reader is at the bottom again, and the offset from before the thread grew would bring them back above it. For
+  // the same reason a saved spot still waiting for media is no longer theirs to be put back on.
   const followBottom = useCallback(
     (el: HTMLDivElement) => {
       pinToBottom(el);
+      pendingRestoreRef.current = null;
       if (prevChatIdRef.current !== null) scrollMap.current.delete(prevChatIdRef.current);
     },
     [pinToBottom],
@@ -333,8 +335,12 @@ export function useChatScrollPosition(
     const follow = pendingFollowRef.current;
     const el = containerRef.current;
     if (!follow || !el) return;
-    // The chat the message was announced in is not the one on screen any more, or it is on its way to a saved spot.
-    if (follow.chat !== prevChatIdRef.current || pendingRestoreRef.current !== null) {
+    // The chat the message was announced in is not the one on screen any more, or the message is not the reader's own
+    // and the chat is on its way to a saved spot.
+    if (
+      follow.chat !== prevChatIdRef.current ||
+      (follow.direction === 'incoming' && pendingRestoreRef.current !== null)
+    ) {
       pendingFollowRef.current = null;
       return;
     }
@@ -354,9 +360,11 @@ export function useChatScrollPosition(
   const onMessageAppended = useCallback((direction: ScrollDirection) => {
     const el = containerRef.current;
     // A chat that has not rendered its thread has nothing to follow: the restore decides where it opens. Nor has one
-    // that is still on its way to a saved spot: the short, undecoded thread reads as at the bottom, and following
-    // it would drop the saved spot the next decode puts the reader back on.
-    if (!el || !loadedRef.current || pendingRestoreRef.current !== null) return;
+    // that is still on its way to a saved spot, for a message that arrives: the short, undecoded thread reads as at
+    // the bottom, and following it would drop the saved spot the next decode puts the reader back on. A message the
+    // reader sends themselves always scrolls, saved spot or not.
+    if (!el || !loadedRef.current) return;
+    if (direction === 'incoming' && pendingRestoreRef.current !== null) return;
     const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
     if (decideScroll(direction, geometry) === 'preserve') return;
     pendingFollowRef.current = { chat: prevChatIdRef.current, direction, geometry };

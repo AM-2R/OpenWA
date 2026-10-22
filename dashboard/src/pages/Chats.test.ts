@@ -3479,6 +3479,36 @@ test('a message delivered twice leaves a reader just above the bottom where they
   }
 });
 
+test('a message sent from the page scrolls a chat reopened at its saved spot to it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const restoreGeometry = installRoomGeometry();
+  try {
+    const { container } = renderChats();
+    const thread = await openPagedChat(container);
+    thread.scrollTop = 900; // the reader's spot in Carol's thread
+    fireEvent.scroll(thread);
+
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+    fireEvent.click(await screen.findByText('Carol'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('paged message 119');
+    assert.equal(thread.scrollTop, 900, 'Carol did not reopen at the spot the reader left');
+
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'sent at the saved spot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await within(thread).findByText('sent at the saved spot');
+    await waitFor(() =>
+      assert.equal(
+        thread.scrollTop,
+        thread.scrollHeight - thread.clientHeight,
+        'the sent message was left below the fold',
+      ),
+    );
+  } finally {
+    restoreGeometry();
+  }
+});
+
 // ── Live feed subscription ───────────────────────────────────────────────────
 
 const MESSAGE_FEED_EVENTS = [

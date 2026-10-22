@@ -726,6 +726,43 @@ test('a live message in the decode window of a restored chat does not erase the 
   }
 });
 
+// The reader's own send is an explicit act: it scrolls to the new row even in a chat that came back at its saved spot
+// and is still waiting for its media. The row is where they are now, so the spot is not theirs to be put back on.
+test('a message the reader sends in a chat reopened at its saved spot scrolls to it, and no decode takes them back', async () => {
+  const { render, screen, fireEvent, cleanup } = rtl;
+  cleanup();
+  const g: Geometry = { height: 4600, top: 0 };
+  const restore = installGeometry(g);
+  try {
+    const { rerender } = render(createElement(Probe, { chatId: 'A' }));
+    const el = screen.getByTestId('thread');
+    fireEvent.scroll(el);
+    readerScrollsTo(el, 3000); // the reader's spot in A
+    rerender(createElement(Probe, { chatId: 'B' }));
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'A' })); // back at the spot, the restore still pending
+    fireEvent.scroll(el);
+    assert.equal(el.scrollTop, 3000);
+
+    await liveMessage(g, rerender, 'outgoing', 300);
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'the sent message was left below the fold');
+    fireEvent.scroll(el);
+
+    g.height += 400; // an image decodes
+    hook().onMediaLoad();
+    await nextFrame();
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'a decode took the reader back to the saved spot');
+    fireEvent.scroll(el);
+
+    rerender(createElement(Probe, { chatId: 'B' })); // the reader leaves A at its bottom
+    fireEvent.scroll(el);
+    rerender(createElement(Probe, { chatId: 'A' }));
+    assert.equal(el.scrollTop, g.height - CLIENT_HEIGHT, 'A reopened at the old spot instead of at the bottom');
+  } finally {
+    restore();
+  }
+});
+
 // ── Older pages landing under a position the memory holds ────────────────────
 
 // The echo of a send from the page can reach it after the composer reconciled its placeholder: the cache write
