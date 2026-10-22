@@ -1,3 +1,5 @@
+import { getHeapStatistics, GCProfiler, setFlagsFromString } from 'v8';
+import { runInNewContext } from 'vm';
 import { exceedsBodyNesting, exceedsJsonNesting, isUtf8Charset, MAX_BODY_NESTING } from './body-nesting';
 
 // One value holding `levels` nested containers: {} is one level, {a:{}} is two.
@@ -151,23 +153,46 @@ describe('exceedsJsonNesting', () => {
   });
 
   // The scan runs on every JSON body before authentication. What made the walk over the parsed value expensive
-  // was an allocation for every container, so what keeps the scan cheap is that it allocates nothing that grows
-  // with the body. That is asserted on the heap and not on a clock: a time ratio against JSON.parse fails
-  // intermittently under the coverage instrumentation the test job runs with, which slows the byte loop and
-  // leaves the native parse alone. Parsing and walking these bodies takes hundreds of megabytes of heap.
+  // was an allocation for every container, so what keeps the scan cheap is that it allocates nothing at all, not
+  // even something it drops at once. That is measured as allocation volume and not on a clock: a time ratio
+  // against JSON.parse fails intermittently under the coverage instrumentation the test job runs with, which
+  // slows the byte loop and leaves the native parse alone. And not as the heap left after the scan, which counts
+  // only what survived: a scan that allocates an array per container and discards it leaves almost nothing
+  // behind. The volume is what the heap grew by plus what the collector reclaimed during the scan, which sum to
+  // the bytes allocated whenever the collector ran; a full collection first leaves the heap empty of earlier
+  // garbage, so no collection in the window reclaims anything the scan did not allocate.
+  const allocatedWhileScanning = (body: Buffer): { exceeds: boolean; allocated: number } => {
+    setFlagsFromString('--expose-gc');
+    const collect = runInNewContext('gc') as () => void;
+    collect();
+
+    const profiler = new GCProfiler();
+    const before = getHeapStatistics().used_heap_size;
+    profiler.start();
+    const exceeds = exceedsJsonNesting(body);
+    const after = getHeapStatistics().used_heap_size;
+    const { statistics } = profiler.stop();
+
+    const reclaimed = statistics.reduce(
+      (sum, run) => sum + run.beforeGC.heapStatistics.usedHeapSize - run.afterGC.heapStatistics.usedHeapSize,
+      0,
+    );
+    return { exceeds, allocated: after - before + reclaimed };
+  };
+
+  // One shape per way a scan could start allocating: for each container, for each key or string, and for each
+  // container that holds strings. A body of 12 MB holds over a million of them, so any allocation per item is
+  // tens of megabytes; the scan itself allocates nothing, and the margin is a small fraction of that.
   it.each([
     ['many keys', (bytes: number) => `{${Array.from({ length: bytes / 10 }, (_, i) => `"k${i}":0`).join(',')}}`],
     ['many small containers', (bytes: number) => `[${'[0],'.repeat(bytes / 4 - 1)}[0]]`],
     ['many empty arrays', (bytes: number) => `[${'[],'.repeat(bytes / 3 - 1)}[]]`],
-  ])('allocates nothing that grows with a body of %s', (_shape, make) => {
-    const bytes = Buffer.from(make(12_000_000));
-
-    const before = process.memoryUsage().heapUsed;
-    const exceeds = exceedsJsonNesting(bytes);
-    const grown = process.memoryUsage().heapUsed - before;
+    ['many small objects', (bytes: number) => `[${'{"a":"b"},'.repeat(bytes / 10 - 1)}{"a":"b"}]`],
+  ])('allocates nothing, not even briefly, for a body of %s', (_shape, make) => {
+    const { exceeds, allocated } = allocatedWhileScanning(Buffer.from(make(12_000_000)));
 
     expect(exceeds).toBe(false);
-    expect(grown).toBeLessThan(8 * 1024 * 1024);
+    expect(allocated).toBeLessThan(1024 * 1024);
   });
 });
 
