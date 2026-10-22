@@ -10105,7 +10105,7 @@
             }
           }
         },
-        "summary": "Get group settings (announce / locked / ephemeral timer)",
+        "summary": "Get group settings (announce / locked / ephemeral timer / member-add mode)",
         "tags": [
           "groups"
         ]
@@ -10224,7 +10224,7 @@
             }
           }
         },
-        "summary": "Update group settings (announce / locked / ephemeral timer)",
+        "summary": "Update group settings (announce / locked / ephemeral timer / member-add mode)",
         "tags": [
           "groups"
         ]

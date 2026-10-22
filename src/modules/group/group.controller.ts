@@ -158,7 +158,7 @@ export class GroupController {
 
   @ChatScoped('fenced')
   @Get(':groupId/settings')
-  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiResponse({ status: 200, description: 'Group settings', type: GroupSettingsResponseDto })
@@ -180,7 +180,7 @@ export class GroupController {
   @ChatScoped('fenced')
   @Put(':groupId/settings')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })

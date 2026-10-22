@@ -40,6 +40,14 @@ describe('GroupController join + settings', () => {
     expect(service.updateGroupSettings).toHaveBeenCalledWith('s1', 'g1', dto);
   });
 
+  it.each(['getSettings', 'updateSettings'] as const)('%s summary names the member-add mode it carries', method => {
+    const handler = Object.getOwnPropertyDescriptor(GroupController.prototype, method)?.value as object;
+    const op = Reflect.getMetadata('swagger/apiOperation', handler) as { summary: string };
+    expect(op.summary).toBe(
+      `${method === 'getSettings' ? 'Get' : 'Update'} group settings (announce / locked / ephemeral timer / member-add mode)`,
+    );
+  });
+
   it('PUT :groupId/settings propagates a service rejection (empty patch / 501 passthrough)', async () => {
     const { controller } = build({
       updateGroupSettings: jest
