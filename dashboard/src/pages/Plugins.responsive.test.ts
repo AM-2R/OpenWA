@@ -7,8 +7,8 @@ const rules = readRules(new URL('./Plugins.css', import.meta.url));
 // The Upload/Catalog pill in the install modal header. Centred with absolute positioning it took no part in
 // flex-wrap, so on a phone it was drawn over the title ("Insta" and a tab), and it took no part in sizing the
 // title either, so a long translated title (Telugu) ran under it at every width. From 700px the header is three
-// tracks with the pill in the middle one, so the title is cut inside its own track; below that the pill takes a
-// row of its own.
+// tracks with the pill in the middle one, so the title is cut inside its own track; below that the title has a row
+// of its own and the pill shares the next one with the close button.
 const HEADER = '.plugins-page .install-modal .modal-header';
 const PILL = `${HEADER} .install-tabs`;
 
@@ -37,12 +37,52 @@ test('the close button stays in the end track and the title is cut inside its ow
   assert.equal(decl(title.body, 'text-overflow'), 'ellipsis');
 });
 
-test('below that the install tabs wrap to a row of their own', () => {
+// Keyboard focus follows the DOM order (title, tabs, close button), so no rule may draw the header in another order:
+// an order, a reversed flex direction or an explicit grid placement would put the close button, or a tab, where focus
+// does not go next.
+test('no rule draws the install header in a different order than its markup', () => {
+  const placed = rules.filter(
+    r =>
+      r.selectors.some(s => s === HEADER || s.startsWith(`${HEADER} `)) &&
+      ['order', 'grid-area', 'grid-row', 'grid-column', 'grid-template-areas'].some(p => decl(r.body, p) !== undefined),
+  );
+  assert.deepEqual(
+    placed.map(r => `${r.media || 'base'}: ${r.selectors.join(', ')}`),
+    [],
+  );
+  const flow = rules.filter(r => r.selectors.includes(HEADER) && /reverse/.test(decl(r.body, 'flex-direction') ?? ''));
+  assert.deepEqual(flow, []);
+});
+
+test('below 700px the title has a row of its own and the tabs share the next one with the close button', () => {
+  const title = rules.find(r => !r.media && r.selectors.includes(`${HEADER} h2`));
+  assert.ok(title, 'no title rule');
+  assert.equal(decl(title.body, 'flex'), '1 1 100%');
   const base = rules.find(r => r.selectors.includes(PILL) && !r.media);
   assert.ok(base, 'no base rule for the pill');
-  assert.equal(decl(base.body, 'position'), undefined);
-  assert.equal(decl(base.body, 'width'), '100%');
-  assert.equal(decl(base.body, 'order'), '3');
+  assert.equal(decl(base.body, 'width'), undefined, 'a full-width pill would push the close button to another row');
+  assert.equal(decl(base.body, 'flex'), '1 1 0');
+  // Only on a phone: in the grid a zero minimum would let the middle track shrink below the tabs.
+  assert.equal(decl(base.body, 'min-width'), undefined);
+  const phone = rules.find(r => r.media === '@media (max-width: 699.98px)' && r.selectors.includes(PILL));
+  assert.ok(phone, 'no phone rule for the pill');
+  assert.equal(decl(phone.body, 'min-width'), '0');
+});
+
+// Each tab keeps 128px from 700px, where the header has room. On a phone the pill shares its row with the close
+// button, which at 320px leaves 244px minus the button: two 128px tabs overflowed the pill by 12px before the button
+// was counted, so the tabs shrink and their labels wrap.
+test('the tabs lose their 128px minimum below 700px', () => {
+  const tab = rules.find(
+    r => !r.media && r.selectors.includes('.plugins-page .install-tab') && decl(r.body, 'min-width'),
+  );
+  assert.ok(tab, 'no base rule for the tab');
+  assert.equal(decl(tab.body, 'min-width'), '128px');
+  const phone = rules.filter(
+    r => r.media === '@media (max-width: 699.98px)' && r.selectors.includes('.plugins-page .install-tab'),
+  );
+  assert.equal(phone.length, 1, 'expected one phone rule for the tab');
+  assert.equal(decl(phone[0].body, 'min-width'), '0');
 });
 
 // Beside the 280px status rail the card grid keeps a 320px minimum track. With the sidebar open that needs 948px

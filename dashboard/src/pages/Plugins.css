@@ -851,9 +851,9 @@
   border-radius: 10px;
 }
 
-/* Three-item header (title + tabs + close). On a narrow viewport the tabs take a row of their own under the
-   title and the close button (flex-wrap on the header), without the standalone-row margins that would push
-   the title up or leave a gap. */
+/* Three-item header (title + tabs + close), drawn in the order of its markup so that keyboard focus runs the way the
+   eye reads. On a narrow viewport the title has a row of its own (flex-wrap on the header) and the tabs share the
+   next one with the close button, without the standalone-row margins that would push the title up or leave a gap. */
 .plugins-page .install-modal .modal-header {
   flex-wrap: wrap;
   row-gap: 0.75rem;
@@ -861,8 +861,7 @@
 
 .plugins-page .install-modal .modal-header .install-tabs {
   margin: 0;
-  order: 3;
-  width: 100%;
+  flex: 1 1 0;
 }
 
 /* From 700px the header is three tracks: the middle one as wide as the tabs, the outer two sharing the rest
@@ -877,8 +876,6 @@
   }
 
   .plugins-page .install-modal .modal-header .install-tabs {
-    order: 0;
-    width: auto;
     /* Out of the row height, so a tall pill (a label that wraps) does not grow the header, and centered in
        the header's padding box (1.5rem above the row, 1rem below it) as the absolute positioning it
        replaces had it: 0.25rem above the center of the row. */
@@ -891,6 +888,7 @@
 }
 
 .plugins-page .install-modal .modal-header h2 {
+  flex: 1 1 100%;
   min-width: 0;
   /* Truncate an over-long title rather than collide with the tabs; the modal title is short by
      design ("Install a plugin"), so this only ever bites an unusually long translation. */
@@ -940,6 +938,19 @@
 .plugins-page .config-modal .modal-tab:not(.active):hover {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--text-primary);
+}
+
+/* On a phone the pill shares its row with the close button, which at 320px leaves less than two 128px tabs need, so
+   the pill and its tabs shrink and a long label wraps. */
+@media (max-width: 699.98px) {
+  .plugins-page .install-modal .modal-header .install-tabs {
+    min-width: 0;
+  }
+
+  .plugins-page .install-tab {
+    min-width: 0;
+    padding-inline: 0.6rem;
+  }
 }
 
 /* Sessions tab */
