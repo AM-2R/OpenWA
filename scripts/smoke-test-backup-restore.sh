@@ -2331,6 +2331,9 @@ refused_restore() {
 # The / cases matter most: a restore run as root in the container (docker exec) is the one that would
 # take the container's root. They run only where a check that broke would not act on / itself, which
 # holds while / cannot be written: the run then stops at its writability check, or at the first copy.
+# The exception is a data dir that is a link to /, whose safety snapshot lands in the link's own
+# directory, so the (am) cases that name a root spelling put a cp ahead of the real one that stops at
+# any source resolving to / (see am_root below).
 ROOT_SAFE=0
 if [ "$(id -u)" -ne 0 ] && [ ! -w / ]; then
   ROOT_SAFE=1
@@ -2374,6 +2377,47 @@ pass "(am) an OPENWA_DATA_DIR that is ., ./, .., ../, the workspace, a parent of
 if [ "$ROOT_SAFE" -eq 1 ]; then
   am_refused "$AM" "am: /" 'refusing unsafe OPENWA_DATA_DIR target: /' "$AM/work" "$ARCHIVE_AM" OPENWA_DATA_DIR=/
   pass "(am) / is refused as OPENWA_DATA_DIR"
+  # Every other spelling of the root gets past the literal list. Were it not refused, the restore would
+  # snapshot the data dir with cp -pRH, that is copy / into a directory inside it, until the disk is
+  # full. So these runs have a cp first on PATH that stops at a source resolving to /, with exit 97 and
+  # no copy at all, and a refusal that failed to come would show as that exit.
+  REAL_CP="$(command -v cp)"
+  mkdir -p "$AM/cpguard"
+  cat >"$AM/cpguard/cp" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  case "\$arg" in -*) continue ;; esac
+  real="\$(cd -P "\$arg" 2>/dev/null && pwd -P)"
+  if [ -n "\$real" ] && [ -z "\$(printf %s "\$real" | tr -d /)" ]; then
+    echo "cp: not copying the root directory (\$arg)" >&2
+    exit 97
+  fi
+done
+exec "$REAL_CP" "\$@"
+EOF
+  chmod +x "$AM/cpguard/cp"
+  # The shell passes over a cp it cannot run, on a noexec temp dir for one, and takes the real one, so
+  # show that the restore will find this cp (in a new shell, as the restore is: this one has cp hashed) and
+  # that it stops at /. The probe's destination can never be created, which keeps even a broken guard from
+  # copying anything.
+  if [ "$(PATH="$AM/cpguard:$PATH" sh -c 'command -v cp')" != "$AM/cpguard/cp" ]; then
+    fail "(am) the cp that guards the root cases cannot be run from $AM/cpguard"
+  fi
+  if "$AM/cpguard/cp" -pR / /dev/null/probe >/dev/null 2>&1; then
+    fail "(am) the cp that guards the root cases did not stop at /"
+  else
+    [ $? -eq 97 ] || fail "(am) the cp that guards the root cases did not stop at /"
+  fi
+  ln -s / "$AM/rootlink"
+  am_root() {
+    am_refused "$AM" "am: $1" "$AM_WORKSPACE" "$AM/work" "$ARCHIVE_AM" PATH="$AM/cpguard:$PATH" OPENWA_DATA_DIR="$2"
+  }
+  am_root "//" //
+  am_root "/." /.
+  am_root "/./" /./
+  am_root "/.." /..
+  am_root "link to /" "$AM/rootlink"
+  pass "(am) //, /., /./, /.. and a link to / are refused as OPENWA_DATA_DIR, before the archive is read"
 else
   echo "SKIP: (am) the / case, which needs a user who cannot write /"
 fi

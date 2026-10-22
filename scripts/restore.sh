@@ -110,8 +110,13 @@ case "$DATA_DIR" in
     exit 1
     ;;
 esac
+# The trailing / comes off the prefix wherever a resolved directory is matched as one: the root resolves to
+# "/", "$dir"/* is then //*, which no path matches, and every spelling of / that the list above misses
+# (//, /., /./, /.. or a link to /) would be taken for a directory the workspace is not under. Trimmed, the
+# pattern is /*, so the root is refused here as a parent of the workspace. The / is kept inside the quotes:
+# bash 5 does not match "${dir%/}"/* against anything when the trim leaves nothing, and bash 3 does.
 case "$RESOLVED_CWD/" in
-  "$RESOLVED_DATA_DIR"/*)
+  "${RESOLVED_DATA_DIR%/}/"*)
     log "ERROR: OPENWA_DATA_DIR must not be the workspace or one of its parent directories: $DATA_DIR"
     exit 1
     ;;
@@ -144,13 +149,13 @@ replace_tree() {
     exit 1
   fi
   case "$RESOLVED_CWD/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the workspace: $target_dir"
       exit 1
       ;;
   esac
   case "$RESOLVED_DATA_DIR/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the data directory: $target_dir"
       exit 1
       ;;
@@ -190,7 +195,7 @@ snapshot_external() {
   target="$1"
   external_snapshot=""
   case "$(resolve_path "$target")" in
-    "$RESOLVED_DATA_DIR"/*) return 0 ;;
+    "${RESOLVED_DATA_DIR%/}/"*) return 0 ;;
   esac
   [ -e "$target" ] || return 0
   snapshot_dir="${OPENWA_RESTORE_SNAPSHOT_DIR:-$(dirname "$target")}"
