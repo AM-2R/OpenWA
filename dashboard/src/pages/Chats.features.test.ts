@@ -2864,6 +2864,16 @@ test('Copy chat ID works where navigator.clipboard does not exist', async t => {
   assert.ok(!rtl.screen.queryByText('Could not copy to clipboard'));
 });
 
+test('Copy chat ID leaves keyboard focus on the room menu button when the fallback copy runs', async t => {
+  // A browser puts focus in the textarea that select() acts on; jsdom does not.
+  t.mock.method(window.HTMLTextAreaElement.prototype, 'select', function (this: HTMLTextAreaElement) {
+    this.focus();
+  });
+  await copyChatIdWith(t, true);
+  await rtl.screen.findByText('Chat ID copied');
+  assert.equal(focusedName(), 'More actions', 'focus fell to the page');
+});
+
 test('Copy chat ID says so when the copy did not happen', async t => {
   const copy = await copyChatIdWith(t, false);
   await rtl.screen.findByText('Could not copy to clipboard');
