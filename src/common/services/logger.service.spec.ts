@@ -280,6 +280,18 @@ describe('LoggerService', () => {
       expect(parsed()).toMatchObject({ message: 'saved', metadata: '[Unreadable]' });
     });
 
+    it('writes a property named __proto__ as a field, redacted, without touching any prototype', () => {
+      logger.log(
+        'saved',
+        JSON.parse('{"__proto__":{"a":1,"password":"value-proto"},"b":2}') as Record<string, unknown>,
+      );
+
+      const line = getRawOutput(consoleSpy);
+      expect(line).toContain('"__proto__":{"a":1,"password":"[REDACTED]"}');
+      expect(line).not.toContain('value-proto');
+      expect(({} as Record<string, unknown>).a).toBeUndefined();
+    });
+
     it('never calls a toJSON on the metadata, so it cannot write what the redaction removed', () => {
       logger.log('saved', { entity: { id: 1, toJSON: () => ({ password: 'value-json' }) } });
 
@@ -890,6 +902,33 @@ describe('redactSecrets', () => {
 
     expect(copy.error).toMatchObject({ name: 'Error', message: 'boom', token: '[REDACTED]', attempts: '5' });
     expect(copy.error.stack).toContain('Error: boom');
+  });
+
+  // JSON.parse makes a property named __proto__ an ordinary own property; the copy must define it as one too.
+  describe('a property named __proto__', () => {
+    const parsed = (): unknown => JSON.parse('{"__proto__":{"a":1,"password":"value-proto"},"b":2}');
+
+    it('is kept as a field of the copy, with the credentials under it redacted', () => {
+      const copy = redactSecrets(parsed()) as Record<string, unknown>;
+
+      expect(Object.keys(copy)).toEqual(['__proto__', 'b']);
+      expect(JSON.stringify(copy)).toBe('{"__proto__":{"a":1,"password":"[REDACTED]"},"b":2}');
+      expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+      expect(copy.a).toBeUndefined();
+    });
+
+    it('is kept at every depth, in an array, and replaced when it names a credential', () => {
+      const deep = JSON.stringify(redactSecrets({ a: { b: { c: { d: { e: [parsed()] } } } } }));
+
+      expect(deep).toContain('"__proto__":{"a":1,"password":"[REDACTED]"}');
+      expect(deep).not.toContain('value-proto');
+      expect(redactSecrets(parsed(), { isSecretKey: key => key === '__proto__', marker: 'M' })).toEqual(
+        expect.objectContaining({ b: 2 }),
+      );
+      expect(JSON.stringify(redactSecrets(parsed(), { isSecretKey: key => key === '__proto__', marker: 'M' }))).toBe(
+        '{"__proto__":"M","b":2}',
+      );
+    });
   });
 
   it('copies an array as a plain array, whatever class it is an instance of', () => {

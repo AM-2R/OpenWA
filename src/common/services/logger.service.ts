@@ -104,7 +104,11 @@ export function redactSecrets(value: unknown, options: RedactOptions = {}): unkn
       const val = source[key];
       // JSON.stringify would call an own toJSON on the copy and write whatever it returns, redacted or not.
       if (key === 'toJSON' && typeof val === 'function') continue;
-      out[key] = isSecretKey(key) ? marker : copy(val);
+      const written = isSecretKey(key) ? marker : copy(val);
+      // Assigning to __proto__ would set the prototype of the copy; an own property of that name is defined instead.
+      if (key === '__proto__')
+        Object.defineProperty(out, key, { value: written, enumerable: true, writable: true, configurable: true });
+      else out[key] = written;
     }
     return out;
   };

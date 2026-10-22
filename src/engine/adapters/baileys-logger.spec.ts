@@ -195,6 +195,14 @@ describe('createBaileysLogger writes any record the library hands it', () => {
     expect(deep).toMatchObject({ a: { b: { c: { d: { e: { file: '[Truncated]' } } } } }, msg: 'x' });
   });
 
+  it('writes a property named __proto__ as a field, with the credentials under it redacted', () => {
+    const line = JSON.stringify(write(JSON.parse('{"__proto__":{"a":1,"password":"value-proto"},"b":2}'), 'm'));
+
+    expect(line).toContain('"__proto__":{"a":1,"password":"[redacted]"}');
+    expect(line).toContain('"b":2');
+    expect(line).not.toContain('value-proto');
+  });
+
   it('counts a typed array by the elements it has, not by the length it claims', () => {
     const file = Object.defineProperty(new Uint8Array(1_000_001), 'length', { value: 0 });
 
