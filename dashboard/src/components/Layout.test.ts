@@ -12,6 +12,28 @@ let RoleContext: (typeof import('../hooks/useRole.tsx'))['RoleContext'];
 // Every URL the layout asked for.
 const requested: string[] = [];
 
+// The window's width in CSS px. A media query sees it as it is; innerWidth is rounded to a whole pixel.
+let cssWidth = 1024;
+const changeListeners = new Set<{ query: string; last: boolean; listener: () => void }>();
+const answers = (query: string): boolean => {
+  const max = /\(max-width:\s*(\d+)px\)/.exec(query);
+  return max !== null && cssWidth <= Number(max[1]);
+};
+/** Resizes the window as a browser does: innerWidth and resize, and a change on every query whose answer flipped. */
+function resizeTo(width: number): void {
+  rtl.act(() => {
+    cssWidth = width;
+    window.innerWidth = Math.round(width);
+    window.dispatchEvent(new window.Event('resize'));
+    for (const entry of changeListeners) {
+      const now = answers(entry.query);
+      if (now === entry.last) continue;
+      entry.last = now;
+      entry.listener();
+    }
+  });
+}
+
 /** The layout for a key of `userRole` (admin by default), restricted to selected sessions when `scoped` is set. */
 function renderLayout(
   scoped = false,
@@ -42,12 +64,17 @@ before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
   await installJsdomGlobals();
   (globalThis as Record<string, unknown>).__APP_VERSION__ = '0.0.0-test';
-  // jsdom has no matchMedia; the theme hook reads it for the system preference.
+  // jsdom has no matchMedia; the theme hook reads it for the system preference, and the layout for the phone width.
   window.matchMedia = ((query: string) => ({
-    matches: false,
+    get matches() {
+      return answers(query);
+    },
     media: query,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
+    addEventListener: (_type: string, listener: () => void) =>
+      changeListeners.add({ query, last: answers(query), listener }),
+    removeEventListener: (_type: string, listener: () => void) => {
+      for (const entry of changeListeners) if (entry.listener === listener) changeListeners.delete(entry);
+    },
   })) as unknown as typeof window.matchMedia;
   globalThis.fetch = ((input: RequestInfo | URL) => {
     requested.push(String(input));
@@ -87,7 +114,6 @@ test('the theme button can return to following the system', () => {
 // Collapsing is a desktop preference: the phone drawer has no collapse control, so a flag left over from a wider
 // window must not strip its labels, and the window widening again must find the preference where it was left.
 test('a collapsed sidebar shows its labels in the phone drawer and collapses again on desktop', () => {
-  const width = window.innerWidth;
   try {
     const { container } = renderLayout();
     const sidebar = container.querySelector('aside.sidebar')!;
@@ -95,8 +121,7 @@ test('a collapsed sidebar shows its labels in the phone drawer and collapses aga
     assert.ok(sidebar.classList.contains('collapsed'));
     assert.equal(container.querySelectorAll('.nav-item span').length, 0, 'the collapsed desktop sidebar shows labels');
 
-    window.innerWidth = 500;
-    rtl.fireEvent(window, new window.Event('resize'));
+    resizeTo(500);
     assert.ok(sidebar.classList.contains('mobile'));
     assert.ok(!sidebar.classList.contains('collapsed'), 'the phone drawer kept the collapsed class');
     const labels = Array.from(container.querySelectorAll('.nav-item')).map(item => item.textContent);
@@ -105,11 +130,14 @@ test('a collapsed sidebar shows its labels in the phone drawer and collapses aga
     assert.equal(container.querySelector('.logout-btn')!.textContent, 'Logout');
     assert.ok(!container.querySelector('main')!.classList.contains('expanded'));
 
-    window.innerWidth = width;
-    rtl.fireEvent(window, new window.Event('resize'));
+    // A drawer left open closes when the window widens, so narrowing it again does not bring back the overlay.
+    rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
+    assert.ok(sidebar.classList.contains('open'));
+    resizeTo(1024);
     assert.ok(sidebar.classList.contains('collapsed'), 'the desktop preference was lost');
+    assert.ok(!sidebar.classList.contains('open'), 'the drawer stayed open on desktop');
   } finally {
-    window.innerWidth = width;
+    resizeTo(1024);
   }
 });
 
@@ -117,9 +145,8 @@ test('a collapsed sidebar shows its labels in the phone drawer and collapses aga
 // not expose whether the drawer was open, and Escape (the one way a keyboard or switch user dismisses an overlay) did
 // nothing.
 test('the phone menu button names its state and Escape closes the drawer and returns focus to it', () => {
-  const width = window.innerWidth;
   try {
-    window.innerWidth = 390;
+    resizeTo(390);
     const { container } = renderLayout();
     const sidebar = container.querySelector('aside.sidebar')!;
     const button = container.querySelector<HTMLButtonElement>('.mobile-menu-btn')!;
@@ -150,16 +177,15 @@ test('the phone menu button names its state and Escape closes the drawer and ret
     rtl.fireEvent.keyDown(document, { key: 'Escape' });
     assert.ok(document.activeElement !== button, 'Escape moved focus while the drawer was closed');
   } finally {
-    window.innerWidth = width;
+    resizeTo(1024);
   }
 });
 
 // Closed, the phone drawer is only moved off screen: its links stayed in the tab order, so a keyboard user stepped
 // through a dozen invisible stops after the menu button. Inert takes them out until the drawer opens.
 test('the closed phone drawer is inert, the open one and the desktop sidebar are not', () => {
-  const width = window.innerWidth;
   try {
-    window.innerWidth = 390;
+    resizeTo(390);
     const phone = renderLayout();
     const drawer = phone.container.querySelector('aside.sidebar')!;
     assert.ok(drawer.hasAttribute('inert'), 'the closed drawer is still focusable');
@@ -169,19 +195,41 @@ test('the closed phone drawer is inert, the open one and the desktop sidebar are
     assert.ok(drawer.hasAttribute('inert'), 'the drawer is focusable again after closing');
     phone.unmount();
 
-    window.innerWidth = 1024;
+    resizeTo(1024);
     const desktop = renderLayout();
     assert.ok(!desktop.container.querySelector('aside.sidebar')!.hasAttribute('inert'), 'the desktop sidebar is inert');
   } finally {
-    window.innerWidth = width;
+    resizeTo(1024);
+  }
+});
+
+// Between 767 and 767.5 CSS px (110% zoom of an 844px window, 125% of a 959px one) innerWidth reads 767 while the
+// phone styles' (max-width: 767px) does not match. The page draws the desktop sidebar there, and a width test in
+// script made it inert: no link, language, theme or logout button could be clicked or reached with Tab.
+test('the sidebar follows the phone media query, not the rounded window width', () => {
+  try {
+    resizeTo(767.27);
+    const { container } = renderLayout();
+    assert.equal(window.innerWidth, 767);
+    const sidebar = container.querySelector('aside.sidebar')!;
+    assert.ok(!sidebar.hasAttribute('inert'), 'the desktop sidebar is inert');
+    assert.ok(!sidebar.classList.contains('mobile'), 'the desktop sidebar has the phone class');
+    assert.ok(container.querySelector('.mobile-header') === null, 'a phone header beside the desktop sidebar');
+
+    resizeTo(766.8);
+    assert.equal(window.innerWidth, 767);
+    assert.ok(sidebar.classList.contains('mobile'), 'the phone width kept the desktop sidebar');
+    assert.ok(sidebar.hasAttribute('inert'), 'the closed phone drawer is focusable');
+    assert.ok(container.querySelector('.mobile-header'), 'no phone header at the phone width');
+  } finally {
+    resizeTo(1024);
   }
 });
 
 // The language menu lives in the drawer footer; Escape dismisses the innermost overlay first.
 test('Escape closes the open language menu before the phone drawer', () => {
-  const width = window.innerWidth;
   try {
-    window.innerWidth = 390;
+    resizeTo(390);
     const { container } = renderLayout();
     const sidebar = container.querySelector('aside.sidebar')!;
     rtl.fireEvent.click(container.querySelector('.mobile-menu-btn')!);
@@ -195,7 +243,7 @@ test('Escape closes the open language menu before the phone drawer', () => {
     rtl.fireEvent.keyDown(document, { key: 'Escape' });
     assert.ok(!sidebar.classList.contains('open'), 'a second Escape left the drawer open');
   } finally {
-    window.innerWidth = width;
+    resizeTo(1024);
   }
 });
 

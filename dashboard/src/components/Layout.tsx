@@ -53,6 +53,11 @@ const allNavItems = [
 
 const themeIcons = { light: Sun, dark: Moon, system: Monitor };
 
+// The phone layout switches on the query the phone styles in Layout.css sit under. A width test in script disagreed
+// with them at a fractional width: at 110% zoom the window width rounds 767.3 CSS px to 767, which the query does
+// not match, so the desktop sidebar was drawn and made inert.
+const MOBILE_QUERY = '(max-width: 767px)';
+
 export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
   const { theme, toggleTheme } = useTheme();
@@ -70,7 +75,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
   // Collapsing is a desktop preference: the phone drawer has no collapse control, so it never renders collapsed,
   // and the flag stays as it was for when the window widens again.
   const collapsed = isCollapsed && !isMobile;
@@ -85,13 +90,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (!mobile) setIsMobileOpen(false);
+    const phone = window.matchMedia(MOBILE_QUERY);
+    const handleChange = () => {
+      setIsMobile(phone.matches);
+      if (!phone.matches) setIsMobileOpen(false);
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    phone.addEventListener('change', handleChange);
+    return () => phone.removeEventListener('change', handleChange);
   }, []);
 
   useEffect(() => {

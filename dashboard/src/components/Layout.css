@@ -340,6 +340,8 @@
   display: none;
 }
 
+/* Layout.tsx switches to the phone layout on this same query (MOBILE_QUERY), so the drawer markup and these styles
+   agree at every width, a fractional one included. */
 @media (max-width: 767px) {
   .mobile-header {
     display: flex;

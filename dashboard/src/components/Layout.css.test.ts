@@ -46,15 +46,18 @@ const decl = (body: string, prop: string): string | undefined =>
   new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`).exec(body)?.[1].trim();
 const find = (selector: string): Rule[] => all.filter(r => r.selectors.includes(selector));
 
-// Layout.tsx switches to the mobile layout below this width.
-const mobileBelow = Number(/innerWidth < (\d+)/.exec(tsx)?.[1]);
+// Layout.tsx switches to the phone layout on this media query.
+const mobileQuery = /const MOBILE_QUERY = '([^']+)'/.exec(tsx)?.[1];
 
-test('every max-width query in Layout.css switches at the same width as the mobile layout', () => {
-  assert.ok(mobileBelow > 0, 'Layout.tsx no longer names its mobile threshold');
-  const widths = [...css.matchAll(/max-width:\s*(\d+)px/g)].map(m => Number(m[1]));
-  assert.ok(widths.length > 0);
-  for (const w of widths)
-    assert.equal(w, mobileBelow - 1, `max-width: ${w}px disagrees with innerWidth < ${mobileBelow}`);
+// A width test in script rounds: at 110% zoom innerWidth reads 767 for a 767.3px window, which (max-width: 767px)
+// does not match, and the desktop sidebar was drawn inert. One query for both leaves no width where they disagree.
+test('every media query in Layout.css is the one Layout.tsx switches to the phone layout on', () => {
+  assert.ok(mobileQuery, 'Layout.tsx no longer names its phone query');
+  assert.match(tsx, /matchMedia\(MOBILE_QUERY\)/);
+  assert.doesNotMatch(tsx, /innerWidth/, 'Layout.tsx tests the window width in script again');
+  const queries = [...css.matchAll(/@media\s*([^{]+?)\s*\{/g)].map(m => m[1]);
+  assert.ok(queries.length > 0);
+  for (const query of queries) assert.equal(query, mobileQuery);
 });
 
 test('the closed mobile sidebar slides off the right edge under RTL, and opens back in', () => {
