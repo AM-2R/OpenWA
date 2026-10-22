@@ -15,6 +15,7 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { InfraStatus, SavedConfig, Engine } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
+import { EXPECTED_MODE, FILE_STATES, PIN_STATES } from '../../../test/fixtures/builtin-mode-cases.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -994,6 +995,97 @@ test('no built-in note beside a pending database type', async () => {
   assert.equal(screen.queryByText(PENDING_BUILT_IN_NOTE) === null, true, 'a flag note beside a pending type');
   assert.equal(screen.queryByText(PENDING_EXTERNAL_NOTE) === null, true, 'a flag note beside a pending type');
   screen.getByText(PENDING_RESTART_NOTE);
+});
+
+// ── One rule for every saved and pinned state ────────────────────────────────
+// GET /config answers the saved built-in mode (builtIn, builtInSet) from the file and the environment pins; the
+// table in test/fixtures/builtin-mode-cases.ts is what the controller specs assert it against. Here every one of
+// those answers, with the service running bundled and running external, is rendered into the page. The page
+// follows the saved mode when builtInSet says one is saved and what runs otherwise, so the toggle, the pending
+// note under it, the data-backend warning after a save and the flag the save sends must all come from the same
+// shown mode. The three services are given different combinations in each render, so one reading another's
+// flag or answer shows up.
+
+const COMBOS = FILE_STATES.flatMap(file =>
+  PIN_STATES.flatMap(pin => [true, false].map(running => ({ file, pin, running, mode: EXPECTED_MODE[file][pin] }))),
+);
+type Combo = (typeof COMBOS)[number];
+const comboLabel = (c: Combo) => `${c.file}/${c.pin}/${c.running ? 'bundled' : 'external'}`;
+const shownMode = (c: Combo) => (c.mode.builtInSet ? c.mode.builtIn : c.running);
+
+function builtInNoteOf(container: HTMLElement, labelText: string): string | null {
+  const next = toggleInput(container, labelText).closest('.toggle-row')?.nextElementSibling;
+  return next?.classList.contains('env-pin-note') ? (next.textContent?.trim() ?? null) : null;
+}
+
+COMBOS.forEach((_, i) => {
+  const database = COMBOS[i];
+  const redis = COMBOS[(i + 7) % COMBOS.length];
+  const storage = COMBOS[(i + 13) % COMBOS.length];
+  test(`the built-in toggles, notes and warnings follow one rule: database ${comboLabel(database)}, redis ${comboLabel(redis)}, storage ${comboLabel(storage)}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: {
+        ...INFRA_STATUS,
+        database: { connected: true, type: 'postgres', host: 'shared-db-host', builtIn: database.running },
+        redis: { enabled: true, connected: true, host: 'redis.internal', port: 6379, builtIn: redis.running },
+        storage: { type: 's3', bucket: 'media', builtIn: storage.running, s3Available: true },
+      },
+      saved: {
+        ...SAVED_CONFIG,
+        database: { ...SAVED_CONFIG.database, ...database.mode },
+        redis: { enabled: true, host: 'redis.internal', port: '6379', passwordSet: false, ...redis.mode },
+        storage: { ...SAVED_CONFIG.storage, type: 's3', ...storage.mode },
+      },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+
+    const rows = [
+      { combo: database, label: 'Use Built-in PostgreSQL Container' },
+      { combo: redis, label: 'Use Built-in Redis Container' },
+      { combo: storage, label: 'Use Built-in MinIO Container' },
+    ];
+    for (const { combo, label } of rows) {
+      assert.equal(toggleInput(container, label).checked, shownMode(combo), `${label} toggle`);
+      const note =
+        !combo.mode.builtInSet || combo.mode.builtIn === combo.running
+          ? null
+          : combo.mode.builtIn
+            ? PENDING_BUILT_IN_NOTE
+            : PENDING_EXTERNAL_NOTE;
+      assert.equal(builtInNoteOf(container, label), note, `${label} note`);
+    }
+
+    fireEvent.click(toggleInput(container, 'Headless Mode'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+    const dialog = await screen.findByRole('dialog');
+
+    const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+      database?: { builtIn?: boolean };
+      redis?: { builtIn?: boolean };
+      storage?: { builtIn?: boolean };
+    };
+    assert.deepEqual(
+      [body.database?.builtIn, body.redis?.builtIn, body.storage?.builtIn],
+      [shownMode(database), shownMode(redis), shownMode(storage)],
+      'the flags the save sends',
+    );
+    // Only a database or storage whose shown mode differs from what runs starts empty after the restart.
+    assert.equal(
+      within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) !== null,
+      shownMode(database) !== database.running,
+      'the database warning',
+    );
+    assert.equal(
+      within(dialog).queryByText(STORAGE_WARNING, { exact: false }) !== null,
+      shownMode(storage) !== storage.running,
+      'the storage warning',
+    );
+  });
 });
 
 test('the pending-restart note survives a successful save', async () => {

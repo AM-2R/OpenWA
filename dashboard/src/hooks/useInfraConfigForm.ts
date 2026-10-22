@@ -60,9 +60,10 @@ export interface InfraConfigForm {
 }
 
 /**
- * The Use Built-in flag as saved. A flag the config does not store says nothing (a Compose deployment that pins
- * DATABASE_HOST=postgres, REDIS_HOST=redis or S3_ENDPOINT never writes it), so what runs stands in for it: there
- * is no pending switch, and a save keeps sending the mode that runs.
+ * The Use Built-in flag as saved. When `builtInSet` is false the config states no mode for the service: a host the
+ * environment pins decides it, the file does not select the service (the first boot writes every flag as false), or
+ * nothing is saved. What runs stands in for it then: there is no pending switch, and a save keeps sending the mode
+ * that runs.
  */
 export const savedBuiltIn = (saved: { builtIn: boolean; builtInSet: boolean }, running: boolean): boolean =>
   saved.builtInSet ? saved.builtIn : running;

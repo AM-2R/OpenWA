@@ -182,8 +182,8 @@ const shownFlags = (form: ReturnType<typeof renderForm>['result']['current']) =>
   form.storageConfig.builtIn,
 ];
 
-// A deployment that pins DATABASE_HOST=postgres (REDIS_HOST=redis, S3_ENDPOINT) in .env never writes the flags:
-// /config reports builtIn false and builtInSet false, and only /status knows a bundled container runs.
+// A service whose mode the config does not state (a host pinned in .env, or the first-boot defaults): /config answers
+// builtInSet false, and only /status knows a bundled container runs.
 const UNSTORED_BUILTIN: SavedConfig = {
   ...SAVED,
   database: { ...SAVED.database, builtIn: false, builtInSet: false },
