@@ -50,6 +50,7 @@ import {
 } from './session-engine-lifecycle.service';
 import { SessionOwnershipService } from './session-ownership.service';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
+import { ListingMemo } from '../../common/utils/listing-memo';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -154,6 +155,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private readonly startReservations = new Map<string, number>();
   /** Ids whose claim a failed start left to another start in flight; the last start out hands it back. */
   private readonly releaseOwed = new Set<string>();
+  /** The sorted chat listing the pages of one walk share. Every chat write below drops it. */
+  private readonly chatListings = new ListingMemo<ChatSummary>();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -181,7 +184,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // source the reconnect scheduler and the takeover sweep consult.
     @Optional()
     private readonly shutdownService?: ShutdownService,
-  ) {}
+  ) {
+    this.engineRegistry.onRetire(id => this.chatListings.drop(id));
+  }
 
   /**
    * True from the start of the shutdown drain. An engine launched during the drain would be torn
@@ -1109,18 +1114,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Every chat for a session, most-recent first, WITHOUT the response window. Callers that must
    * filter before paging (a chat-restricted API key) use this, then paginate themselves: filtering
    * after paginate() would hand back short or empty pages for an allowed chat past the window.
+   * `offset` is the window the caller is about to take: a later page reuses the list its walk's
+   * first page read a few seconds ago (see ListingMemo).
    */
-  async listChats(id: string): Promise<ChatSummary[]> {
+  async listChats(id: string, offset?: number): Promise<ChatSummary[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
     // Most-recent first. Sorting before the cap means a capped response is the N newest chats (what
     // clients show first) rather than an arbitrary slice.
-    return [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return this.chatListings.read(id, offset, async () =>
+      [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
+    );
   }
 
   async getChats(id: string, opts: ListOptions = {}): Promise<ChatSummary[]> {
-    return paginate(await this.listChats(id), opts.limit, opts.offset);
+    return paginate(await this.listChats(id, opts.offset), opts.limit, opts.offset);
   }
 
   /**
@@ -1169,7 +1178,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.sendSeen(chatId, messageIds, await this.groupAuthors(id, chatId, messageIds));
+    const authors = await this.groupAuthors(id, chatId, messageIds);
+    return engine.sendSeen(chatId, messageIds, authors).finally(() => this.chatListings.drop(id));
   }
 
   /**
@@ -1203,7 +1213,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.markUnread(chatId);
+    return engine.markUnread(chatId).finally(() => this.chatListings.drop(id));
   }
 
   /**
@@ -1216,7 +1226,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.requireEngine(id);
 
     const cutoff = new Date();
-    const ok = await engine.clearChatMessages(chatId);
+    const ok = await engine.clearChatMessages(chatId).finally(() => this.chatListings.drop(id));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
   }
@@ -1230,7 +1240,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.archiveChat(chatId, archive);
+    return engine.archiveChat(chatId, archive).finally(() => this.chatListings.drop(id));
   }
 
   /**
@@ -1242,7 +1252,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.muteChat(chatId, muteUntil);
+    return engine.muteChat(chatId, muteUntil).finally(() => this.chatListings.drop(id));
   }
 
   /**
@@ -1253,7 +1263,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.pinChat(chatId, pin);
+    return engine.pinChat(chatId, pin).finally(() => this.chatListings.drop(id));
   }
 
   /** Delete a chat. On success the gateway's stored copies of its messages are removed too. */
@@ -1262,7 +1272,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.requireEngine(id);
 
     const cutoff = new Date();
-    const ok = await engine.deleteChat(chatId);
+    const ok = await engine.deleteChat(chatId).finally(() => this.chatListings.drop(id));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
   }

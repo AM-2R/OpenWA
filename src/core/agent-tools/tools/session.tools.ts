@@ -55,7 +55,11 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
         if (!chatScope?.isRestricted(apiKey)) {
           return session.getChats(input.sessionId, { limit: input.limit, offset: input.offset });
         }
-        const visible = await chatScope.filter(apiKey, await session.listChats(input.sessionId), chat => chat.id);
+        const visible = await chatScope.filter(
+          apiKey,
+          await session.listChats(input.sessionId, input.offset),
+          chat => chat.id,
+        );
         return paginate(visible, input.limit, input.offset);
       },
     }),

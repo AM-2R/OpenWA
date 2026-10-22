@@ -589,8 +589,9 @@ export class SessionController {
     // This route is admitted to a chat-restricted key because it FILTERS to the key's chats rather
     // than naming one in the path. Filter BEFORE paginating: filtering the page instead would give a
     // restricted key a short or empty window while an allowed chat sat just past it.
-    const visible = await this.chatScope.filter(apiKey, await this.sessionService.listChats(id), chat => chat.id);
-    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
+    const skip = offset ? parseInt(offset, 10) : undefined;
+    const visible = await this.chatScope.filter(apiKey, await this.sessionService.listChats(id, skip), chat => chat.id);
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, skip);
   }
 
   @ChatScoped('fenced')

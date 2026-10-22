@@ -142,7 +142,7 @@ describe('chat-restricted tool calls', () => {
       t => t.name === 'SessionGetChats',
     )!;
     await expect(call(descriptor, { sessionId: 's1', limit: 1 })).resolves.toEqual([{ id: CHAT }]);
-    expect(listChats).toHaveBeenCalledWith('s1');
+    expect(listChats).toHaveBeenCalledWith('s1', undefined);
     expect(getChats).not.toHaveBeenCalled();
   });
 
@@ -163,7 +163,8 @@ describe('chat-restricted tool calls', () => {
           { sessionId: 's1', limit: 1, offset: 1 },
         ),
       ).resolves.toEqual([allowed[1]]);
-      expect(list).toHaveBeenCalledWith('s1');
+      // The contact listing takes the offset too, so the later pages of a walk share one engine read.
+      expect(list).toHaveBeenCalledWith(...(name === 'ContactFindAll' ? ['s1', 1] : ['s1']));
       expect(paged).not.toHaveBeenCalled();
     },
   );

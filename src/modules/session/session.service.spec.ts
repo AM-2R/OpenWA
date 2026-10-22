@@ -83,6 +83,9 @@ import {
   getSessionReconnectLoopAlertsTotal,
 } from '../../common/metrics/session-reconnect-metrics';
 import { AuditService } from '../audit/audit.service';
+import { SessionController } from './session.controller';
+import { ChatScopeService } from '../auth/chat-scope.service';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 
 /** The (action, context) pair of one audit call, typed so assertions do not fall back to `any`. */
 const auditCall = (mock: jest.Mock, index = 0): [string, { sessionId?: string; metadata?: Record<string, unknown> }] =>
@@ -8130,6 +8133,127 @@ describe('SessionService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.getChats('sess-uuid-1')).rejects.toThrow(BadRequestException);
+    });
+
+    describe('one engine read per walk', () => {
+      const chatsOf = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, i) => ({
+          id: `${prefix}${i}@c.us`,
+          name: `c${i}`,
+          isGroup: false,
+          unreadCount: 0,
+          timestamp: i,
+        }));
+      const walk = async (sessionId = 'sess-uuid-1') => {
+        const ids: string[] = [];
+        for (let offset = 0; ; offset += 1000) {
+          const page = await service.getChats(sessionId, { limit: 1000, offset });
+          ids.push(...page.map(c => c.id));
+          if (page.length < 1000) return ids;
+        }
+      };
+
+      beforeEach(async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        await service.start('sess-uuid-1');
+        mockEngine.getChats.mockResolvedValue(chatsOf('62', 5000));
+      });
+
+      it('reads the engine once for every page of one walk', async () => {
+        expect(new Set(await walk()).size).toBe(5000);
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads afresh for the first page of every walk', async () => {
+        await walk();
+        await walk();
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it('reads afresh for a later page once the listing has outlived its few seconds', async () => {
+        const now = Date.now();
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+        try {
+          await service.getChats('sess-uuid-1', { offset: 0 });
+          clock.mockReturnValue(now + 60_000);
+          await service.getChats('sess-uuid-1', { offset: 1000 });
+        } finally {
+          clock.mockRestore();
+        }
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it("never serves one session's listing to another session", async () => {
+        const other = { getChats: jest.fn().mockResolvedValue(chatsOf('63', 1500)) };
+        registry.set('sess-uuid-2', other as never);
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        const page = await service.getChats('sess-uuid-2', { offset: 1000 });
+        expect(other.getChats).toHaveBeenCalledTimes(1);
+        expect(page).toHaveLength(500);
+        expect(page.every(c => c.id.startsWith('63'))).toBe(true);
+      });
+
+      it('reads afresh from an engine that replaced the one the listing came from', async () => {
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        // The same engine object registered again stands in for any replacement: identity alone
+        // would not tell it apart, so only the retire notification can drop the listing.
+        registry.delete('sess-uuid-1');
+        registry.set('sess-uuid-1', mockEngine as never);
+        await service.getChats('sess-uuid-1', { offset: 1000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it('answers 400 for a stopped session instead of its last listing', async () => {
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        registry.delete('sess-uuid-1');
+        await expect(service.getChats('sess-uuid-1', { offset: 1000 })).rejects.toThrow(BadRequestException);
+      });
+
+      it.each([
+        ['sendSeen', (s: SessionService) => s.sendSeen('sess-uuid-1', '1@c.us')],
+        ['markUnread', (s: SessionService) => s.markUnread('sess-uuid-1', '1@c.us')],
+        ['clearChatMessages', (s: SessionService) => s.clearChatMessages('sess-uuid-1', '1@c.us')],
+        ['archiveChat', (s: SessionService) => s.archiveChat('sess-uuid-1', '1@c.us', true)],
+        ['muteChat', (s: SessionService) => s.muteChat('sess-uuid-1', '1@c.us', null)],
+        ['pinChat', (s: SessionService) => s.pinChat('sess-uuid-1', '1@c.us', true)],
+        ['deleteChat', (s: SessionService) => s.deleteChat('sess-uuid-1', '1@c.us')],
+      ])('a %s call makes the next page read afresh, even when it fails', async (method, write) => {
+        mockEngine.archiveChat = jest.fn().mockResolvedValue(true);
+        mockEngine.muteChat = jest.fn().mockResolvedValue(undefined);
+        mockEngine.pinChat = jest.fn().mockResolvedValue(true);
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        await write(service);
+        await service.getChats('sess-uuid-1', { offset: 1000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+
+        // A timed-out write may still have been applied, so a failure drops the listing too.
+        mockEngine[method] = jest.fn().mockRejectedValue(new Error('timed out'));
+        await expect(write(service)).rejects.toThrow('timed out');
+        await service.getChats('sess-uuid-1', { offset: 2000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(3);
+      });
+
+      it('filters every page for a chat-restricted key after an unrestricted walk read the listing', async () => {
+        const controller = new SessionController(
+          service,
+          { logInfo: jest.fn() } as unknown as AuditService,
+          new ChatScopeService(),
+        );
+        const allowed = ['623@c.us', '622500@c.us', '624999@c.us'];
+        const restricted = { allowedChats: allowed } as ApiKey;
+        expect(await controller.getChats('sess-uuid-1', { allowedChats: null } as ApiKey, '1000', '0')).toHaveLength(
+          1000,
+        );
+        const seen: string[] = [];
+        for (let offset = 0; offset < 4; offset++) {
+          const page = await controller.getChats('sess-uuid-1', restricted, '1', String(offset));
+          expect(page.every(c => allowed.includes(c.id))).toBe(true);
+          seen.push(...page.map(c => c.id));
+        }
+        expect(seen.sort()).toEqual([...allowed].sort());
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
     });
   });
 

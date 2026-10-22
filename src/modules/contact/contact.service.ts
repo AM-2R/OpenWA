@@ -1,8 +1,9 @@
 import { HttpException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { createLogger } from '../../common/services/logger.service';
-import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { Contact, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { paginate, ListOptions } from '../../common/utils/paginate';
+import { ListingMemo } from '../../common/utils/listing-memo';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { isIndividualWid, parseWaId, toNeutralJid } from '../../engine/identity/wa-id';
 
@@ -13,23 +14,31 @@ import { isIndividualWid, parseWaId, toNeutralJid } from '../../engine/identity/
 @Injectable()
 export class ContactService {
   private readonly logger = createLogger('ContactService');
+  /** The contact listing the pages of one walk share. Every addressbook or block write drops it. */
+  private readonly listings = new ListingMemo<Contact>();
 
-  constructor(private readonly engines: EngineRegistry) {}
+  constructor(private readonly engines: EngineRegistry) {
+    engines.onRetire(id => this.listings.drop(id));
+  }
 
   private getEngine(sessionId: string): IWhatsAppEngine {
     // EngineRegistry.require()'s default is this exact 400 "Session is not started".
     return this.engines.require(sessionId);
   }
 
-  /** Every contact WITHOUT the response window, for callers that filter before paging. */
-  listContacts(sessionId: string) {
+  /**
+   * Every contact WITHOUT the response window, for callers that filter before paging. `offset` is the
+   * window the caller is about to take: a later page reuses the list its walk's first page read.
+   */
+  listContacts(sessionId: string, offset?: number) {
     // getEngine throws synchronously (keeps the "session not started" guard a sync 400).
-    return this.getEngine(sessionId).getContacts();
+    const engine = this.getEngine(sessionId);
+    return this.listings.read(sessionId, offset, () => engine.getContacts());
   }
 
   getContacts(sessionId: string, opts: ListOptions = {}) {
     // The engine returns the full set and we bound the HTTP response window via paginate().
-    return this.listContacts(sessionId).then(contacts => paginate(contacts, opts.limit, opts.offset));
+    return this.listContacts(sessionId, opts.offset).then(contacts => paginate(contacts, opts.limit, opts.offset));
   }
 
   async getContactById(sessionId: string, contactId: string) {
@@ -139,7 +148,9 @@ export class ContactService {
    */
   blockContact(sessionId: string, contactId: string) {
     this.assertBlockable(contactId);
-    return this.getEngine(sessionId).blockContact(this.toAddressableId(contactId));
+    return this.getEngine(sessionId)
+      .blockContact(this.toAddressableId(contactId))
+      .finally(() => this.listings.drop(sessionId));
   }
 
   /**
@@ -219,16 +230,22 @@ export class ContactService {
 
   upsertContact(sessionId: string, contactId: string, firstName: string, lastName?: string) {
     this.assertAddressable(contactId);
-    return this.getEngine(sessionId).upsertContact(this.toAddressableId(contactId), firstName, lastName);
+    return this.getEngine(sessionId)
+      .upsertContact(this.toAddressableId(contactId), firstName, lastName)
+      .finally(() => this.listings.drop(sessionId));
   }
 
   deleteContact(sessionId: string, contactId: string) {
     this.assertAddressable(contactId);
-    return this.getEngine(sessionId).deleteContact(this.toAddressableId(contactId));
+    return this.getEngine(sessionId)
+      .deleteContact(this.toAddressableId(contactId))
+      .finally(() => this.listings.drop(sessionId));
   }
 
   unblockContact(sessionId: string, contactId: string) {
     this.assertBlockable(contactId);
-    return this.getEngine(sessionId).unblockContact(this.toAddressableId(contactId));
+    return this.getEngine(sessionId)
+      .unblockContact(this.toAddressableId(contactId))
+      .finally(() => this.listings.drop(sessionId));
   }
 }

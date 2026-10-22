@@ -50,8 +50,13 @@ export class ContactController {
     @CurrentApiKey() apiKey?: ApiKey,
   ) {
     // Filtered before paging so a chat-restricted key sees only its contacts, in full windows.
-    const visible = await this.chatScope.filter(apiKey, await this.contactService.listContacts(sessionId), c => c.id);
-    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
+    const skip = offset ? parseInt(offset, 10) : undefined;
+    const visible = await this.chatScope.filter(
+      apiKey,
+      await this.contactService.listContacts(sessionId, skip),
+      c => c.id,
+    );
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, skip);
   }
 
   @Get('profile-pictures')
