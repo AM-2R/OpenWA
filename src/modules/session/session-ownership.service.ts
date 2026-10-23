@@ -2,7 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { hostname } from 'node:os';
-import { In, IsNull, LessThan, Repository } from 'typeorm';
+import { In, IsNull, LessThan, LessThanOrEqual, MoreThan, Not, Repository } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { DateTransformer } from '../../common/transformers/date.transformer';
@@ -175,6 +175,40 @@ export class SessionOwnershipService {
       if (adopted) this.followAdoption(sessionId);
     } else this.logger.warn('Session is held by another node', { sessionId, nodeId: this.nodeId });
     return claimed;
+  }
+
+  /** Renew this node's claim and clear only the record this start read; never reclaim a released row. */
+  async prepareStart(sessionId: string, desiredState: Session['desiredState']): Promise<boolean> {
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + this.leaseTtlMs);
+    const { affected } = await this.sessions.update(
+      {
+        id: sessionId,
+        nodeId: this.nodeId,
+        leaseExpiresAt: MoreThan(now),
+        desiredState: desiredState ?? IsNull(),
+      },
+      { desiredState: null, leaseExpiresAt },
+    );
+    // Even a successful write can return too late to admit an engine on the renewal it wrote.
+    if (affected !== 1 || leaseExpiresAt <= new Date()) return false;
+    this.lastSeenLease.set(sessionId, leaseExpiresAt.getTime());
+    return true;
+  }
+
+  /** Record a stop and release an abandoned foreign claim without letting its heartbeat revive it. */
+  async stopExpiredForeignClaim(sessionId: string): Promise<boolean> {
+    const foreign = { id: sessionId, nodeId: Not(this.nodeId) };
+    const { affected } = await this.sessions.update(
+      [
+        { ...foreign, leaseExpiresAt: IsNull() },
+        { ...foreign, leaseExpiresAt: LessThanOrEqual(new Date()) },
+      ],
+      { desiredState: 'stopped', nodeId: null, claimedAt: null, leaseExpiresAt: null, nodeUrl: null },
+    );
+    if (affected !== 1) return false;
+    this.followAdoption(sessionId);
+    return true;
   }
 
   /**

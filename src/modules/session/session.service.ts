@@ -1057,6 +1057,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const session = await this.engineLifecycle.forceKill(id, {
         onReadFailed: withdraw,
         onEngineFound: () => this.takeStop(issue()),
+        recordStop: () => this.keepDown(id),
       });
       await this.releaseAfterTeardown(id);
       return session;
@@ -1072,11 +1073,26 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Persist the operator's stop so boot auto-start and the takeover sweep leave the session down. A delete's
-   * take-back clears only its own 'deleting', so this needs no ordering against one.
+   * Persist a stop only while no live peer owns the engine. The initial ownership read may predate a peer's
+   * claim; deciding in this write also fences a stop delayed until after that peer's start returned. A delete's
+   * record still accepts a stop: replacing 'deleting' cannot be mistaken for that record by a start or take-back.
    */
   private async keepDown(id: string): Promise<void> {
-    await this.sessionRepository.update(id, { desiredState: 'stopped' });
+    const where: string | FindOptionsWhere<Session>[] = this.ownership
+      ? [
+          { id, nodeId: IsNull() },
+          { id, nodeId: this.ownership.nodeId },
+          { id, desiredState: 'deleting' },
+        ]
+      : id;
+    const { affected } = await this.sessionRepository.update(where, { desiredState: 'stopped' });
+    if (affected === 0) {
+      // Clear an abandoned foreign claim with the record, before its heartbeat can revive it. A
+      // pending delete took the branch above and keeps its claim throughout removal.
+      if (this.ownership && (await this.ownership.stopExpiredForeignClaim(id))) return;
+      await this.findOne(id);
+      throw new ConflictException(`Session ${id} is running on another node`);
+    }
   }
 
   /**

@@ -52,6 +52,8 @@
 > died with its node, is never adopted, even when its claim did lapse, until an explicit `POST /start`.
 > While versions are mixed during an upgrade, a node still on 0.25.0 does not read a `DELETE`'s record:
 > it can adopt such a session, and a `POST /start` it serves leaves the record in place.
+> Older nodes also lack the final ownership check on a stop write, so they can still report a stop
+> as successful while a peer starts the session. Upgrade every node before relying on that fence.
 >
 > Known limitation: a holder that is alive but cannot reach the database for more than three lease
 > TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its

@@ -1827,16 +1827,24 @@ describe('SessionService', () => {
   // ── ownership claim lifecycle (multi-node) ────────────────────────
 
   describe('ownership release', () => {
-    type OwnershipStub = { claim: jest.Mock; release: jest.Mock; isHeldByOtherNode: jest.Mock };
+    type OwnershipStub = {
+      nodeId: string;
+      claim: jest.Mock;
+      release: jest.Mock;
+      isHeldByOtherNode: jest.Mock;
+      stopExpiredForeignClaim: jest.Mock;
+    };
 
     // The trailing @Optional constructor dep the DI module deliberately omits; poked onto the
     // instance like the other white-box seams in this file.
     const withOwnership = (claimResult = true): OwnershipStub => {
       const ownership: OwnershipStub = {
+        nodeId: 'node-a',
         claim: jest.fn().mockResolvedValue(claimResult),
         release: jest.fn().mockResolvedValue(undefined),
         // No live peer holds it unless a test says so — the single-node answer.
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
       };
       Object.assign(service as unknown as Record<string, unknown>, { ownership });
       return ownership;
@@ -2964,6 +2972,11 @@ describe('SessionService', () => {
           () => (repository.update as jest.Mock).mockRejectedValueOnce(new Error('db down')),
           'db down',
         ],
+        [
+          'refused when its record is written',
+          () => (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 }),
+          ConflictException,
+        ],
       ])(
         'start() still retries a transient failure when a stop %s landed during the delay',
         async (_case, arrange, refusal) => {
@@ -2987,22 +3000,26 @@ describe('SessionService', () => {
       // A refused stop withdraws only its own request: one that DID take the engine down still stands
       // when a later request is refused, so the retry it must cancel stays cancelled. Clearing every
       // request instead would relaunch the session the first stop took down and re-claim its row.
-      it('start() does not retry when an effective stop during the delay is followed by a refused one', async () => {
-        const row = await seed();
-        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
-        mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      it.each(['ownership read', 'record write'])(
+        'start() does not retry when an effective stop is followed by one refused at the %s',
+        async refusal => {
+          const row = await seed();
+          (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
+          mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
 
-        const starting = service.start(row.id);
-        const outcome = starting.catch((error: unknown) => error);
-        await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
-        await service.stop(row.id);
-        jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
-        await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
+          const starting = service.start(row.id);
+          const outcome = starting.catch((error: unknown) => error);
+          await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
+          await service.stop(row.id);
+          if (refusal === 'ownership read') jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
+          else (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+          await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
 
-        expect(await outcome).toBeInstanceOf(SessionStoppedException);
-        expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
-        expect(lifecycle.isEngineActive(row.id)).toBe(false);
-      });
+          expect(await outcome).toBeInstanceOf(SessionStoppedException);
+          expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+          expect(lifecycle.isEngineActive(row.id)).toBe(false);
+        },
+      );
 
       // A 400 changes nothing, and release() also clears a lapsed foreign claim: that took a crashed
       // node's session out of the lapsed-claim sweep for good.
@@ -10056,9 +10073,11 @@ describe('SessionService', () => {
     const updates = (): unknown[][] => (repository.update as jest.Mock).mock.calls as unknown[][];
     const withOwnership = (over: Record<string, jest.Mock> = {}) => {
       const ownership = {
+        nodeId: 'node-a',
         claim: jest.fn().mockResolvedValue(true),
         release: jest.fn().mockResolvedValue(undefined),
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
         ...over,
       };
       Object.assign(service as unknown as Record<string, unknown>, { ownership });
@@ -10785,6 +10804,7 @@ describe('SessionService', () => {
         claim: jest.fn().mockResolvedValue(true),
         release: jest.fn().mockResolvedValue(undefined),
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
         onLeaseLoss: jest.fn(),
         setEngineLiveness: jest.fn(),
         startHeartbeat: jest.fn(),

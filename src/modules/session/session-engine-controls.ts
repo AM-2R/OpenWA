@@ -144,11 +144,13 @@ export interface StopHooks {
   afterRead?: () => Promise<void>;
   /**
    * Runs when the first session read fails (for stop() and delete(), after the stop mark is dropped):
-   * undoes the caller's request count.
+   * withdraws the caller's stop request.
    */
   onReadFailed?: () => void;
   /** forceKill() only: runs synchronously once there is an engine to kill; records the stop request. */
   onEngineFound?: () => void;
+  /** forceKill() only: persist the stop with the caller's current ownership predicate. */
+  recordStop?: () => Promise<void>;
   /** delete() only: runs once the delete starts removing the session's data, the session:deleted hook first. */
   onRemoving?: () => void;
 }
@@ -184,6 +186,7 @@ export interface SessionEngineControlsHost {
   cancelReconnect(id: string): void;
   initializeEngine(id: string, session: Session): Promise<void>;
   isSessionRetired(id: string): Promise<boolean>;
+  prepareStart(id: string, desiredState: Session['desiredState']): Promise<boolean>;
   purgeAuthDirsIfDeleted(id: string): Promise<void>;
   updateStatus(id: string, status: SessionStatus): Promise<void>;
   /** Ownership gate, same contract as SessionEngineWiringHost.ownsSession. */
@@ -394,7 +397,7 @@ export class SessionEngineControls {
       // counts as the start the operator asked for. A delete issued since this start began that failed once it
       // began removing has dropped its mark and left a record this start may have read too: it still stands.
       const { desiredState } = await this.requireSession(id);
-      if ((desiredState && (!explicit || !session.desiredState)) || stoppedSince?.()) {
+      if ((desiredState && (!explicit || desiredState !== session.desiredState)) || stoppedSince?.()) {
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
@@ -410,13 +413,14 @@ export class SessionEngineControls {
       if (this.host.isClosed()) {
         throw closedRefusal();
       }
-      if (desiredState) {
-        await this.sessionRepository.update({ id, desiredState }, { desiredState: null });
-        // The clear stands (this start was the operator's), but the hook must not fire for a start
-        // shutdown overtook during the write.
-        if (this.host.isClosed()) {
-          throw closedRefusal();
-        }
+      if (!(await this.host.prepareStart(id, desiredState))) {
+        await this.requireSession(id);
+        this.stoppingSessions.add(id);
+        throw new SessionStoppedException(`Session ${id} was stopped`);
+      }
+      // The clear stands, but a shutdown during the write must not let the hook run.
+      if (this.host.isClosed()) {
+        throw closedRefusal();
       }
 
       // Execute hook before starting
@@ -428,6 +432,22 @@ export class SessionEngineControls {
           source: 'SessionService',
         },
       );
+
+      // A local teardown already retired this launch; preserve its normal inactive-session response.
+      if (this.stoppingSessions.has(id)) return this.requireSession(id);
+
+      // The hook may outlive the lease. Renew this claim only if no stop or owner has replaced it,
+      // then register synchronously: a peer stop either changes the row first, or sees the live renewal.
+      const prepared = await this.host.prepareStart(id, null);
+      // A local stop can arrive during admission too. It owns the inactive response even when its
+      // write made admission fail; a delete may already have dropped its mark but retain its request.
+      if (this.stoppingSessions.has(id) || stoppedSince?.()) return this.requireSession(id);
+      if (!prepared) {
+        await this.requireSession(id);
+        this.stoppingSessions.add(id);
+        throw new SessionStoppedException(`Session ${id} was stopped`);
+      }
+      if (this.host.isClosed()) throw closedRefusal();
 
       // Initialize reconnect state from the (untrusted) opaque session.config — coerced + clamped
       // so a poisoned value can't drive a NaN/immediate-relaunch storm or an unbounded loop.
@@ -753,15 +773,15 @@ export class SessionEngineControls {
     // explicit start. Recorded only once there is an engine to kill, and before the teardown, so a
     // POST /start that lands after the eviction clears it and stands. A failed write must not keep a
     // wedged engine alive, so it is logged and the kill goes on.
-    await this.sessionRepository
-      .update(id, { desiredState: 'stopped' })
-      .catch((error: unknown) =>
-        this.logger.error(
-          'Failed to record the force-kill as a stop',
-          error instanceof Error ? error.message : String(error),
-          { sessionId: id, action: 'force_kill_keep_down_failed' },
-        ),
-      );
+    const write = (): Promise<unknown> =>
+      hooks.recordStop ? hooks.recordStop() : this.sessionRepository.update(id, { desiredState: 'stopped' });
+    await write().catch((error: unknown) =>
+      this.logger.error(
+        'Failed to record the force-kill as a stop',
+        error instanceof Error ? error.message : String(error),
+        { sessionId: id, action: 'force_kill_keep_down_failed' },
+      ),
+    );
 
     // Announced by the write below rather than from the engine callback, as in stop().
     this.operatorTeardowns.set(id, engine);

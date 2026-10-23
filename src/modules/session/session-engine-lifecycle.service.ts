@@ -1,7 +1,7 @@
 import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -438,6 +438,7 @@ export class SessionEngineLifecycle {
       cancelReconnect: id => this.cancelReconnect(id),
       initializeEngine: (id, session) => this.initializeEngine(id, session),
       isSessionRetired: id => this.isSessionRetired(id),
+      prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),
       stoppingSessions: this.stoppingSessions,
@@ -1292,18 +1293,33 @@ export class SessionEngineLifecycle {
     }, delay);
   }
 
+  private prepareStart(id: string, desiredState: Session['desiredState']): Promise<boolean> {
+    if (this.ownership) return this.ownership.prepareStart(id, desiredState);
+    return this.sessionRepository
+      .update({ id, desiredState: desiredState ?? IsNull() }, { desiredState: null })
+      .then(({ affected }) => affected !== 0);
+  }
+
   /**
-   * True once a session must stay down: it is explicitly marked tearing-down, or it was deleted
-   * outright while a slow engine.initialize() was in flight. delete() clears its `stoppingSessions`
-   * mark in its finally (ms) and removes the session row well before a Chromium launch resolves, so
-   * the mark alone can't catch a delete that raced a (re)connect — the session row is the source of
-   * truth a post-init guard must re-check before keeping the engine it just created.
+   * A start or reconnect cannot keep an engine after a stop, deletion or loss of its live claim.
+   * A peer writes no local stop mark, and delete() drops its own mark before a slow init resolves,
+   * so the post-init decision also reads the durable record and the current claim.
    */
   private async isSessionRetired(id: string): Promise<boolean> {
     if (this.stoppingSessions.has(id)) {
       return true;
     }
-    return (await this.sessionRepository.findOne({ where: { id } })) == null;
+    const session = await this.sessionRepository.findOne({ where: { id } });
+    return (
+      session == null ||
+      !!session.desiredState ||
+      !!(
+        this.ownership &&
+        (session.nodeId !== this.ownership.nodeId ||
+          session.leaseExpiresAt == null ||
+          session.leaseExpiresAt <= new Date())
+      )
+    );
   }
 
   /**
