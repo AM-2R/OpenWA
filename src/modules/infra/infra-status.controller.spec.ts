@@ -16,7 +16,10 @@ jest.mock('fs', () => {
 });
 
 import { InfraStatusController } from './infra-status.controller';
-import { recordPinnedEnvKeys } from '../../config/env-precedence';
+import { InfraConfigController } from './infra-config.controller';
+import type { ConfigSectionContext } from './config-sections';
+import type { SaveConfigDto } from './dto/save-config.dto';
+import { BLANK_SHADOWED_ENV_KEYS, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { producerConnectWaitMs } from '../queue/redis-connection';
 import * as fs from 'fs';
 import {
@@ -317,6 +320,63 @@ describe('InfraStatusController.getStatus envPinned', () => {
     recordPinnedEnvKeys({});
 
     expect((await buildController().getStatus()).envPinned).toEqual([]);
+  });
+
+  // A pinned key the page writes outranks the saved value at every boot, so the page must hear of each one: an
+  // unreported pin under an edited field reads as a change the next boot makes (a bucket or database switch).
+  it('reports every key a save from the page writes, and no other', async () => {
+    recordPinnedEnvKeys({});
+    const engines = { getAvailableEngines: () => [{ id: 'whatsapp-web.js' }, { id: 'baileys' }] };
+    const saver = new InfraConfigController(engines as never, {} as never, {} as never) as unknown as {
+      applyConfigSections: (config: SaveConfigDto, existing: Record<string, string>, ctx: ConfigSectionContext) => void;
+    };
+    const payloads = [
+      {
+        database: {
+          type: 'postgres',
+          builtIn: false,
+          host: 'db.example',
+          port: '5433',
+          username: 'app',
+          password: 'secret',
+          database: 'appdb',
+          schema: 'tenant',
+          poolSize: 20,
+          sslEnabled: true,
+          sslRejectUnauthorized: false,
+        },
+        redis: { enabled: true, builtIn: false, host: 'cache.example', port: '6380', password: 'secret' },
+        queue: { enabled: true },
+        storage: {
+          type: 's3',
+          builtIn: false,
+          s3Bucket: 'media',
+          s3Region: 'eu-west-1',
+          s3AccessKey: 'key',
+          s3SecretKey: 'secret',
+          s3Endpoint: 'https://s3.example',
+        },
+        engine: { type: 'baileys', headless: false, sessionDataPath: './data/s', browserArgs: '--no-sandbox' },
+      },
+      {
+        database: { type: 'postgres', builtIn: true },
+        redis: { enabled: true, builtIn: true },
+        storage: { type: 's3', builtIn: true },
+      },
+      { database: { type: 'sqlite' }, redis: { enabled: false }, storage: { type: 'local', localPath: './data/m' } },
+    ];
+    const written = new Set<string>();
+    for (const payload of payloads) {
+      const ctx: ConfigSectionContext = { updates: {}, staleKeys: new Set(), profiles: [] };
+      saver.applyConfigSections(payload as SaveConfigDto, {}, ctx);
+      [...Object.keys(ctx.updates), ...ctx.staleKeys].forEach(key => written.add(key));
+    }
+    // Every compose forward is pinned beside them, so a reported key no save writes would show up too.
+    recordPinnedEnvKeys(Object.fromEntries([...BLANK_SHADOWED_ENV_KEYS, ...written].map(key => [key, 'x'])));
+
+    const reported = (await buildController().getStatus()).envPinned;
+
+    expect([...reported].sort()).toEqual([...written].sort());
   });
 });
 

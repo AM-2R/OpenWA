@@ -67,19 +67,37 @@ interface InfraStatus {
 }
 
 /**
- * The keys behind the Infrastructure page's editable controls that a shipped compose file or an
- * operator variable is known to pin. docker-compose.dev.yml pins the local storage path and the three
- * whatsapp-web.js launch options with non-empty defaults. Only page controls are reported: naming
- * variables the page cannot edit would be noise. A pinned host decides the Use Built-in mode of its
- * service, so the three host keys are reported too.
+ * Every key a save from the Infrastructure page writes (PUT /infra/config), so the page can name each one a layer
+ * above the file pins: an unreported pin under an edited field reads as a change the next boot makes.
+ * docker-compose.dev.yml pins the local storage path and the three whatsapp-web.js launch options with non-empty
+ * defaults; the compose .env route pins the datastore settings. Only page controls are reported: naming variables
+ * the page cannot edit would be noise. A pinned host decides the Use Built-in mode of its service.
  */
 const DASHBOARD_PINNABLE_ENV_KEYS = [
   'DATABASE_TYPE',
+  'POSTGRES_BUILTIN',
   'DATABASE_HOST',
+  'DATABASE_PORT',
+  'DATABASE_USERNAME',
+  'DATABASE_PASSWORD',
+  'DATABASE_NAME',
+  'DATABASE_POOL_SIZE',
+  'POSTGRES_SCHEMA',
+  'DATABASE_SSL',
+  'DATABASE_SSL_REJECT_UNAUTHORIZED',
   'REDIS_ENABLED',
+  'REDIS_BUILTIN',
   'REDIS_HOST',
+  'REDIS_PORT',
+  'REDIS_PASSWORD',
+  'QUEUE_ENABLED',
   'STORAGE_TYPE',
+  'MINIO_BUILTIN',
   'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_REGION',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
   'STORAGE_LOCAL_PATH',
   'ENGINE_TYPE',
   'PUPPETEER_HEADLESS',
