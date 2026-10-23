@@ -1,8 +1,16 @@
+import { DataSource } from 'typeorm';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
-import type { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { Session } from './entities/session.entity';
+import { ChatScopeService } from '../auth/chat-scope.service';
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
+
+const settle = async () => {
+  for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+};
 
 describe('SessionLidResolver', () => {
   let engines: EngineRegistry;
@@ -184,6 +192,49 @@ describe('SessionLidResolver', () => {
     expect(remember).not.toHaveBeenCalled();
   });
 
+  describe('an answer the lid table did not take', () => {
+    let now: jest.SpyInstance<number, []>;
+    beforeEach(() => {
+      now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    });
+    afterEach(() => now.mockRestore());
+
+    it.each([
+      ['a definitive null', null],
+      ['a phone', '628111'],
+    ])('is reported again for %s on a message after the hold, once a hold', async (_label, phone) => {
+      resolveContactPhone.mockResolvedValue(phone);
+      remember.mockResolvedValueOnce(false);
+
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBe(phone);
+      await settle();
+      now.mockReturnValue(1_000_000 + 59_999);
+      for (let i = 0; i < 100; i++) await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBe(phone);
+      await settle();
+      expect(remember).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(1_000_000 + 60_000);
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBe(phone);
+      await settle();
+      now.mockReturnValue(1_000_000 + 200_000);
+      await resolver.resolveSenderPhone('s1', '404@lid');
+      await settle();
+
+      expect(remember).toHaveBeenCalledTimes(2);
+      expect(remember).toHaveBeenLastCalledWith('404', phone, 's1');
+      expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+    });
+
+    it('is forgotten along with its cached answer', async () => {
+      remember.mockResolvedValueOnce(false);
+      await resolver.resolveSenderPhone('s1', '0@lid');
+      await settle();
+      for (let i = 1; i <= 5000; i++) await resolver.resolveSenderPhone('s1', `${i}@lid`);
+
+      expect((resolver as unknown as { unstored: Map<string, number> }).unstored.size).toBe(0);
+    });
+  });
+
   it('never rejects when the mapping store write fails (fire-and-forget)', async () => {
     remember.mockRejectedValue(new Error('db down'));
 
@@ -217,5 +268,53 @@ describe('SessionLidResolver', () => {
     resolveContactPhone.mockClear();
     await resolver.resolveSenderPhone('s1', `${max - 1}@lid`);
     expect(resolveContactPhone).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionLidResolver over the shared lid table', () => {
+  const s1 = '00000001-0000-4000-8000-000000000000';
+  const PHONE = '628111';
+
+  it('clears a number the contact hid on a later message when the first negative did not reach the table', async () => {
+    const ds = await new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [LidMapping, Session],
+      synchronize: true,
+    }).initialize();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await ds.getRepository(Session).insert({ id: s1, name: s1 });
+      const repo = ds.getRepository(LidMapping);
+      const store = new LidMappingStoreService(repo);
+      const warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
+      await store.onModuleInit();
+      await store.remember('111', PHONE, s1); // s1 stored the phone earlier
+      const engines = new EngineRegistry();
+      engines.set(s1, { resolveContactPhone: () => Promise.resolve(null) } as unknown as IWhatsAppEngine);
+      const resolver = new SessionLidResolver(engines, store);
+      const fence = new ChatScopeService(store);
+      const key = { allowedChats: [`${PHONE}@c.us`] };
+      const admitted = async () => [
+        await fence.allows(key, '111@lid'),
+        (await fence.scopeForFilter(key))!.allowed.has('111@lid'),
+      ];
+
+      jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+      await resolver.resolveSenderPhone(s1, '111@lid'); // the contact hid the number: s1 answers none
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(await admitted()).toEqual([true, true]);
+
+      now.mockReturnValue(1_000_000 + 60_000);
+      await resolver.resolveSenderPhone(s1, '111@lid'); // the contact's next message
+      await settle();
+
+      expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({ phone: null, sessionId: s1 });
+      expect(await admitted()).toEqual([false, false]);
+    } finally {
+      now.mockRestore();
+      await ds.destroy();
+    }
   });
 });

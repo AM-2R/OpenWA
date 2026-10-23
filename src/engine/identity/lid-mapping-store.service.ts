@@ -71,9 +71,10 @@ export interface LidMappingStore {
    * Write-through: update the cache + persist. A phone is last-write-wins. A session reporting the phone
    * this node already holds takes the row, unless this node already counted a report of it from that
    * session: after s1, s2, s1 report one phone the owner is s2. A `null` phone records a negative result,
-   * and replaces a stored phone only when its owner (or none, or one since deleted) gives it.
+   * and replaces a stored phone only when its owner (or none, or one since deleted) gives it. Never rejects;
+   * resolves false when the report did not reach the table (its write failed, or waits after one that did).
    */
-  remember(lid: string, phone: string | null, sessionId?: string): Promise<void>;
+  remember(lid: string, phone: string | null, sessionId?: string): Promise<boolean>;
 }
 
 /**
@@ -335,16 +336,16 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     return this.getCached(lid) ?? null;
   }
 
-  async remember(lid: string, phone: string | null, sessionId?: string): Promise<void> {
-    if (!lid) return;
+  async remember(lid: string, phone: string | null, sessionId?: string): Promise<boolean> {
+    if (!lid) return true;
     const cached = this.lidToPhone.get(lid);
     // Unseen-or-changed only, or a phone a session reports here for the first time: a no-op write would
     // just churn updatedAt.
     if (cached === phone && (phone === null || !sessionId || this.seenBy.get(lid)?.has(sessionId))) {
-      return;
+      return true;
     }
     const failed = this.failedWrites.get(lid);
-    if (cached === phone && failed && !failed.stale && this.now() - failed.at < LID_WRITE_RETRY_MS) return;
+    if (cached === phone && failed && !failed.stale && this.now() - failed.at < LID_WRITE_RETRY_MS) return false;
     // A negative is not cached until the table has taken it: see clear().
     if (phone !== null) this.index(lid, phone, sessionId ?? null);
     this.unsettledWrites.set(lid, (this.unsettledWrites.get(lid) ?? 0) + 1);
@@ -355,6 +356,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
         await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
         if (this.lidToPhone.get(lid) === phone) this.failedWrites.delete(lid);
       }
+      return true;
     } catch (err) {
       // The table does not have this report, so the session's next one writes again.
       if (sessionId) this.seenBy.get(lid)?.delete(sessionId);
@@ -364,6 +366,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       } else {
         this.logger.warn(message);
       }
+      return false;
     } finally {
       const left = (this.unsettledWrites.get(lid) ?? 1) - 1;
       if (left > 0) this.unsettledWrites.set(lid, left);

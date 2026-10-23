@@ -6836,7 +6836,7 @@ describe('BaileysAdapter contact + chat reads', () => {
       getCached: jest.fn((): string | null | undefined => undefined),
       resolveLid: jest.fn(() => null),
       lidsForPhone: jest.fn((): string[] => []),
-      remember: jest.fn(() => Promise.resolve()),
+      remember: jest.fn(() => Promise.resolve(true)),
       findPhoneForLid: jest.fn((): Promise<string | null> => Promise.resolve(null)),
     });
     const readyWith = async (lidMappingStore: ReturnType<typeof makeLidStore>): Promise<BaileysAdapter> => {

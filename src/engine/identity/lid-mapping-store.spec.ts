@@ -1242,7 +1242,7 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
   it('takes the row on the next report when taking it failed to write', async () => {
     await store.remember('111', '628111', s1);
     jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
-    await expect(store.remember('111', '628111', s2)).resolves.toBeUndefined();
+    await expect(store.remember('111', '628111', s2)).resolves.toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockClear();
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
@@ -1275,18 +1275,19 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(warn).toHaveBeenCalledTimes(1);
 
     later(59_999);
-    await store.remember('111', '628111', s1);
+    await expect(store.remember('111', '628111', s1)).resolves.toBe(false);
     expect(upsert).toHaveBeenCalledTimes(1);
     later(1);
-    await store.remember('111', '628111', s1);
+    await expect(store.remember('111', '628111', s1)).resolves.toBe(false);
     expect(upsert).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockClear();
 
     upsert.mockRestore(); // the database takes writes again
     later(60_000);
-    await store.remember('111', '628111', s1);
+    await expect(store.remember('111', '628111', s1)).resolves.toBe(true);
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+    await expect(store.remember('111', '628111', s1)).resolves.toBe(true); // already counted: nothing to write
     await store.remember('111', '628111', s2);
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
   });
@@ -1334,12 +1335,12 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
   it('writes a negative again when its first attempt failed', async () => {
     await store.remember('111', '628111', s1);
     jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
-    await store.remember('111', null, s1);
+    await expect(store.remember('111', null, s1)).resolves.toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockClear();
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
 
-    await store.remember('111', null, s1);
+    await expect(store.remember('111', null, s1)).resolves.toBe(true);
 
     expect(await row('111')).toMatchObject({ phone: null, sessionId: s1 });
     expect(await store.findPhoneForLid('111@lid')).toBeNull();

@@ -906,7 +906,7 @@ describe('BaileysSessionStore', () => {
         getCached: jest.fn(() => undefined),
         resolveLid: jest.fn(() => null),
         lidsForPhone: jest.fn((phone: string) => (phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       s.upsertChats([{ id: LID }]);
@@ -1169,7 +1169,7 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => []),
         findPhoneForLid: jest.fn((jid: string) => Promise.resolve(jid.startsWith('484848') ? '628111' : null)),
         findLidsForPhone: jest.fn((phone: string) => Promise.resolve(phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, SID, fake);
       s.removeChats([deleted]);
@@ -1184,7 +1184,7 @@ describe('BaileysSessionStore', () => {
         getCached: jest.fn((lid: string) => (lid === '484848' ? '628111' : undefined)),
         resolveLid: jest.fn(() => null),
         lidsForPhone: jest.fn((phone: string) => (phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, SID, fake);
       s.upsertChats([{ id: PHONE }]);
@@ -1300,7 +1300,7 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => [] as string[]),
         remember: jest.fn((lid: string, phone: string | null) => {
           map.set(lid, phone);
-          return Promise.resolve();
+          return Promise.resolve(true);
         }),
       };
     };
@@ -1439,7 +1439,7 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => [] as string[]),
         remember: jest.fn((lid: string, phone: string | null) => {
           map.set(lid, phone);
-          return Promise.resolve();
+          return Promise.resolve(true);
         }),
       };
       const s = storeWithCap('2', lidStore);
