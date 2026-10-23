@@ -77,10 +77,13 @@ export function applyDatabaseSection(
   }
   // An explicit choice applies the bundled preset; otherwise the stored host decides the mode. A pinned host must
   // not replace that stored choice, which takes effect again when the pin is removed. An omitted choice beside an
-  // external host pin preserves its connection details instead of applying the bundled preset again.
+  // external host pin preserves the same stored service's connection details instead of applying its preset again.
   const dbBuiltIn = database.builtIn ?? namesBundledContainer('postgres', existing.DATABASE_HOST);
   if (type === 'postgres') {
-    if (dbBuiltIn && (database.builtIn !== undefined || !hostPinnedElsewhere('postgres'))) {
+    if (
+      dbBuiltIn &&
+      (database.builtIn !== undefined || existing.DATABASE_TYPE !== 'postgres' || !hostPinnedElsewhere('postgres'))
+    ) {
       // Built-in PostgreSQL - use container name as host
       updates.DATABASE_HOST = 'postgres';
       updates.DATABASE_PORT = '5432';
@@ -90,17 +93,19 @@ export function applyDatabaseSection(
       // running process, whose environment the boot loaded and a save leaves as it is: switched away and back before a
       // restart, the file holds the other server's values. From anywhere else they belong to another server.
       const servesStored =
+        existing.DATABASE_TYPE === 'postgres' &&
         nextBootValue('DATABASE_TYPE', existing) === 'postgres' &&
         namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing));
       const servesRunning =
         process.env.DATABASE_TYPE === 'postgres' && namesBundledContainer('postgres', process.env.DATABASE_HOST);
       const kept: Partial<Record<string, string>> = servesStored ? existing : servesRunning ? process.env : {};
       updates.DATABASE_USERNAME = kept.DATABASE_USERNAME || 'openwa';
-      // Secrets are not echoed to the form. A blank password keeps one belonging to the bundled host (stored, pinned,
+      // Secrets are not echoed to the form. A blank password keeps one stored for PostgreSQL at the bundled host (stored, pinned,
       // or still serving the running process after a saved switch away); external credentials do not follow it.
       const storedPassword =
-        namesBundledContainer('postgres', existing.DATABASE_HOST) ||
-        namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing))
+        existing.DATABASE_TYPE === 'postgres' &&
+        (namesBundledContainer('postgres', existing.DATABASE_HOST) ||
+          namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing)))
           ? existing.DATABASE_PASSWORD
           : servesRunning
             ? process.env.DATABASE_PASSWORD
@@ -245,13 +250,17 @@ export function applyStorageSection(
     staleKeys.add('STORAGE_LOCAL_PATH');
     // An absent builtIn follows the stored endpoint, as for the database and Redis.
     const storageBuiltIn = storage.builtIn ?? namesBundledContainer('minio', existing.S3_ENDPOINT);
-    if (storageBuiltIn && (storage.builtIn !== undefined || !hostPinnedElsewhere('minio'))) {
+    if (
+      storageBuiltIn &&
+      (storage.builtIn !== undefined || existing.STORAGE_TYPE !== 's3' || !hostPinnedElsewhere('minio'))
+    ) {
       // Built-in MinIO - use container name as endpoint. The bundled keys are only the DEFAULT, as for the database
-      // password: keys at the bundled endpoint (pinned or stored, in any spelling) are that container's, and are kept; else
+      // password: keys stored for S3 at the bundled endpoint (pinned or stored, in any spelling) are kept; else
       // the ones the running process dials it with, as for the database.
       const keepKeys =
-        namesBundledContainer('minio', existing.S3_ENDPOINT) ||
-        namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing));
+        existing.STORAGE_TYPE === 's3' &&
+        (namesBundledContainer('minio', existing.S3_ENDPOINT) ||
+          namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing)));
       const servesRunning =
         process.env.STORAGE_TYPE === 's3' && namesBundledContainer('minio', process.env.S3_ENDPOINT);
       const keys: Partial<Record<string, string>> = keepKeys ? existing : servesRunning ? process.env : {};
@@ -261,6 +270,7 @@ export function applyStorageSection(
       // As for the database: a bucket the next boot already reaches on the bundled MinIO, else the one it serves the
       // running process, is kept with its region.
       const servesStored =
+        existing.STORAGE_TYPE === 's3' &&
         nextBootValue('STORAGE_TYPE', existing) === 's3' &&
         namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing));
       const kept: Partial<Record<string, string>> = servesStored ? existing : servesRunning ? process.env : {};
