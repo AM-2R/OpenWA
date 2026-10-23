@@ -27,6 +27,10 @@ interface MessageInProcessing {
   edited: boolean;
   /** A delete for everyone reached it. */
   deleted: boolean;
+  /** Its deliveries still being processed: it is forgotten once the last of them ends. */
+  deliveries: number;
+  /** One of them ended: what reaches the message since goes at once, and is noted here for the others. */
+  delivered: boolean;
   changes: Array<() => void>;
 }
 
@@ -34,7 +38,7 @@ interface MessageInProcessing {
 interface Processing {
   /** Apply the latest edit to the copy about to be handed over. False when a delete reached it: it is not handed over. */
   handOver: (message: IncomingMessage) => boolean;
-  /** The processing ended, however it did: deliver the kept changes in arrival order and forget the message. */
+  /** The processing ended, however it did: deliver the kept changes in arrival order; the last to end forgets them. */
   end: () => void;
 }
 
@@ -104,8 +108,9 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
   };
 
   /**
-   * Start keeping what reaches a message the session does not hold. `end` must run when the processing ends,
-   * however it ends; it is safe to call twice. A repeat delivery of an id shares the record of the first.
+   * Start keeping what reaches a message the session does not hold. `end` must run once when the processing ends,
+   * however it ends. A repeat delivery of an id shares the record of the first, which is forgotten once the last of
+   * them ended.
    */
   const keepChanges = (message: IncomingMessage, ticket: InboundTicket | undefined): Processing => {
     if (ticket || !message.id || message.isStatusBroadcast) return NOT_KEPT;
@@ -119,10 +124,19 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
     if (!kept) {
       // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
       if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return NOT_KEPT;
-      kept = { text: message.body, arrived: message.body, edited: false, deleted: false, changes: [] };
+      kept = {
+        text: message.body,
+        arrived: message.body,
+        edited: false,
+        deleted: false,
+        deliveries: 0,
+        delivered: false,
+        changes: [],
+      };
       inProcessing.set(message.id, kept);
     }
     const mine = kept;
+    mine.deliveries++;
     return {
       handOver: handedOver => {
         if (mine.deleted) return false;
@@ -134,7 +148,10 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
         return true;
       },
       end: () => {
-        if (inProcessing.get(message.id) === mine) inProcessing.delete(message.id);
+        mine.deliveries--;
+        // Another delivery of the id still processed is handed over as a later change leaves the message.
+        mine.delivered = true;
+        if (!mine.deliveries && inProcessing.get(message.id) === mine) inProcessing.delete(message.id);
         deliverKept(mine);
       },
     };
@@ -156,7 +173,7 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       kept.edited = true;
     }
     if (change.deletes) kept.deleted = true;
-    if (kept.changes.length < MAX_CHANGES_KEPT_PER_MESSAGE) {
+    if (!kept.delivered && kept.changes.length < MAX_CHANGES_KEPT_PER_MESSAGE) {
       kept.changes.push(deliver);
       return;
     }

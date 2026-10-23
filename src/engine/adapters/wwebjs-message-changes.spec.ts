@@ -982,6 +982,41 @@ describe.each([
     }
   });
 
+  // Two deliveries of one message share what reaches it: one that ends first must not forget it for the other.
+  it('announces nothing of an own media send delivered twice after it was deleted between their hand-overs', async () => {
+    const first = download();
+    const second = download();
+    client.emit('message_create', incoming('S', 'orig', { page: first.page, fromMe: true }));
+    await flush();
+    client.emit('message_create', incoming('S', 'orig', { page: second.page, fromMe: true }));
+    await flush();
+    first.finish();
+    await flush();
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+    second.finish();
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('S'))]);
+    expect(dispatchedAfterDeleted()).toEqual([]);
+    expect(hooked.filter(body => body === 'orig').length).toBeLessThanOrEqual(1);
+  });
+
+  it('hooks nothing of a message delivered twice after it was deleted between their hand-overs', async () => {
+    const first = deferred<null>();
+    client.emit('message', incoming('A', 'secret', { contact: first.promise }));
+    await flush();
+    client.emit('message', incoming('A', 'secret'));
+    await flush();
+    revokeEvent(client, 'A');
+    await flush();
+    first.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('A'))]);
+    expect(hooked.filter(body => body === 'secret').length).toBeLessThanOrEqual(1);
+  });
+
   it('announces an own message stored again after its row was removed without the mark of that row', async () => {
     client.emit('message_create', own('S', 'orig'));
     await flush();
@@ -1448,6 +1483,46 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     expect(bodies).toEqual(['']);
     expect(arrivals).toEqual([undefined]);
   });
+
+  it('delivers at once what reaches an id once one delivery of it ended, and hands the other over as it left it', async () => {
+    const { client, order, bodies, arrivals } = wire();
+    const first = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    client.emit('message', incoming('A', 'orig'));
+    await flush();
+    editEvent(client, 'A', 'v1');
+    expect(order).toEqual(['message A', 'edit A v1']);
+
+    first.resolve(null);
+    await flush();
+
+    expect(order).toEqual(['message A', 'edit A v1', 'message A']);
+    expect(bodies).toEqual(['orig', 'v1']);
+    expect(arrivals).toEqual([undefined, 'orig']);
+  });
+
+  it.each([
+    ['the first', true],
+    ['the repeat', false],
+  ])(
+    'hands over no delivery of an id deleted after another delivery of it ended, %s ending first',
+    async (_, firstEnds) => {
+      const { client, order, bodies } = wire();
+      const slow = deferred<null>();
+      client.emit('message', incoming('A', 'orig', firstEnds ? {} : { contact: slow.promise }));
+      client.emit('message', incoming('A', 'orig', firstEnds ? { contact: slow.promise } : {}));
+      await flush();
+      revokeEvent(client, 'A');
+      expect(order).toEqual(['message A', 'revoke A']);
+
+      slow.resolve(null);
+      await flush();
+      revokeEvent(client, 'A');
+
+      expect(order).toEqual(['message A', 'revoke A', 'revoke A']);
+      expect(bodies).toEqual(['orig']);
+    },
+  );
 
   it('delivers the rest when one kept change fails', async () => {
     const { client, order } = wire({
