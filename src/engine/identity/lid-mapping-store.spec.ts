@@ -224,6 +224,21 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect([...seenBy.keys()].sort()).toEqual(['lid-b', 'lid-c']);
   });
 
+  it('holds back a failed write only while its entry is cached', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const repo = makeFakeRepo();
+    const store = await newStore(repo);
+    jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+    repo.upsert.mockRejectedValue(new Error('connection lost'));
+    for (const lid of ['lid-a', 'lid-b', 'lid-c']) await store.remember(lid, '620001', 's1');
+    repo.upsert.mockClear();
+
+    await store.remember('lid-c', '620001', 's1');
+    expect(repo.upsert).not.toHaveBeenCalled();
+    await store.remember('lid-a', '620001', 's1');
+    expect(repo.upsert).toHaveBeenCalledTimes(1);
+  });
+
   it('forgets a failed write along with the evicted entry', async () => {
     process.env.LID_MAPPING_CACHE_MAX = '1';
     const repo = makeFakeRepo([{ lid: 'lid-a', phone: '620001' }]);
@@ -966,7 +981,10 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
   let repo: Repository<LidMapping>;
   let store: LidMappingStoreService;
   let warn: jest.SpyInstance;
+  let clock = 0;
   const row = (lid: string) => repo.findOne({ where: { lid } });
+  /** Moves the store's clock on, past or short of the hold after a failed write. */
+  const later = (ms: number) => (clock += ms);
 
   /** Holds the next call of a repository method until `release` is called; `reached` settles on entry. */
   function hold(method: 'upsert' | 'update') {
@@ -1014,6 +1032,8 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     await ds.getRepository(Session).insert([s1, s2, s3, s9].map(id => ({ id, name: id })));
     repo = ds.getRepository(LidMapping);
     store = new LidMappingStoreService(repo);
+    clock = 0;
+    (store as unknown as { now: () => number }).now = () => clock;
     // A statement that fails is only logged, which would let a case pass on a write that never ran.
     warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
     await store.onModuleInit();
@@ -1227,6 +1247,7 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     warn.mockClear();
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
 
+    later(60_000);
     await store.remember('111', '628111', s2);
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
     await store.remember('111', null, s1);
@@ -1241,9 +1262,73 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     warn.mockClear();
     expect(await row('111')).toBeNull();
 
+    later(60_000);
     await store.remember('111', '628111', s1);
 
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+  });
+
+  it('writes a phone at most once a minute while its writes keep failing, from any session', async () => {
+    const upsert = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('database or disk is full'));
+    for (let i = 0; i < 1000; i++) await store.remember('111', '628111', i % 2 ? s1 : s2);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    later(59_999);
+    await store.remember('111', '628111', s1);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    later(1);
+    await store.remember('111', '628111', s1);
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockClear();
+
+    upsert.mockRestore(); // the database takes writes again
+    later(60_000);
+    await store.remember('111', '628111', s1);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+    await store.remember('111', '628111', s2);
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+  });
+
+  it('holds back only the phone whose write failed, and only until a negative clears the row', async () => {
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember('111', '628111', s1);
+    warn.mockClear();
+    await store.remember('111', '628222', s1);
+    expect(await row('111')).toMatchObject({ phone: '628222', sessionId: s1 });
+
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember('222', '628111', s1);
+    warn.mockClear();
+    await store.remember('222', null, s1);
+    await store.remember('222', '628111', s1);
+    expect(await row('222')).toMatchObject({ phone: '628111', sessionId: s1 });
+  });
+
+  it('writes a phone change on every report until the table takes it, warning once a minute', async () => {
+    await store.remember('111', '628111', s1);
+    const upsert = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('connection lost'));
+    for (let i = 0; i < 5; i++) await store.remember('111', '628222', s1);
+    expect(upsert).toHaveBeenCalledTimes(5);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    later(60_000);
+    await store.remember('111', '628222', s1);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('(4 more failed since the last warning)'));
+    warn.mockClear();
+
+    upsert.mockRestore();
+    await store.remember('111', '628222', s1);
+    expect(await row('111')).toMatchObject({ phone: '628222', sessionId: s1 });
+
+    // Once it lands, a failed write of that phone waits again.
+    const retake = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('connection lost'));
+    await store.remember('111', '628222', s2);
+    await store.remember('111', '628222', s2);
+    expect(retake).toHaveBeenCalledTimes(1);
+    warn.mockClear();
   });
 
   it('writes a negative again when its first attempt failed', async () => {

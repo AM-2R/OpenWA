@@ -19,6 +19,24 @@ export const LID_MAPPING_CACHE_DEFAULT = 5000;
  */
 const LID_QUERY_CHUNK = 500;
 
+/**
+ * How long a report waits after the same write failed. A database that is down or full would otherwise take
+ * one failed statement, and log one warning, per inbound message from the contact. The same hold the
+ * sender resolver gives a lid no store maps.
+ */
+const LID_WRITE_RETRY_MS = 60_000;
+
+/** A lid's failed phone write, and when a warning about the lid was last logged. */
+interface FailedWrite {
+  /** When it failed, in ms on the store's monotonic clock. */
+  at: number;
+  /** It was replacing another phone, which the table may still hold. */
+  stale: boolean;
+  warnedAt: number;
+  /** Failures since that warning that were not logged. */
+  unlogged: number;
+}
+
 function chunk<T>(items: T[], size = LID_QUERY_CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -121,9 +139,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   private readonly seenBy = new Map<string, Set<string>>();
   /**
    * Cached lids whose phone failed to write here (see {@link unstored}). Kept only while the cache holds that
-   * phone: dropped with the cached entry, and once a write of it lands or a negative clears the row.
+   * phone: dropped with the cached entry, and once a write of it lands or a negative clears the row. The same
+   * phone reported again waits {@link LID_WRITE_RETRY_MS} before it writes, from any session, so a failing
+   * database takes one statement per lid a minute. A write that was replacing another phone does not wait:
+   * until it lands the table may still name the old number, and a restart inside the wait would load it.
    */
-  private readonly failedWrites = new Set<string>();
+  private readonly failedWrites = new Map<string, FailedWrite>();
+  /** Monotonic clock in ms (a seam for tests). */
+  private readonly now = (): number => performance.now();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
   // the default is finite; the env override exists for operators who explicitly want the old behaviour.
   private readonly maxCachedLids: number;
@@ -314,11 +337,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
 
   async remember(lid: string, phone: string | null, sessionId?: string): Promise<void> {
     if (!lid) return;
+    const cached = this.lidToPhone.get(lid);
     // Unseen-or-changed only, or a phone a session reports here for the first time: a no-op write would
     // just churn updatedAt.
-    if (this.lidToPhone.get(lid) === phone && (phone === null || !sessionId || this.seenBy.get(lid)?.has(sessionId))) {
+    if (cached === phone && (phone === null || !sessionId || this.seenBy.get(lid)?.has(sessionId))) {
       return;
     }
+    const failed = this.failedWrites.get(lid);
+    if (cached === phone && failed && !failed.stale && this.now() - failed.at < LID_WRITE_RETRY_MS) return;
     // A negative is not cached until the table has taken it: see clear().
     if (phone !== null) this.index(lid, phone, sessionId ?? null);
     this.unsettledWrites.set(lid, (this.unsettledWrites.get(lid) ?? 0) + 1);
@@ -332,10 +358,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     } catch (err) {
       // The table does not have this report, so the session's next one writes again.
       if (sessionId) this.seenBy.get(lid)?.delete(sessionId);
-      if (phone !== null && this.lidToPhone.get(lid) === phone) this.failedWrites.add(lid);
-      this.logger.warn(
-        `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const message = `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`;
+      if (phone !== null && this.lidToPhone.get(lid) === phone) {
+        this.noteFailedWrite(lid, typeof cached === 'string' && cached !== phone, message);
+      } else {
+        this.logger.warn(message);
+      }
     } finally {
       const left = (this.unsettledWrites.get(lid) ?? 1) - 1;
       if (left > 0) this.unsettledWrites.set(lid, left);
@@ -377,6 +405,23 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     this.failedWrites.delete(lid);
     if (cached) this.unindex(lid, cached);
     this.absentFromTable.delete(lid);
+  }
+
+  /** Record a failed phone write for {@link failedWrites}, and log it once a lid per hold, counting the rest. */
+  private noteFailedWrite(lid: string, replacing: boolean, message: string): void {
+    const now = this.now();
+    const failed = this.failedWrites.get(lid) ?? { at: now, stale: false, warnedAt: -Infinity, unlogged: 0 };
+    Object.assign(failed, { at: now, stale: replacing || failed.stale });
+    if (now - failed.warnedAt >= LID_WRITE_RETRY_MS) {
+      this.logger.warn(
+        failed.unlogged ? `${message} (${failed.unlogged} more failed since the last warning)` : message,
+      );
+      failed.warnedAt = now;
+      failed.unlogged = 0;
+    } else {
+      failed.unlogged++;
+    }
+    this.failedWrites.set(lid, failed);
   }
 
   /**
