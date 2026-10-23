@@ -110,6 +110,12 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
   const keepChanges = (message: IncomingMessage, ticket: InboundTicket | undefined): Processing => {
     if (ticket || !message.id || message.isStatusBroadcast) return NOT_KEPT;
     let kept = inProcessing.get(message.id);
+    // whatsapp-web.js raises message and message_create for a message WhatsApp Web adds already deleted. Such a
+    // delivery takes no text from one of the id still processed, which is then not handed over, and keeps nothing.
+    if (message.type === 'revoked') {
+      if (kept) kept.deleted = true;
+      return NOT_KEPT;
+    }
     if (!kept) {
       // Past the bound a message is not tracked, and what reaches it is delivered at once, as it always was.
       if (inProcessing.size >= MAX_MESSAGES_IN_PROCESSING) return NOT_KEPT;

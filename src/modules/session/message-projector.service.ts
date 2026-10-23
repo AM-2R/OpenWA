@@ -98,6 +98,14 @@ type InboundMessageData = { [K in keyof IncomingMessage]: IncomingMessage[K] };
 
 const quoteOf = (m: Pick<IncomingMessage, 'chatId' | 'body'>) => ({ chatId: m.chatId, body: m.body });
 
+/** A deleted message as hooks and consumers see it: nothing of its content survives, as in REVOKED_ROW_PATCH. */
+const deletedPlaceholder = (message: InboundMessageData): InboundMessageData => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { media, quotedMessage, call, buttons, button, location, order, product, poll, mentionedIds, ...kept } =
+    message;
+  return { ...kept, body: '', type: 'revoked' };
+};
+
 /** Where a message lives and who wrote it: what a change aimed at it is held to (see mutationTargetsForeignRow). */
 const refOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): StoredMessageRef => ({
   chatId: m.chatId,
@@ -425,8 +433,9 @@ export class MessageProjector {
     });
     // Update last active timestamp
     void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
-    // Convert IncomingMessage to plain object for dispatch
-    const messageData = { ...message };
+    // Convert IncomingMessage to plain object for dispatch. One delivered deleted reaches the hooks with no content,
+    // whatever text the engine handed over with it.
+    const messageData = message.type === 'revoked' ? deletedPlaceholder(message) : { ...message };
     // What an engine says of the edit it applied is for the session alone: no hook, row or consumer sees it.
     delete messageData.originalBody;
     // Tracks what the chain's current copy lends a quote, so one taken mid-chain carries an earlier
@@ -1073,13 +1082,8 @@ export class MessageProjector {
   ): (InboundMessageData & { edited?: true }) | null {
     const pending = this.inboundInFlight.get(`${id}:${message.id}`);
     if (pending?.revokeAnnounced) return null;
-    if (pending?.revoked || message.type === 'revoked') {
-      // Nothing of the content survives, as in REVOKED_ROW_PATCH: no edit held for it, and no mark.
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { media, quotedMessage, call, buttons, button, location, order, product, poll, mentionedIds, ...kept } =
-        message;
-      return { ...kept, body: '', type: 'revoked' };
-    }
+    // No edit held for it, and no mark.
+    if (pending?.revoked || message.type === 'revoked') return deletedPlaceholder(message);
     const edited = rowMarked || pending?.edited;
     // An edit the engine applied before the hand-over is in the body already.
     if (pending?.editedBody === undefined) return edited ? { ...message, edited: true as const } : message;
@@ -1120,7 +1124,8 @@ export class MessageProjector {
     });
     // Update last active timestamp
     void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
-    const messageData = { ...message };
+    // As on the inbound path, one delivered deleted reaches the hooks with no content.
+    const messageData = message.type === 'revoked' ? deletedPlaceholder(message) : { ...message };
     delete messageData.originalBody;
 
     const onFailure = (err: unknown): null => {

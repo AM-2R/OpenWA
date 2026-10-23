@@ -888,6 +888,100 @@ describe.each([
     expect(persisted).toEqual([expect.objectContaining(deletedRow('S')), expect.objectContaining(deletedRow('A'))]);
   });
 
+  const contentAnnounced = (): Row[] =>
+    (dispatch.mock.calls as Array<[string, string, Row]>)
+      .filter(c => c[1] === 'message.sent' || c[1] === 'message.received')
+      .map(c => c[2])
+      .filter(m => m.type !== 'revoked');
+  const dispatchedAfterDeleted = (): string[] => {
+    const calls = (dispatch.mock.calls as Array<[string, string, Row]>).filter(c =>
+      ['message.sent', 'message.received', 'message.revoked'].includes(c[1]),
+    );
+    const first = calls.findIndex(c => c[2].type === 'revoked');
+    if (first < 0) return [];
+    return calls.slice(first + 1).flatMap(c => (c[2].type === 'revoked' ? [] : [`${c[1]} ${String(c[2].body)}`]));
+  };
+
+  it('stores an own send delivered again as deleted during its media download as deleted, hooked with no text', async () => {
+    const media = download();
+    client.emit('message_create', incoming('S', 'orig', { page: media.page, fromMe: true }));
+    await flush();
+    editEvent(client, 'S', 'e0', { media: true, fromMe: true });
+    await flush();
+    client.emit('message_create', deletedDelivery('S', true));
+    await flush();
+    media.finish();
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('S'))]);
+    expect(persisted.filter(r => r.waMessageId === 'S').at(-1)).toEqual(expect.objectContaining(deletedRow('S')));
+    expect(hooked.at(-1)).toBe('');
+    expect(events('message.sent').at(-1)).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+    expect(dispatchedAfterDeleted()).toEqual([]);
+  });
+
+  it('stores a message delivered again as deleted during its contact lookup as deleted, hooked with no text', async () => {
+    const contact = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: contact.promise }));
+    await flush();
+    editEvent(client, 'A', 'e0');
+    await flush();
+    client.emit('message', deletedDelivery('A'));
+    await flush();
+    contact.resolve(null);
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('A'))]);
+    expect(persisted.filter(r => r.waMessageId === 'A').at(-1)).toEqual(expect.objectContaining(deletedRow('A')));
+    expect(hooked.at(-1)).toBe('');
+    expect(dispatchedAfterDeleted()).toEqual([]);
+  });
+
+  it('announces nothing of an own media send after it was delivered again as deleted and deleted for everyone', async () => {
+    const media = download();
+    client.emit('message_create', incoming('S', 'orig', { page: media.page, fromMe: true }));
+    await flush();
+    client.emit('message_create', deletedDelivery('S', true));
+    await flush();
+    revokeEvent(client, 'S', { fromMe: true });
+    await flush();
+    media.finish();
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('S'))]);
+    expect(contentAnnounced()).toEqual([]);
+    expect(hooked).not.toContain('orig');
+    expect(events('message.revoked')).toHaveLength(1);
+  });
+
+  // Whatever an engine hands over for a message that came deleted, none of it reaches the hooks.
+  it('hooks a message delivered deleted with no content, whatever the engine hands over', async () => {
+    const delivered = (id: string, fromMe: boolean) =>
+      ({
+        id,
+        chatId: CHAT,
+        from: fromMe ? SELF : CHAT,
+        to: fromMe ? CHAT : SELF,
+        fromMe,
+        isGroup: false,
+        type: 'revoked',
+        body: 'left over',
+        timestamp: 1_700_000_000,
+        media: { mimetype: 'image/png', data: 'QUJD' },
+      }) as IncomingMessage;
+    const seen: Row[] = [];
+    rewrite = data => (seen.push({ ...data }), data);
+    projector.handleOwnSendEcho('s1', engine, delivered('S', true));
+    projector.handleInboundMessage('s1', engine, delivered('A', false));
+    await flush();
+
+    expect(seen).toHaveLength(2);
+    for (const data of seen) {
+      expect(data).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+      expect(data).not.toHaveProperty('media');
+    }
+  });
+
   it('announces an own message stored again after its row was removed without the mark of that row', async () => {
     client.emit('message_create', own('S', 'orig'));
     await flush();
@@ -1335,6 +1429,24 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     editEvent(client, 'A', 'late');
 
     expect(order).toEqual(['message A', 'edit A fixed', 'message A', 'edit A late']);
+  });
+
+  it('hands a delivery that came deleted over with no text, and not the delivery still processed after it', async () => {
+    const { client, order, bodies, arrivals } = wire();
+    const first = deferred<null>();
+    client.emit('message', incoming('A', 'orig', { contact: first.promise }));
+    editEvent(client, 'A', 'v1');
+    client.emit('message', { ...incoming('A', ''), type: 'revoked' });
+    await flush();
+    expect(order).toEqual(['message A']);
+
+    first.resolve(null);
+    await flush();
+    editEvent(client, 'A', 'late');
+
+    expect(order).toEqual(['message A', 'edit A v1', 'edit A late']);
+    expect(bodies).toEqual(['']);
+    expect(arrivals).toEqual([undefined]);
   });
 
   it('delivers the rest when one kept change fails', async () => {
