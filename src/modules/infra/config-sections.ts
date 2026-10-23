@@ -22,8 +22,9 @@ function setSecret(updates: Record<string, string>, key: string, value: string |
   if (value) updates[key] = value;
 }
 
-// The host the next boot dials before this save changes it: one the environment pins, else the stored one.
-function nextBootHost(key: string, existing: Record<string, string>): string | undefined {
+// What the next boot reads for a key (a host, a selection) before this save changes it: the value the environment
+// pins, else the stored one.
+function nextBootValue(key: string, existing: Record<string, string>): string | undefined {
   return isEnvPinned(key) ? process.env[key] : existing[key];
 }
 
@@ -83,7 +84,13 @@ export function applyDatabaseSection(
       // Built-in PostgreSQL - use container name as host
       updates.DATABASE_HOST = 'postgres';
       updates.DATABASE_PORT = '5432';
-      updates.DATABASE_USERNAME = 'openwa';
+      // A database the next boot already dials on the bundled container (by a host that names it in any spelling)
+      // keeps the user, database and schema it uses there: such a file reads as built-in, and a save that changes
+      // nothing else must not move the instance to another database. From anywhere else they belong to another server.
+      const servesStored =
+        nextBootValue('DATABASE_TYPE', existing) === 'postgres' &&
+        namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing));
+      updates.DATABASE_USERNAME = (servesStored && existing.DATABASE_USERNAME) || 'openwa';
       // The bundled credential is only the DEFAULT. Secrets are never echoed back to the form,
       // so an absent password field means "unchanged", not "reset to 'openwa'" — and the
       // dashboard ALWAYS sends builtIn, so keying the reset on "explicit builtIn:true" reset a
@@ -95,15 +102,15 @@ export function applyDatabaseSection(
       // external DB's credential and must not be carried into the container.
       const storedPassword =
         existing.POSTGRES_BUILTIN === 'true' ||
-        namesBundledContainer('postgres', nextBootHost('DATABASE_HOST', existing))
+        namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing))
           ? existing.DATABASE_PASSWORD
           : undefined;
       updates.DATABASE_PASSWORD = database.password || storedPassword || 'openwa';
-      updates.DATABASE_NAME = 'openwa';
+      updates.DATABASE_NAME = (servesStored && existing.DATABASE_NAME) || 'openwa';
       // Built-in Postgres is initialized with the default 'public' schema (see
       // scripts/postgres-init-schema.sh). Pin it so a later switch from a custom-schema
       // external DB to built-in doesn't carry a stale POSTGRES_SCHEMA forward.
-      updates.POSTGRES_SCHEMA = 'public';
+      updates.POSTGRES_SCHEMA = (servesStored && existing.POSTGRES_SCHEMA) || 'public';
       profiles.push('postgres');
     } else {
       // External PostgreSQL. Flipping built-in -> external must not carry the bundled
@@ -239,13 +246,17 @@ export function applyStorageSection(
       // password: keys the next boot already dials the bundled endpoint with (the flag already set, or the bundled
       // endpoint pinned or stored, in any spelling) are the ones that container was created with, and are kept.
       const keepKeys =
-        existing.MINIO_BUILTIN === 'true' || namesBundledContainer('minio', nextBootHost('S3_ENDPOINT', existing));
+        existing.MINIO_BUILTIN === 'true' || namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing));
       updates.S3_ENDPOINT = 'http://minio:9000';
       updates.S3_ACCESS_KEY_ID = (keepKeys && (existing.S3_ACCESS_KEY_ID || existing.S3_ACCESS_KEY)) || 'minioadmin';
       updates.S3_SECRET_ACCESS_KEY =
         (keepKeys && (existing.S3_SECRET_ACCESS_KEY || existing.S3_SECRET_KEY)) || 'minioadmin';
-      updates.S3_BUCKET = 'openwa';
-      updates.S3_REGION = 'us-east-1';
+      // As for the database: a bucket the next boot already reaches on the bundled MinIO is kept with its region.
+      const servesStored =
+        nextBootValue('STORAGE_TYPE', existing) === 's3' &&
+        namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing));
+      updates.S3_BUCKET = (servesStored && existing.S3_BUCKET) || 'openwa';
+      updates.S3_REGION = (servesStored && existing.S3_REGION) || 'us-east-1';
       profiles.push('minio');
     } else {
       // External S3/MinIO. Flipping built-in -> external must not carry the bundled

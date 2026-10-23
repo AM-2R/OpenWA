@@ -1578,6 +1578,98 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
     });
   });
 
+  // A file naming the bundled container beside an external database or bucket reads as built-in, so the page sends
+  // builtIn true for it on a save of any other card. The next boot already dials that container with the stored
+  // user, database, schema and bucket, and such a save keeps them.
+  describe('built-in save over a database and bucket the bundled containers already serve', () => {
+    const FILE = (db: string, s3: string) =>
+      `DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=${db}\nDATABASE_USERNAME=app\n` +
+      'DATABASE_PASSWORD=AppPw12345!\nDATABASE_NAME=appdb\nPOSTGRES_SCHEMA=tenant\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+      `S3_ENDPOINT=${s3}\nS3_BUCKET=media\nS3_REGION=eu-west-1\nS3_ACCESS_KEY_ID=AppKey1234567\n` +
+      'S3_SECRET_ACCESS_KEY=AppSecret1234567890\n';
+    // What the page sends when the operator saves another card: the toggles seeded on, the hidden fields as loaded.
+    const pageSave = (db: string, s3: string) => ({
+      database: {
+        type: 'postgres',
+        builtIn: true,
+        host: db,
+        port: '5432',
+        username: 'app',
+        password: '',
+        database: 'appdb',
+        schema: 'tenant',
+        poolSize: 10,
+        sslEnabled: false,
+        sslRejectUnauthorized: true,
+      },
+      storage: {
+        type: 's3',
+        builtIn: true,
+        localPath: './data/media',
+        s3Bucket: 'media',
+        s3Region: 'eu-west-1',
+        s3AccessKey: '',
+        s3SecretKey: '',
+        s3Endpoint: s3,
+      },
+      engine: { headless: false },
+    });
+
+    afterEach(() => {
+      delete process.env.DATABASE_HOST;
+      delete process.env.S3_ENDPOINT;
+      recordPinnedEnvKeys({});
+    });
+
+    it.each(HOST_SPELLINGS.database.reach.map((db, i) => [db, HOST_SPELLINGS.storage.reach[i]]))(
+      'keeps them under %j and %j',
+      (db, s3) => {
+        const env = written(pageSave(db, s3), FILE(db, s3));
+        for (const line of ['DATABASE_USERNAME=app', 'DATABASE_NAME=appdb', 'POSTGRES_SCHEMA=tenant']) {
+          expect(env).toContain(line);
+        }
+        expect(env).toContain('S3_BUCKET=media');
+        expect(env).toContain('S3_REGION=eu-west-1');
+      },
+    );
+
+    it('writes the bundled ones over another server, as a switch to the built-in container', () => {
+      const env = written(
+        pageSave('db.example.com', 'https://s3.example.com'),
+        FILE('db.example.com', 'https://s3.example.com'),
+      );
+      for (const line of ['DATABASE_USERNAME=openwa', 'DATABASE_NAME=openwa', 'POSTGRES_SCHEMA=public']) {
+        expect(env).toContain(line);
+      }
+      expect(env).toContain('S3_BUCKET=openwa');
+      expect(env).toContain('S3_REGION=us-east-1');
+    });
+
+    // A SQLite boot dials no PostgreSQL, and its DATABASE_NAME is a file path.
+    it('writes the bundled ones when the next boot runs SQLite beside a bundled host pin', () => {
+      process.env.DATABASE_HOST = 'postgres';
+      recordPinnedEnvKeys({ DATABASE_HOST: 'postgres' });
+      const env = written(
+        { database: { type: 'postgres', builtIn: true } },
+        'DATABASE_TYPE=sqlite\nPOSTGRES_BUILTIN=false\nDATABASE_NAME=./data/openwa.sqlite\n',
+      );
+      expect(env).toContain('DATABASE_NAME=openwa');
+      expect(env).not.toContain('openwa.sqlite');
+    });
+
+    // Likewise local storage dials no MinIO, whatever bucket an older file left behind.
+    it('writes the bundled bucket when the next boot keeps local storage beside a bundled endpoint pin', () => {
+      process.env.S3_ENDPOINT = 'http://minio:9000';
+      recordPinnedEnvKeys({ S3_ENDPOINT: 'http://minio:9000' });
+      const env = written(
+        { storage: { type: 's3', builtIn: true } },
+        'STORAGE_TYPE=local\nMINIO_BUILTIN=false\nS3_BUCKET=media\nS3_REGION=eu-west-1\n',
+      );
+      expect(env).toContain('S3_BUCKET=openwa');
+      expect(env).toContain('S3_REGION=us-east-1');
+    });
+  });
+
   // The guard must evaluate what the next boot would SEE: load-env.ts loads with dotenv
   // override:false, so a value in the container environment (compose `environment:`) wins over the
   // saved file. Snapshot + clear every guard-relevant key so these tests are hermetic.

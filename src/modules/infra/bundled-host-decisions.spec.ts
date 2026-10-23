@@ -43,6 +43,9 @@ const SECRETS = {
 };
 const STORED_SECRETS =
   'DATABASE_PASSWORD=StoredPw789!\nS3_ACCESS_KEY_ID=StoredKey12345\nS3_SECRET_ACCESS_KEY=StoredSecret1234567890\n';
+// What an external database or bucket was saved with, beside the host of the case.
+const STORED_VALUES =
+  'DATABASE_USERNAME=app\nDATABASE_NAME=appdb\nPOSTGRES_SCHEMA=tenant\nS3_BUCKET=media\nS3_REGION=eu-west-1\n';
 
 type Position = 'pinned' | 'file';
 type Flag = 'true' | 'false' | 'absent';
@@ -70,13 +73,13 @@ const label = (c: Case) => `${c.service} ${JSON.stringify(c.host)} ${c.position}
 let pinnedKeys: string[] = [];
 let fileText = '';
 
-function arrange(c: Case): void {
+function arrange(c: Case, stored = ''): void {
   const spec = SERVICES[c.service];
   // A pinned host must outrank the file's, so the file holds a host of the other kind.
   const fileHost = c.position === 'file' ? c.host : c.reach ? spec.externalHost : spec.bundledHost;
   const lines = [`${spec.selection}=${spec.selected}`, `${spec.host}=${fileHost}`];
   if (c.flag !== 'absent') lines.push(`${spec.flag}=${c.flag}`);
-  fileText = `${lines.join('\n')}\n${STORED_SECRETS}`;
+  fileText = `${lines.join('\n')}\n${STORED_SECRETS}${stored}`;
   const pins: Record<string, string> = { ...SECRETS, ...(c.position === 'pinned' ? { [spec.host]: c.host } : {}) };
   Object.assign(process.env, pins);
   pinnedKeys = Object.keys(pins);
@@ -196,6 +199,22 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
         expect([env.S3_ACCESS_KEY_ID, env.S3_SECRET_ACCESS_KEY]).toEqual(
           keep ? ['StoredKey12345', 'StoredSecret1234567890'] : ['minioadmin', 'minioadmin'],
         );
+    });
+  }
+
+  if (c.service !== 'redis') {
+    it('keeps the stored user, database and schema, or bucket and region, of a built-in save only when the bundled container already serves them', () => {
+      arrange(c, STORED_VALUES);
+      const env = saved(
+        c.service === 'database'
+          ? { database: { type: 'postgres', builtIn: true } }
+          : { storage: { type: 's3', builtIn: true } },
+      );
+      if (c.service === 'database')
+        expect([env.DATABASE_USERNAME, env.DATABASE_NAME, env.POSTGRES_SCHEMA]).toEqual(
+          reached ? ['app', 'appdb', 'tenant'] : ['openwa', 'openwa', 'public'],
+        );
+      else expect([env.S3_BUCKET, env.S3_REGION]).toEqual(reached ? ['media', 'eu-west-1'] : ['openwa', 'us-east-1']);
     });
   }
 
