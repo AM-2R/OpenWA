@@ -14,7 +14,7 @@ import {
   Download,
   Upload,
 } from 'lucide-react';
-import { API_BASE_URL, infraApi, type SavedConfig } from '../services/api';
+import { API_BASE_URL, infraApi, type SavedConfig, type SaveConfigPayload } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
 import { CONTAINER_OF, namesBundledContainer, sameHost } from '../utils/bundledHost';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -45,6 +45,23 @@ const HOST_KEY: Record<string, string> = { postgres: 'DATABASE_HOST', redis: 'RE
 /** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
 const nextBootHost = (profile: string, config: SavedConfig): string =>
   profile === 'postgres' ? config.database.host : profile === 'redis' ? config.redis.host : config.storage.s3Endpoint;
+
+/**
+ * The host a save wrote for a profile whose host the environment does not pin, taken from what it sent the way the
+ * section writers (src/modules/infra/config-sections.ts) write it, for when the config cannot be read back: the host
+ * sent, or '' where the save drops it. A built-in choice the new configuration uses is in the save's profiles, which
+ * the restart starts rather than stops, so the host sent beside it does not matter.
+ */
+function writtenHost(profile: string, sent: SaveConfigPayload): string | undefined {
+  if (profile === 'postgres') return sent.database?.type === 'sqlite' ? '' : sent.database?.host;
+  if (profile === 'minio') return sent.storage?.type === 'local' ? '' : sent.storage?.s3Endpoint;
+  // A built-in Redis switched off is dropped with its host unless the queue or the cache still uses it, which keeps its
+  // profile. The one case the page cannot see is CACHE_ENABLED true in the saved file beside an environment value that
+  // turns it off: the host stays. An external host is kept as sent; one on the bundled name is dropped only once
+  // nothing uses Redis, which the cache may, so the page does not ask to stop that container.
+  const redis = sent.redis;
+  return redis?.builtIn && redis.enabled === false ? '' : redis?.host;
+}
 
 export function Infrastructure() {
   const { t } = useTranslation();
@@ -129,16 +146,17 @@ export function Infrastructure() {
         .filter(([profile, up, host]) => up && host !== undefined && !namesBundledContainer(profile, host))
         .map(([profile]): string => profile);
       // The server never stops a container the next boot still reaches: the host the environment pins, else the one in
-      // the file this save wrote. A pinned host is the one the page loaded; the saved one the page reads back. It asks
-      // for (and names) only the containers neither reaches, and none whose host it could not read, so the dialog lists
-      // what the server stops. The form is seeded once, so the refetch keeps any edit in progress.
+      // the file this save wrote. A pinned host is the one the page loaded; the saved one the page reads back, or takes
+      // from what the save sent when that read fails. It asks for (and names) only the containers neither reaches, and
+      // none whose host it cannot tell, so the dialog lists what the server stops. The form is seeded once, so the
+      // refetch keeps any edit in progress.
       const saved = await queryClient
         .fetchQuery({ queryKey: ['infra', 'config'], queryFn: infraApi.getConfig, staleTime: 0 })
         .catch(() => undefined);
-      const next = (profile: string) => pinned(HOST_KEY[profile]) ?? saved;
       const toStop = [...running, ...pinnedAway].filter(profile => {
-        const config = next(profile);
-        return !!config && !namesBundledContainer(profile, nextBootHost(profile, config));
+        const config = pinned(HOST_KEY[profile]) ?? saved;
+        const host = config ? nextBootHost(profile, config) : writtenHost(profile, sent);
+        return host !== undefined && !namesBundledContainer(profile, host);
       });
       restartFlow.open({
         profiles: profiles.filter(p => !pinnedAway.includes(p)),

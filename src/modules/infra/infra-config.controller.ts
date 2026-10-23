@@ -481,9 +481,9 @@ export class InfraConfigController {
       // otherwise tear down the very backend the app is running on. The dashboard fills this list from the
       // live /infra/status at save time: the builtIn services minus the new profiles, plus a running container
       // OpenWA created whose host the environment pins elsewhere, less any whose next-boot host (the pinned one,
-      // else the saved config read back) still reaches it, and less any whose host it could not read. A
-      // container is left running when that status read had failed, or when the next boot still dials it
-      // (dropped above).
+      // else the saved config read back, else the one the save sent when that read fails) still reaches it, and
+      // less any whose host it cannot tell. A container is left running when that status read had failed, or when
+      // the next boot still dials it (dropped above).
       // Only ever tear down OpenWA-managed services. An arbitrary profile name (or the empty string)
       // would otherwise reach stopManagedService and, via container-name matching, could stop an unrelated
       // container — so constrain teardown to the managed allowlist and drop anything else.

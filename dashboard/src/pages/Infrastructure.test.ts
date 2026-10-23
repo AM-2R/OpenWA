@@ -2030,6 +2030,123 @@ test('bundled containers the pinned hosts reach are neither stopped nor named wh
   assert.deepEqual(body, { profiles: [], profilesToRemove: [] });
 });
 
+// The save writes the host a built-in service is switched to as sent (trimmed, or dropped with another type), so
+// without the read-back the page takes it from the payload: a host that reaches the bundled container keeps it, any
+// other stops it, and the dialog names it.
+const READBACK_SAVED: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: { ...SAVED_CONFIG.database, builtIn: true, host: 'postgres' },
+  redis: { enabled: true, builtIn: true, builtInSet: true, host: 'redis', port: '6379', passwordSet: false },
+  storage: {
+    ...SAVED_CONFIG.storage,
+    type: 's3',
+    builtIn: true,
+    s3Bucket: 'openwa',
+    s3Endpoint: 'http://minio:9000',
+  },
+};
+const BUILT_IN_SWITCHES = [
+  ['database', 'postgres', 'Use Built-in PostgreSQL Container', 'Database Configuration', 'Host'],
+  ['redis', 'redis', 'Use Built-in Redis Container', 'Redis', 'Host'],
+  ['storage', 'minio', 'Use Built-in MinIO Container', 'Storage Configuration', 'Custom Endpoint (optional)'],
+] as const;
+const CONTAINER_NAMES: Record<string, string> = {
+  postgres: 'openwa-postgres',
+  redis: 'openwa-redis',
+  minio: 'openwa-minio',
+};
+
+// `kept` is what the save answers with: the profiles of the built-in services left on.
+async function switchWithoutReadBack(
+  kept: string[],
+  edit: (container: HTMLElement) => void,
+): Promise<{ names: string[]; body: unknown }> {
+  const { screen, waitFor, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_BUNDLED, saved: READBACK_SAVED, savedAfterSaveFails: true, saveProfiles: kept };
+  const { container } = renderInfrastructure();
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  edit(container);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+  const dialog = await screen.findByRole('dialog');
+  const names = stopNames(dialog);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Restart Now' }));
+  await waitFor(() => assert.ok(findFetchCall('POST', '/api/infra/restart'), 'expected the restart POST'));
+  return { names, body: findFetchCall('POST', '/api/infra/restart')!.body };
+}
+
+for (const [service, profile, toggle, heading, field] of BUILT_IN_SWITCHES) {
+  const hosts = [
+    ...HOST_SPELLINGS[service].reach.map(host => [host, true] as const),
+    ...HOST_SPELLINGS[service].elsewhere.map(host => [host, false] as const),
+  ];
+  for (const [host, reach] of hosts) {
+    test(`a built-in ${service} switched to ${JSON.stringify(host)} is ${reach ? 'kept' : 'stopped'} when the read-back fails`, async () => {
+      const { fireEvent } = rtl;
+      const kept = ['postgres', 'redis', 'minio'].filter(p => p !== profile);
+      const { names, body } = await switchWithoutReadBack(kept, container => {
+        fireEvent.click(toggleInput(container, toggle));
+        fireEvent.change(fieldInput(card(container, heading), field), { target: { value: host } });
+      });
+
+      assert.deepEqual(names, reach ? [] : [CONTAINER_NAMES[profile]]);
+      assert.deepEqual(body, { profiles: kept, profilesToRemove: reach ? [] : [profile] });
+    });
+  }
+}
+
+test('a built-in database and storage switched to SQLite and local are stopped when the read-back fails', async () => {
+  const { fireEvent } = rtl;
+  const { names, body } = await switchWithoutReadBack(['redis'], container => {
+    fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="dbType"]')[0]);
+    fireEvent.click(container.querySelectorAll<HTMLInputElement>('input[name="storageType"]')[0]);
+  });
+
+  assert.deepEqual(names, ['openwa-postgres', 'openwa-minio']);
+  assert.deepEqual(body, { profiles: ['redis'], profilesToRemove: ['postgres', 'minio'] });
+});
+
+// A built-in Redis nothing uses any more is saved without its profile, and the save drops its host.
+test('a built-in Redis switched off is stopped when the read-back fails', async () => {
+  const { fireEvent } = rtl;
+  const { names, body } = await switchWithoutReadBack(['postgres', 'minio'], container => {
+    fireEvent.click(toggleInput(container, 'Enable Redis'));
+  });
+
+  assert.deepEqual(names, ['openwa-redis']);
+  assert.deepEqual(body, { profiles: ['postgres', 'minio'], profilesToRemove: ['redis'] });
+});
+
+// The cache may still use Redis, and the page cannot see it: a host on the bundled name, switched off from a built-in
+// Redis together with Redis itself, is the server's to drop or keep, so its container is not asked to stop.
+test('a Redis switched off beside a host on the bundled name is not stopped when the read-back fails', async () => {
+  const { fireEvent } = rtl;
+  const { names, body } = await switchWithoutReadBack(['postgres', 'minio'], container => {
+    fireEvent.click(toggleInput(container, 'Use Built-in Redis Container'));
+    fireEvent.click(toggleInput(container, 'Enable Redis'));
+  });
+
+  assert.deepEqual(names, []);
+  assert.deepEqual(body, { profiles: ['postgres', 'minio'], profilesToRemove: [] });
+});
+
+// With REDIS_ENABLED pinned, an untouched switch is left out of the save, and the stored value the file keeps decides.
+test('a built-in Redis whose switch the environment pins is not stopped when the read-back fails', async () => {
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_BUNDLED, envPinned: ['REDIS_ENABLED'] },
+    saved: { ...READBACK_SAVED, redis: { ...READBACK_SAVED.redis, enabled: false } },
+    savedAfterSaveFails: true,
+    saveProfiles: ['postgres', 'minio'],
+  };
+
+  const { names, body } = await saveAndRestart();
+
+  assert.deepEqual(names, []);
+  assert.deepEqual(body, { profiles: ['postgres', 'minio'], profilesToRemove: [] });
+});
+
 test('bundled containers the environment pins the hosts to are neither stopped nor named', async () => {
   const { screen, waitFor, fireEvent, within } = rtl;
   resetFetchCalls();
