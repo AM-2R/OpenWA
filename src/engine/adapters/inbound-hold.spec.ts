@@ -1212,10 +1212,10 @@ describe('Baileys inbound messages held for storage', () => {
 
     it('has the session hold the message when an edit reaches it, and the row takes the text', async () => {
       const h = heldProjector({ unique: true, sqlite });
-      const heldWhenEdited: boolean[] = [];
+      const quotedWhenEdited: boolean[] = [];
       const rowsWhenEdited: number[] = [];
       const onMessageEdited: EngineEventCallbacks['onMessageEdited'] = e => {
-        heldWhenEdited.push(h.projector.inFlightInbound('s1', e.messageId) !== undefined);
+        quotedWhenEdited.push(h.projector.inFlightInbound('s1', e.messageId) !== undefined);
         rowsWhenEdited.push(h.rows.length);
         h.callbacks.onMessageEdited!(e);
       };
@@ -1232,8 +1232,8 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.announcedAs('message.edited')).toEqual([
         expect.objectContaining({ messageId: 'M', body: 'fixed caption' }),
       ]);
-      // PostgreSQL holds it from the arrival, before the emit, which inFlightInbound does not report yet.
-      expect(heldWhenEdited).toEqual([sqlite]);
+      // The stored-message lookup has not finished, so neither database lends an unchecked quote.
+      expect(quotedWhenEdited).toEqual([false]);
       // Either way the edit reaches it before its row is written, and an edit that meets the row with the same
       // text is no edit to the session.
       expect(rowsWhenEdited).toEqual([0]);

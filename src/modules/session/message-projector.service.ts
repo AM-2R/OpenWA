@@ -7,6 +7,7 @@ import { Session } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
+import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
@@ -442,7 +443,7 @@ export class MessageProjector {
     // handler's rewrite.
     const inFlightKey = `${id}:${message.id}`;
     const inFlight = turn
-      ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
+      ? Object.assign(turn.entry, { ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
     this.arrive(inFlight, message);
 
@@ -453,7 +454,7 @@ export class MessageProjector {
     // Execute hook for message received - plugins can modify or stop processing. The hook chain and
     // sender resolution run concurrently across messages; the catch is attached now so a failure
     // while the commit waits its turn is never an unhandled rejection.
-    const prepared = this.startHookChain(id, engine, turn, messageData, () =>
+    const prepared = this.startHookChain(id, engine, turn, messageData, messageData =>
       this.hookManager
         .execute('message:received', messageData, {
           sessionId: id,
@@ -465,7 +466,7 @@ export class MessageProjector {
           },
         })
         .then(({ data }) =>
-          this.prepareInboundMessage(id, this.messageOrEngineCopy(id, 'message:received', data, message)),
+          this.prepareInboundMessage(id, this.messageOrEngineCopy(id, 'message:received', data, messageData)),
         ),
     ).catch(onFailure);
     const outcome = deferred<InboundOutcome | undefined>();
@@ -487,22 +488,58 @@ export class MessageProjector {
    * Start a message's hook chain: at once without a turn. With one, once every earlier admitted
    * message of the chat was emitted or dropped, so hooks start in arrival order. A message revoked
    * before then skips its hooks, as its content is gone, and an edit made before then reaches them.
+   * A delivery of content checks for a stored tombstone before either hook; one that came deleted
+   * reaches them cleared. An unavailable database keeps the delivery, as the storage path does.
    */
   private startHookChain(
     id: string,
     engine: IWhatsAppEngine,
     turn: InboundTurn | undefined,
     messageData: InboundMessageData,
-    run: () => Promise<InboundMessageData>,
+    run: (message: InboundMessageData) => Promise<InboundMessageData>,
   ): Promise<InboundMessageData | null> {
-    if (!turn) return run();
+    const checked = async (): Promise<InboundMessageData | null> => {
+      let data = messageData;
+      if (data.id && data.type !== 'revoked') {
+        try {
+          const connection = this.messageRepository.manager?.connection;
+          if (connection && !(await awaitNoOpenTransaction(connection))) {
+            throw new Error('Timed out waiting for the message database transaction');
+          }
+          // The unique message key bounds this read. A tombstone outlives this projector and any engine copy.
+          const row = await this.messageRepository.findOne({
+            where: { sessionId: id, waMessageId: data.id, type: 'revoked' },
+            select: { type: true, chatId: true, direction: true, author: true },
+          });
+          if (row?.type === 'revoked' && !mutationTargetsForeignRow(row, claimOf(data))) {
+            data = deletedPlaceholder(data);
+          }
+        } catch (error) {
+          // Preserve the receive path's fail-open behavior when storage is unavailable.
+          this.logger.warn('Failed to read the stored message before its hooks; keeping the delivery', {
+            sessionId: id,
+            messageId: data.id,
+            error: String(error),
+          });
+        }
+      }
+      if (!this.engines.isLive(id, engine)) return null;
+      const pending = this.inboundInFlight.get(`${id}:${data.id}`);
+      if (pending && !this.foreignToInFlight(pending, claimOf(data))) {
+        if (data.type === 'revoked') this.holdRevoked(id, pending);
+        if (pending.revoked) data = deletedPlaceholder(data);
+        pending.quote = quoteOf(data);
+      }
+      return run(data);
+    };
+    if (!turn) return checked();
     const { entry } = turn;
     return turn.hookGate.promise.then(() => {
       if (!this.engines.isLive(id, engine)) return null;
-      if (entry.revoked) return messageData;
+      if (entry.revoked && messageData.type !== 'revoked') return messageData;
       // A delivery that came deleted has no text for the edit to replace.
       if (entry.editedBody !== undefined && messageData.type !== 'revoked') messageData.body = entry.editedBody;
-      return run();
+      return checked();
     });
   }
 
@@ -519,10 +556,11 @@ export class MessageProjector {
 
   /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
   private trackInFlight(key: string, message: InboundMessageData): InFlightEntry {
-    const { ref, revoked, revokeAnnounced, editedBody, edited, ackStatus, reactions } =
+    const { quote, ref, revoked, revokeAnnounced, editedBody, edited, ackStatus, reactions } =
       this.inboundInFlight.get(key) ?? {};
     const inFlight: InFlightEntry = {
-      quote: quoteOf(message),
+      // A new delivery lends no unchecked content while its stored-message lookup waits.
+      quote,
       // The first delivery of an id says whose message it is: a repeat sent from another chat must not
       // take that over from it, or a change aimed through the repeat would be judged by the wrong rule.
       ref: ref ?? refOf(message),
@@ -1137,12 +1175,12 @@ export class MessageProjector {
     // path, the entry follows the chain's rewrites, so a quote carries what the row will hold.
     const inFlightKey = `${id}:${message.id}`;
     const inFlight = turn
-      ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: turn.entry.ref ?? refOf(messageData) })
+      ? Object.assign(turn.entry, { ref: turn.entry.ref ?? refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
     this.arrive(inFlight, message);
     // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
     // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
-    const prepared = this.startHookChain(id, engine, turn, messageData, () =>
+    const prepared = this.startHookChain(id, engine, turn, messageData, messageData =>
       this.hookManager
         .execute('message:sent', messageData, {
           sessionId: id,
@@ -1153,7 +1191,7 @@ export class MessageProjector {
             return true;
           },
         })
-        .then(({ data }) => this.messageOrEngineCopy(id, 'message:sent', data, message)),
+        .then(({ data }) => this.messageOrEngineCopy(id, 'message:sent', data, messageData)),
     ).catch(onFailure);
     this.commitInTurn(id, message, turn, async () => {
       try {

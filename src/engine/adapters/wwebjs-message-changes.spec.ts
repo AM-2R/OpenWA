@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { setFlagsFromString } from 'v8';
 import { runInNewContext } from 'vm';
 import { WAState, type Client } from 'whatsapp-web.js';
-import type { Repository } from 'typeorm';
+import { DataSource, type Repository } from 'typeorm';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
 import type { WwebjsLifecycle } from './wwebjs-lifecycle';
 import type { WwebjsEngineHost } from './wwebjs-host';
@@ -11,7 +11,7 @@ import { EngineRegistry } from '../engine-registry.service';
 import { MessageProjector } from '../../modules/session/message-projector.service';
 import { deferred } from '../../modules/session/inbound-room';
 import { createLogger } from '../../common/services/logger.service';
-import type { Message } from '../../modules/message/entities/message.entity';
+import { Message, MessageDirection } from '../../modules/message/entities/message.entity';
 import type { Session } from '../../modules/session/entities/session.entity';
 import type { EventsGateway } from '../../modules/events/events.gateway';
 import type { WebhookService } from '../../modules/webhook/webhook.service';
@@ -683,14 +683,17 @@ describe.each([
   });
 
   // A send made through the API stores its row before its echo comes, so the echo loses its insert.
-  it('announces the echo of a send the API stored unmarked, reading no row for it', async () => {
+  it('announces the echo of a send the API stored unmarked after checking its tombstone', async () => {
     rows.push({ sessionId: 's1', waMessageId: 'S', chatId: CHAT, direction: 'outgoing', type: 'text', body: 'sent' });
     client.emit('message_create', own('S', 'sent'));
     await flush();
 
     expect(events('message.sent')).toEqual([expect.objectContaining({ body: 'sent' })]);
     expect(events('message.sent')[0]).not.toHaveProperty('edited');
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { sessionId: 's1', waMessageId: 'S', type: 'revoked' } }),
+    );
   });
 
   it('announces an own send edited during its media download with the mark each time it is delivered', async () => {
@@ -782,7 +785,7 @@ describe.each([
     await flush();
 
     expect(events('message.sent')).toEqual([
-      expect.objectContaining({ body: 'e0', type: 'text', edited: true }),
+      expect.objectContaining({ body: '', type: 'revoked' }),
       expect.objectContaining({ body: '', type: 'revoked' }),
     ]);
     expect(events('message.sent')[1]).not.toHaveProperty('edited');
@@ -807,6 +810,207 @@ describe.each([
   // revoke event: such a delivery takes the message back as the revoke would, and lends nothing of its content.
   const deletedRow = (id: string) => ({ waMessageId: id, body: '', type: 'revoked', metadata: null });
   const deletedDelivery = (id: string, fromMe = false) => ({ ...incoming(id, '', { fromMe }), type: 'revoked' });
+
+  it('takes an earlier queued own delivery back when a later one recognizes its stored tombstone', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    client.emit('message', incoming('P', 'earlier'));
+    await flush();
+    client.emit('message_create', own('S', 'original text'));
+    await flush();
+    rows.push({ sessionId: 's1', chatId: CHAT, direction: 'outgoing', ...deletedRow('S') });
+    client.emit('message_create', own('S', 'stale duplicate'));
+    await flush();
+    hook.resolve();
+    await flush();
+
+    expect(events('message.sent')).toHaveLength(2);
+    for (const sent of events('message.sent'))
+      expect(sent).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+  });
+
+  it.each([false, true])(
+    'hooks a later content delivery of a message delivered deleted with no content, own=%s',
+    async fromMe => {
+      const event = fromMe ? 'message_create' : 'message';
+      client.emit(event, deletedDelivery('A', fromMe));
+      await flush();
+      client.emit(event, incoming('A', 'stale text', { fromMe }));
+      await flush();
+
+      expect(hooked).toEqual(['', '']);
+      expect(rows).toEqual([expect.objectContaining(deletedRow('A'))]);
+      expect(dispatchedAfterDeleted()).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    'hooks a content delivery of a stored tombstone with no content after other messages, own=%s',
+    async fromMe => {
+      // These rows outlive the projector that stored them, and any bounded record of recent messages.
+      for (let n = 0; n <= 501; n++)
+        rows.push({
+          sessionId: 's1',
+          chatId: CHAT,
+          direction: fromMe ? 'outgoing' : 'incoming',
+          ...deletedRow(`A${n}`),
+        });
+      client.emit(fromMe ? 'message_create' : 'message', incoming('A0', 'stale text', { fromMe }));
+      await flush();
+
+      expect(hooked).toEqual(['']);
+      expect(rows[0]).toEqual(expect.objectContaining(deletedRow('A0')));
+      expect(contentAnnounced()).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['chat', CHAT, '628999@c.us', 'incoming', undefined, undefined],
+    ['direction', CHAT, CHAT, 'outgoing', undefined, undefined],
+    ['author', '120363000@g.us', '120363000@g.us', 'incoming', '628999@c.us', '628111@c.us'],
+  ])(
+    'keeps the content of a delivery whose %s differs from the stored tombstone',
+    async (_, chatId, storedChat, direction, storedAuthor, author) => {
+      rows.push({
+        sessionId: 's1',
+        waMessageId: 'A',
+        chatId: storedChat,
+        direction,
+        author: storedAuthor,
+        type: 'revoked',
+        body: '',
+      });
+      projector.handleInboundMessage('s1', engine, {
+        id: 'A',
+        chatId,
+        from: chatId,
+        to: SELF,
+        fromMe: false,
+        isGroup: chatId.endsWith('@g.us'),
+        kind: 'individual',
+        body: 'another message',
+        type: 'text',
+        timestamp: 1_700_000_000,
+        author,
+      });
+      await flush();
+
+      expect(hooked).toEqual(['another message']);
+      expect(rows[0].body).toBe('');
+    },
+  );
+
+  it.each([false, true])('keeps a real delivery when the tombstone lookup is unavailable, own=%s', async fromMe => {
+    findOne.mockRejectedValueOnce(new Error('database unavailable'));
+    client.emit(fromMe ? 'message_create' : 'message', incoming('A', 'real message', { fromMe }));
+    await flush();
+
+    expect(hooked).toEqual(['real message']);
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'real message', type: 'text' })]);
+    expect(contentAnnounced()).toHaveLength(1);
+  });
+
+  it.each([
+    [CHAT, ''],
+    ['628999@c.us', 'kept'],
+  ])('checks content still being read against a deleted delivery in %s', async (chatId, expected) => {
+    const read = deferred<null>();
+    findOne.mockReturnValueOnce(read.promise);
+    const original = {
+      id: 'A',
+      chatId: CHAT,
+      from: CHAT,
+      to: SELF,
+      fromMe: false,
+      isGroup: false,
+      kind: 'individual',
+      body: 'kept',
+      type: 'text',
+      timestamp: 1_700_000_000,
+    } as IncomingMessage;
+    projector.handleInboundMessage('s1', engine, original);
+    projector.handleInboundMessage('s1', engine, {
+      ...original,
+      chatId,
+      from: chatId,
+      type: 'revoked',
+      body: '',
+    });
+    await flush();
+    read.resolve(null);
+    await flush();
+
+    expect(hooked.at(-1)).toBe(expected);
+  });
+
+  it('keeps another chat delivery separate from a deleted message still in its hook', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    const deleted = {
+      id: 'A',
+      chatId: CHAT,
+      from: CHAT,
+      to: SELF,
+      fromMe: false,
+      isGroup: false,
+      kind: 'individual',
+      body: '',
+      type: 'revoked',
+      timestamp: 1_700_000_000,
+    } as IncomingMessage;
+    projector.handleInboundMessage('s1', engine, deleted);
+    await flush();
+    projector.handleInboundMessage('s1', engine, {
+      ...deleted,
+      chatId: '628999@c.us',
+      from: '628999@c.us',
+      type: 'text',
+      body: 'another message',
+    });
+    await flush();
+
+    expect(hooked).toEqual(['', 'another message']);
+    hook.resolve();
+    await flush();
+  });
+
+  it.each([false, true])('runs no hook after its engine retired during the tombstone lookup, own=%s', async fromMe => {
+    const read = deferred<null>();
+    findOne.mockReturnValueOnce(read.promise);
+    client.emit(fromMe ? 'message_create' : 'message', incoming('A', 'late message', { fromMe }));
+    await flush();
+    engines.delete('s1');
+    read.resolve(null);
+    await flush();
+
+    expect(hooked).toEqual([]);
+    expect(rows).toEqual([]);
+    expect(contentAnnounced()).toEqual([]);
+  });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])('lends no unchecked quote, then the checked body, deleted=%s own=%s', async (deleted, fromMe) => {
+    const row = { sessionId: 's1', chatId: CHAT, direction: fromMe ? 'outgoing' : 'incoming', ...deletedRow('A') };
+    if (deleted) rows.push(row);
+    const read = deferred<Row | null>();
+    findOne.mockReturnValueOnce(read.promise);
+    let quoted: unknown;
+    rewrite = data => {
+      quoted = projector.inFlightInbound('s1', 'A');
+      return data;
+    };
+    client.emit(fromMe ? 'message_create' : 'message', incoming('A', 'original text', { fromMe }));
+    await flush();
+    expect(projector.inFlightInbound('s1', 'A')).toBeUndefined();
+
+    read.resolve(deleted ? row : null);
+    await flush();
+    expect(quoted).toEqual({ chatId: CHAT, body: deleted ? '' : 'original text' });
+  });
 
   it('stores an own message stored and edited, then delivered again as deleted, as deleted', async () => {
     client.emit('message_create', own('S', 'orig'));
@@ -863,7 +1067,8 @@ describe.each([
       hookGate = hook.promise;
       client.emit('message', incoming('P', 'earlier'));
       await flush();
-      failInsert = row => row.waMessageId === 'S' && row.type !== 'revoked';
+      let inserts = 0;
+      failInsert = row => row.waMessageId === 'S' && ++inserts === 1;
       client.emit(fromMe ? 'message_create' : 'message', incoming('S', 'orig', { fromMe }));
       await flush();
       editEvent(client, 'S', 'e0', { fromMe });
@@ -1670,5 +1875,80 @@ describe('changes kept while whatsapp-web.js processes a message (adapter level)
     gc();
 
     expect(process.memoryUsage().heapUsed - before).toBeLessThan((MESSAGES * LONGEST_TEXT) / 4);
+  });
+});
+
+describe('stored tombstones on a shared SQLite connection', () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])('waits for another transaction before trusting the row, commit=%s own=%s', async (commit, fromMe) => {
+    const db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Message], synchronize: true });
+    await db.initialize();
+    const repository = db.getRepository(Message);
+    const runner = db.createQueryRunner();
+    const engines = new EngineRegistry();
+    const engine = {} as IWhatsAppEngine;
+    engines.set('s1', engine);
+    const seen: string[] = [];
+    const message: IncomingMessage = {
+      id: 'A',
+      chatId: CHAT,
+      from: fromMe ? SELF : CHAT,
+      to: fromMe ? CHAT : SELF,
+      fromMe,
+      isGroup: false,
+      kind: 'individual',
+      type: 'text',
+      body: 'original text',
+      timestamp: 1_700_000_000,
+    };
+    const projector = new MessageProjector(
+      repository,
+      { update: jest.fn().mockResolvedValue({ affected: 1 }) } as unknown as Repository<Session>,
+      engines,
+      new Proxy({}, { get: () => jest.fn() }) as unknown as EventsGateway,
+      { dispatch: jest.fn().mockResolvedValue(undefined) } as unknown as WebhookService,
+      {
+        execute: jest.fn((event: string, data: unknown) => {
+          if (event === 'message:sent' || event === 'message:received') seen.push((data as IncomingMessage).body);
+          return Promise.resolve({ continue: true, data });
+        }),
+      } as unknown as HookManager,
+      { ingest: jest.fn() } as unknown as StatusStoreService,
+      { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+    );
+    try {
+      await repository.insert({
+        sessionId: 's1',
+        waMessageId: 'A',
+        chatId: CHAT,
+        from: message.from,
+        to: message.to,
+        direction: fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+        type: 'text',
+        body: 'original text',
+        timestamp: message.timestamp,
+      });
+      await runner.startTransaction();
+      await runner.manager.update(Message, { waMessageId: 'A' }, { type: 'revoked', body: '' });
+      if (fromMe) projector.handleOwnSendEcho('s1', engine, message);
+      else projector.handleInboundMessage('s1', engine, message);
+      await flush();
+      expect(seen).toEqual([]);
+      if (commit) await runner.commitTransaction();
+      else await runner.rollbackTransaction();
+      for (let n = 0; n < 20; n++) await new Promise(resolve => setTimeout(resolve, 2));
+      expect(seen).toEqual([commit ? '' : 'original text']);
+      expect(await repository.findOneByOrFail({ waMessageId: 'A' })).toEqual(
+        expect.objectContaining({ type: commit ? 'revoked' : 'text', body: commit ? '' : 'original text' }),
+      );
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction();
+      await runner.release();
+      await db.destroy();
+    }
   });
 });

@@ -990,15 +990,16 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(dispatched('message.received')).toEqual([]);
   });
 
-  it('lends nothing to a quote before the emit, and the message once emitted', async () => {
+  it('lends nothing to a quote before the stored-message check, and the message after it', async () => {
     let release: () => void = () => undefined;
     insertGate = () => new Promise(resolve => (release = resolve));
     const t = admit(arrival('A', 'chat1'));
     expect(projector.inFlightInbound('s1', 'A')).toBeUndefined();
 
     projector.handleInboundMessage('s1', engine, message('A', 'chat1'), t);
-    expect(projector.inFlightInbound('s1', 'A')).toEqual(expect.objectContaining({ body: 'body of A' }));
+    expect(projector.inFlightInbound('s1', 'A')).toBeUndefined();
     await flush();
+    expect(projector.inFlightInbound('s1', 'A')).toEqual(expect.objectContaining({ body: 'body of A' }));
     release();
     await flush();
     expect(projector.inFlightInbound('s1', 'A')).toBeUndefined();
