@@ -1284,6 +1284,12 @@ export interface ChatHistoryCapability {
  * JID included — see setGroupPicture), and its consumer domain is contact data.
  */
 export interface ContactCapability {
+  /**
+   * Defaults to reporting lookup answers. `seed` keeps positive lookups as display data and revokes alias
+   * trust on a conflicting phone; null still uses owner-aware clearing.
+   */
+  readonly contactPhoneLookupPersistence?: 'seed';
+
   getContacts(): Promise<Contact[]>;
 
   getContactById(contactId: string): Promise<Contact | null>;

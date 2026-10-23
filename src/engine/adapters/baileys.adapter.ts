@@ -1,6 +1,6 @@
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { isChannelJid } from '../identity/wa-id';
+import { isChannelJid, parseWaId, toNeutralJid } from '../identity/wa-id';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysChannels } from './baileys-channels';
@@ -66,6 +66,8 @@ import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-dead
 export { createProxyAgent } from './baileys-lifecycle';
 
 export class BaileysAdapter implements IWhatsAppEngine {
+  readonly contactPhoneLookupPersistence = 'seed' as const;
+
   private readonly logger = createLogger('BaileysAdapter');
   // Bound concurrent inbound media downloads: each materialises a full decrypted buffer in heap, so an
   // unbounded fire-and-forget loop lets a sender flood the gateway with N parallel multi-MB allocations.
@@ -132,7 +134,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
       },
       getSocketOrNull: () => this.sock,
       logger: this.logger,
-      toNeutralJid: jid => this.sessionStore.toNeutralJid(jid),
+      toNeutralJid: jid => {
+        const ownLid = this.sock?.user?.lid;
+        if (ownLid && parseWaId(jid).kind === 'lid' && parseWaId(jid).userPart === parseWaId(ownLid).userPart) {
+          return toNeutralJid(this.normalizedSelfJid());
+        }
+        return this.sessionStore.toNeutralJid(jid);
+      },
       normalizedSelfJid: () => this.normalizedSelfJid(),
       loadLib: () => this.loadLib(),
       getFetchDispatcher: () => this.lifecycle.fetchDispatcher(),
@@ -175,8 +183,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       getEphemeralExpiration: chatId => this.sessionStore.getEphemeralExpiration(chatId),
       getStoredMessage: messageId => this.config.messageStore?.getMessage(this.config.dbSessionId, messageId),
       getStoredMessages: messageIds => this.config.messageStore?.getMessages(this.config.dbSessionId, messageIds),
-      recordLidMapping: (lid, pn) =>
-        this.sessionStore.addLidMappings([{ lid: `${lid.split('@')[0].split(':')[0]}@lid`, pn }]),
+      recordLidMapping: (lid, pn, isReported = true) =>
+        this.sessionStore.addLidMappings([{ lid: `${lid.split('@')[0].split(':')[0]}@lid`, pn }], isReported),
       mapMessage: (msg, contentType, opts) => this.events.mapMessage(msg, contentType, opts),
       listContacts: () => this.sessionStore.listContacts(),
       contactCount: () => this.sessionStore.listContacts().length,
@@ -191,6 +199,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       removeChats: ids => this.sessionStore.removeChats(ids),
       extractEphemeralDuration: msg => this.sessionStore.extractEphemeralDuration(msg),
       getOnHistoryMessages: () => this.callbacks.onHistoryMessages,
+      getStoredWriteGeneration: () => this.events.getStoredWriteGeneration(),
       authPath: this.authPath,
       config: this.config,
       // A getter so the events delegate exists by first read: the literal is built before the
@@ -633,8 +642,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async addLabelToChat(chatId: string, labelId: string): Promise<void> {
     this.ensureReady();
     this.assertLabelable(chatId);
+    const socket = this.sock!;
+    const jid = await this.contacts.confirmedChatJid(chatId);
+    this.ensureReady();
+    if (this.sock !== socket) throw new EngineNotReadyError();
     await withQueryDeadline(
-      this.sock!.addChatLabel(this.sessionStore.chatJid(chatId), labelId),
+      socket.addChatLabel(jid, labelId),
       BAILEYS_QUERY_BUDGET_MS,
       'WhatsApp did not confirm the chat label add in time',
     );
@@ -642,8 +655,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async removeLabelFromChat(chatId: string, labelId: string): Promise<void> {
     this.ensureReady();
     this.assertLabelable(chatId);
+    const socket = this.sock!;
+    const jid = await this.contacts.confirmedChatJid(chatId);
+    this.ensureReady();
+    if (this.sock !== socket) throw new EngineNotReadyError();
     await withQueryDeadline(
-      this.sock!.removeChatLabel(this.sessionStore.chatJid(chatId), labelId),
+      socket.removeChatLabel(jid, labelId),
       BAILEYS_QUERY_BUDGET_MS,
       'WhatsApp did not confirm the chat label removal in time',
     );

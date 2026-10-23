@@ -31,12 +31,15 @@ function makeHost(overrides: Partial<Record<keyof BaileysContactsHost, unknown>>
     listContacts: () => [],
     findContact: () => null,
     resolvePhone: () => null,
+    findPersistedLidPhone: () => Promise.resolve(null),
     listChats: () => [],
     lastInboundMessage: () => ({ key: { id: 'M1', remoteJid: '628123@s.whatsapp.net' }, timestamp: 1 }),
     getStoredMessages: () => Promise.resolve([]),
     toEngineJid,
     ...overrides,
   } as unknown as BaileysContactsHost;
+  const socket = host.getSocket();
+  host.getSocket = () => socket;
   // Wired the way the adapter wires it: the real fold, reading the session's lid mapping through
   // this host's own resolvePhone, so a test can hand it a mapping and exercise the lid dialect.
   host.toNeutralJid = (jid: string): string => toNeutralJid(jid, id => host.resolvePhone(id));
@@ -100,6 +103,7 @@ describe('sendSeen', () => {
     const host = makeHost({
       getSocket: () => ({ readMessages }) as unknown as WASocket,
       resolvePhone: (jid: string) => (jid === '9988@lid' ? '628123' : null),
+      findPersistedLidPhone: (jid: string) => Promise.resolve(jid === '9988@lid' ? '628123' : null),
       getStoredMessages: () =>
         Promise.resolve([stored({ id: 'L1', remoteJid: '9988@lid', fromMe: true, participant: '9988@lid' })]),
     });

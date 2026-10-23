@@ -22,7 +22,7 @@ import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-d
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { producerReady } from '../queue/redis-connection';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
-import { evaluateFilters } from './filters/filter-evaluator';
+import { evaluateFilters, prepareFilterLidResolver } from './filters/filter-evaluator';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
@@ -415,7 +415,7 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     only: string | null,
   ): Promise<void> {
     const webhooks = await this.loadActiveWebhooks(sessionId, event);
-    const matchingWebhooks = this.filterMatchingWebhooks(
+    const matchingWebhooks = await this.filterMatchingWebhooks(
       only === null ? webhooks : webhooks.filter(webhook => webhook.id === only),
       event,
       data,
@@ -515,16 +515,23 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private filterMatchingWebhooks(webhooks: Webhook[], event: string, data: Record<string, unknown>): Webhook[] {
-    // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
-    // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
-    const resolveLid = (jid: string): string | null => this.lidMappingStore?.resolveLid(jid) ?? null;
+  private async filterMatchingWebhooks(
+    webhooks: Webhook[],
+    event: string,
+    data: Record<string, unknown>,
+  ): Promise<Webhook[]> {
     // A row is judged on its own: one whose stored events or filters are malformed (e.g. restored from
     // a hand-edited backup) is skipped, instead of throwing here and dropping the event for every
     // other webhook of the session. A `filters` that is not a plain object, or a non-array `conditions`,
     // is refused explicitly: evaluateFilters reads either as "no filter", which would deliver every
     // subscribed event unfiltered.
     const subscribed = webhooks.filter(w => Array.isArray(w.events) && subscriptionCoversEvent(w.events, event));
+    const resolveLid = await prepareFilterLidResolver(
+      subscribed.map(w => w.filters),
+      event,
+      data,
+      this.lidMappingStore ? lids => this.lidMappingStore!.phonesForLidsPersisted(lids) : undefined,
+    );
     const matching = subscribed.filter(w => {
       try {
         const filters: unknown = w.filters;

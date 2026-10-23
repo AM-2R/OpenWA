@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import type { HookManager, HookEvent } from '../hooks';
 import type { LidMappingStore } from '../../engine/identity/lid-mapping-store.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
-import { toNeutralJid } from '../../engine/identity/wa-id';
+import { parseWaId, toNeutralJid } from '../../engine/identity/wa-id';
 import { ConversationMappingConflict } from '../../modules/integration/conversation-mapping.service';
 import { createLogger, UNPRINTABLE } from '../../common/services/logger.service';
 import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
@@ -321,12 +321,12 @@ export class PluginCapabilityContext {
           Math.min(Math.max(typeof limit === 'number' && Number.isFinite(limit) ? Math.trunc(limit) : 50, 1), 100),
           includeMedia ?? false,
         ),
-      canonicalChatId: (sessionId, chatId) => {
-        // resolveEngineRead is the gate only (engine:read permission + live session); the resolution
-        // itself is a synchronous host lid->phone lookup, not an engine call, mirroring the webhook
-        // from-filter. Not `async` (nothing to await) — a resolved promise satisfies the signature.
+      canonicalChatId: async (sessionId, chatId) => {
         this.resolveEngineRead(plugin, sessionId);
-        return Promise.resolve(toNeutralJid(chatId, jid => this.lidMappingStore?.resolveLid(jid) ?? null));
+        const parsed = parseWaId(chatId);
+        const phone =
+          parsed.kind === 'lid' ? await this.lidMappingStore?.findPhoneForLid?.(chatId).catch(() => null) : null;
+        return toNeutralJid(chatId, () => phone ?? null);
       },
     } satisfies PluginEngineReadCapability;
   }

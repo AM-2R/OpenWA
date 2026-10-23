@@ -232,7 +232,7 @@ describe('Baileys inbound messages held for storage', () => {
       getOnCallOutcome: () => undefined,
       ...store,
     } as unknown as BaileysEventsHost;
-    return { events: new BaileysEvents(host), emitted, recordKeyLidMappings };
+    return { events: new BaileysEvents(host), emitted, recordKeyLidMappings, limiter: host.inboundLimiter };
   };
 
   const media = (id: string, chat: string, over: Row = {}): WAMessage => ({
@@ -1456,6 +1456,336 @@ describe('Baileys inbound messages held for storage', () => {
         expect(log).toEqual(['message M', 'reaction M ok', 'edited M fixed', 'reaction M ok2']);
       },
     );
+
+    it.each([1, 4])('orders mixed changes after their outcome wait and directory read (limiter %i)', async k => {
+      const store = memoryStore();
+      const outcome = deferred<{ conflict: boolean }>();
+      const directory = deferred<string | null>();
+      const findPersistedLidPhone = jest.fn(() => directory.promise);
+      const log: string[] = [];
+      const { events, limiter } = build(
+        k,
+        {
+          onMessage: () => ({ settled: outcome.promise }),
+          onMessageEdited: () => {
+            log.push('edit');
+          },
+          onMessageReaction: () => {
+            log.push('reaction');
+          },
+        },
+        Object.assign(store, { findPersistedLidPhone }),
+      );
+      upsert(events, text('M', '628222@s.whatsapp.net'));
+      await flush();
+      const e = edit('E', 'M', 'fixed');
+      const r = reaction('R', 'M', 'ok');
+      e.key.remoteJid = r.key.remoteJid = '777@lid';
+      upsert(events, e, r);
+      await flush();
+      expect(log).toEqual([]);
+      outcome.resolve({ conflict: true });
+      await flush();
+      expect(findPersistedLidPhone).toHaveBeenCalledTimes(1);
+      expect(log).toEqual([]);
+      directory.resolve('628111');
+      await flush();
+      expect(log).toEqual(['edit', 'reaction']);
+      expect(limiter.activeCount).toBe(0);
+      expect(limiter.queuedCount).toBe(0);
+    });
+
+    it.each(['active', 'retired', 'throwing'] as const)(
+      'prepares another target while one waits and releases its queue when %s',
+      async ending => {
+        const store = memoryStore();
+        store.copies.set('M', text('M', CHAT));
+        store.copies.set('N', text('N', CHAT));
+        const read = store.getStoredMessage;
+        const gate = deferred<void>();
+        let first = true;
+        store.getStoredMessage = id => {
+          if (id === 'M' && first) {
+            first = false;
+            return gate.promise.then(() => read(id));
+          }
+          return read(id);
+        };
+        const log: string[] = [];
+        const { events, limiter } = build(
+          4,
+          {
+            onMessageEdited: e => {
+              if (ending === 'throwing') throw new Error('consumer failed');
+              log.push(`edit ${e.messageId}`);
+            },
+            onMessageReaction: r => {
+              log.push(`reaction ${r.messageId}`);
+            },
+          },
+          store,
+        );
+        upsert(events, edit('E', 'M', 'fixed'), reaction('R', 'M', 'a'), reaction('N1', 'N', 'b'));
+        await flush();
+        expect(log).toEqual(['reaction N']);
+        expect(limiter.activeCount).toBe(0);
+        expect(limiter.queuedCount).toBe(0);
+        if (ending === 'retired') events.fenceStoredWrites();
+        gate.resolve();
+        await flush();
+        expect(log).toEqual(
+          ending === 'retired'
+            ? ['reaction N']
+            : ending === 'throwing'
+              ? ['reaction N', 'reaction M']
+              : ['reaction N', 'edit M', 'reaction M'],
+        );
+        expect(limiter.activeCount).toBe(0);
+        expect(limiter.queuedCount).toBe(0);
+        expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(0);
+        upsert(events, reaction('CURRENT', 'M', 'current'));
+        await flush();
+        expect(log.at(-1)).toBe('reaction M');
+      },
+    );
+
+    it.each([
+      ['reaction', false],
+      ['reaction', true],
+      ['edit', false],
+      ['edit', true],
+      ['revoke', false],
+      ['revoke', true],
+    ] as const)('finishes a prepared %s only in its original generation (retired: %s)', async (kind, retired) => {
+      const store = memoryStore();
+      store.copies.set('M', text('M', CHAT));
+      const read = store.getStoredMessage;
+      const gate = deferred<void>();
+      let first = true;
+      store.getStoredMessage = id => {
+        if (id === 'M' && first) {
+          first = false;
+          return gate.promise.then(() => read(id));
+        }
+        return read(id);
+      };
+      const announced = jest.fn();
+      const { events, limiter } = build(
+        4,
+        {
+          onMessageEdited: announced,
+          onMessageRevoked: announced,
+          onMessageReaction: announced,
+        },
+        store,
+      );
+      const message = kind === 'reaction' ? reaction('CHANGE', 'M', 'a') : edit('CHANGE', 'M', 'fixed');
+      if (kind === 'revoke') message.message = { protocolMessage: { type: 0, key: target('M') } };
+      upsert(events, message);
+      await flush();
+      if (retired) events.fenceStoredWrites();
+      gate.resolve();
+      await flush();
+      expect(announced).toHaveBeenCalledTimes(retired ? 0 : 1);
+      expect(limiter.activeCount).toBe(0);
+      expect(limiter.queuedCount).toBe(0);
+      announced.mockClear();
+      upsert(events, reaction('CURRENT', 'M', 'current'));
+      await flush();
+      expect(announced).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([1, 4])(
+      'keeps all 64 prepared edits in arrival order without media slots (limiter %i)',
+      async concurrency => {
+        const store = memoryStore();
+        store.copies.set('M', text('M', CHAT));
+        const read = store.getStoredMessage;
+        const gate = deferred<void>();
+        let first = true;
+        store.getStoredMessage = id => {
+          if (id === 'M' && first) {
+            first = false;
+            return gate.promise.then(() => read(id));
+          }
+          return read(id);
+        };
+        const log: string[] = [];
+        const { events, limiter } = build(
+          concurrency,
+          {
+            onMessageEdited: e => {
+              log.push(e.body);
+            },
+          },
+          store,
+        );
+        upsert(events, ...Array.from({ length: 64 }, (_, i) => edit(`E${i}`, 'M', `v${i + 1}`)));
+        await flush();
+        expect(log).toEqual([]);
+        expect(limiter.activeCount).toBe(0);
+        gate.resolve();
+        await flush();
+        expect(log).toEqual(Array.from({ length: 64 }, (_, i) => `v${i + 1}`));
+        expect(store.copies.get('M')?.message?.conversation).toBe('v64');
+        expect(limiter.activeCount).toBe(0);
+      },
+    );
+
+    it.each([1, 4])(
+      'backpressures preparations above 64 without changing edit order (limiter %i)',
+      async concurrency => {
+        const store = memoryStore();
+        store.copies.set('M', text('M', CHAT));
+        const read = store.getStoredMessage;
+        const gate = deferred<void>();
+        let first = true;
+        store.getStoredMessage = id => {
+          if (id === 'M' && first) {
+            first = false;
+            return gate.promise.then(() => read(id));
+          }
+          return read(id);
+        };
+        const log: string[] = [];
+        const { events, limiter } = build(
+          concurrency,
+          {
+            onMessageEdited: e => {
+              log.push(e.body);
+            },
+          },
+          store,
+        );
+        upsert(events, edit('E0', 'M', 'v1'));
+        await flush();
+        upsert(events, ...Array.from({ length: 69 }, (_, i) => edit(`E${i + 1}`, 'M', `v${i + 2}`)));
+        await flush();
+        expect(log).toEqual([]);
+        expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(64);
+        gate.resolve();
+        await flush();
+        expect(log).toEqual(Array.from({ length: 70 }, (_, i) => `v${i + 1}`));
+        expect(store.copies.get('M')?.message?.conversation).toBe('v70');
+        expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(0);
+        expect(limiter.activeCount).toBe(0);
+        expect(limiter.queuedCount).toBe(0);
+      },
+    );
+
+    it.each([1, 4])(
+      'lets a queued original run while 70 foreign changes wait for it (limiter %i)',
+      async concurrency => {
+        const store = memoryStore();
+        const arrived = deferred<string>();
+        const edits: string[] = [];
+        const { events, limiter, emitted } = build(
+          concurrency,
+          {
+            onMessage: m => {
+              arrived.resolve(m.id);
+            },
+            onMessageEdited: e => {
+              edits.push(e.body);
+            },
+          },
+          store,
+        );
+        upsert(
+          events,
+          ...Array.from({ length: 70 }, (_, i) => edit(`E${i}`, 'M', `v${i + 1}`)),
+          text('M', '628222@s.whatsapp.net'),
+        );
+        expect(await Promise.race([arrived.promise, sleep(400).then(() => null)])).toBe('M');
+        await flush();
+        expect(emitted).toEqual(['M']);
+        expect(edits).toEqual([]);
+        expect(store.copies.get('M')?.key.remoteJid).toBe('628222@s.whatsapp.net');
+        expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(0);
+        expect(limiter.activeCount).toBe(0);
+        expect(limiter.queuedCount).toBe(0);
+      },
+    );
+
+    it.each([false, true])(
+      'does not replay prepared callbacks when the limiter closes (retired: %s)',
+      async retired => {
+        const store = memoryStore();
+        store.copies.set('M', text('M', CHAT));
+        const read = store.getStoredMessage;
+        const gate = deferred<void>();
+        let first = true;
+        store.getStoredMessage = id => {
+          if (id === 'M' && first) {
+            first = false;
+            return gate.promise.then(() => read(id));
+          }
+          return read(id);
+        };
+        const log: string[] = [];
+        const { events, limiter } = build(
+          4,
+          {
+            onMessageEdited: e => {
+              log.push(e.body);
+            },
+          },
+          store,
+        );
+        upsert(events, edit('E0', 'M', 'v1'));
+        await flush();
+        upsert(events, ...Array.from({ length: 69 }, (_, i) => edit(`E${i + 1}`, 'M', `v${i + 2}`)));
+        await flush();
+        if (retired) events.fenceStoredWrites();
+        limiter.close();
+        gate.resolve();
+        await flush();
+        expect(log).toEqual(retired ? [] : Array.from({ length: 70 }, (_, i) => `v${i + 1}`));
+        expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(0);
+        expect(limiter.activeCount).toBe(0);
+        expect(limiter.queuedCount).toBe(0);
+      },
+    );
+
+    it('starts the current generation without waiting for an old preparation read', async () => {
+      const store = memoryStore();
+      store.copies.set('M', text('M', CHAT));
+      const read = store.getStoredMessage;
+      const gate = deferred<void>();
+      let first = true;
+      store.getStoredMessage = id => {
+        if (id === 'M' && first) {
+          first = false;
+          return gate.promise.then(() => read(id));
+        }
+        return read(id);
+      };
+      const current = deferred<string>();
+      const edited = jest.fn();
+      const { events, limiter } = build(
+        4,
+        {
+          onMessageEdited: edited,
+          onMessageReaction: r => {
+            current.resolve(r.reaction);
+          },
+        },
+        store,
+      );
+      upsert(events, ...Array.from({ length: 64 }, (_, i) => edit(`E${i}`, 'M', 'old')));
+      await flush();
+      events.fenceStoredWrites();
+      upsert(events, reaction('CURRENT', 'M', 'current'));
+      try {
+        expect(await Promise.race([current.promise, sleep(400).then(() => null)])).toBe('current');
+      } finally {
+        gate.resolve();
+      }
+      await flush();
+      expect(edited).not.toHaveBeenCalled();
+      expect((events as unknown as { changesPreparing: number }).changesPreparing).toBe(0);
+      expect(limiter.activeCount).toBe(0);
+    });
 
     // In the turn of the emit, so they reach the message before the session has written its row: an edit that
     // meets the row with the text it already has is no edit to the session, and takes no marker.

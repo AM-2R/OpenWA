@@ -28,7 +28,14 @@ import { type WwebjsCalls } from './wwebjs-calls';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { DataSource } from 'typeorm';
+import { EngineRegistry } from '../engine-registry.service';
+import { LidMapping } from '../identity/lid-mapping.entity';
+import { LidMappingStoreService } from '../identity/lid-mapping-store.service';
+import { Session } from '../../modules/session/entities/session.entity';
+import { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
+import { ChatScopeService } from '../../modules/auth/chat-scope.service';
 import * as path from 'path';
 import * as ts from 'typescript';
 import * as vm from 'vm';
@@ -9546,12 +9553,13 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
   });
 
   /** The typed number exists under LID; `knownLocally` is whether the page already holds that lid's phone. */
-  function checkOn(page: { knownLocally: boolean; secondQuery?: 'fills' | 'throws' }) {
+  function checkOn(page: { knownLocally: boolean; secondQuery?: 'fills' | 'throws' | 'absent' }) {
     const wid = (id: string) => ({ _serialized: id, server: id.split('@')[1], user: id.split('@')[0] });
     let mapped = page.knownLocally;
     const queryWidExists = jest.fn((queried: { server: string }) => {
       if (queried.server === 'lid') {
         if (page.secondQuery === 'throws') return Promise.reject(new Error('query failed'));
+        if (page.secondQuery === 'absent') return Promise.resolve({});
         mapped = true;
       }
       return Promise.resolve({ wid: wid(LID) });
@@ -9577,6 +9585,99 @@ describe('WhatsAppWebJsAdapter number check through the library page code', () =
     const { adapter, queryWidExists } = checkOn({ knownLocally: true });
     await expect(adapter.getNumberId('5511987654321')).resolves.toBe(PN);
     expect(queryWidExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds an unknown lid from the page cache without replacing a newer shared phone or negative', async () => {
+    const pg = process.env.DATABASE_TYPE === 'postgres';
+    const server = {
+      type: 'postgres' as const,
+      host: process.env.DATABASE_HOST || '127.0.0.1',
+      port: Number(process.env.DATABASE_PORT || 5432),
+      username: process.env.DATABASE_USERNAME || 'openwa',
+      password: process.env.DATABASE_PASSWORD || 'openwa',
+      database: process.env.DATABASE_NAME || 'openwa',
+    };
+    const schema = `lid_lookup_${randomUUID().replace(/-/g, '')}`;
+    const admin = pg ? await new DataSource(server).initialize() : undefined;
+    if (admin) await admin.query(`CREATE SCHEMA "${schema}"`);
+    const entities = [LidMapping, Session];
+    const ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
+    const [s1, s2] = ['00000001-0000-4000-8000-000000000000', '00000002-0000-4000-8000-000000000000'];
+    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id, phone: '6290000000' })));
+    const repo = ds.getRepository(LidMapping);
+    const store = new LidMappingStoreService(repo);
+    const peer = new LidMappingStoreService(repo);
+    await store.onModuleInit();
+    await peer.onModuleInit();
+    const { adapter, queryWidExists } = checkOn({ knownLocally: true });
+    const engines = new EngineRegistry();
+    engines.set(s1, adapter);
+    const resolver = new SessionLidResolver(engines, store);
+    let clock = 0;
+    (resolver as unknown as { now: () => number }).now = () => clock;
+    const pending = new Set<Promise<boolean>>();
+    for (const method of ['remember', 'rememberIfUnknown'] as const) {
+      const real = store[method].bind(store);
+      jest.spyOn(store, method).mockImplementation((...args: Parameters<typeof store.remember>) => {
+        const promise = real(...(args as [string, string, string]));
+        pending.add(promise);
+        void promise.finally(() => pending.delete(promise));
+        return promise;
+      });
+    }
+    const settle = async () => {
+      for (let i = 0; i < 5; i++) {
+        await Promise.allSettled([...pending]);
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
+    try {
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: '551187654321' });
+      await peer.remember('159442138038327', '628222', s2);
+      await store.reload();
+      clock += 300_000;
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(queryWidExists).not.toHaveBeenCalled();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({
+        phone: '628222',
+        sessionId: s2,
+      });
+      await peer.remember('159442138038327', null, s2);
+      await store.reload();
+      clock += 300_000;
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null });
+      for (const node of [store, peer]) {
+        const fence = new ChatScopeService(node);
+        const key = { allowedChats: [PN] };
+        expect(await fence.allows(key, LID)).toBe(false);
+        expect((await fence.scopeForFilter(key))!.allowed.has(LID)).toBe(false);
+      }
+      const restarted = new LidMappingStoreService(repo);
+      await restarted.onModuleInit();
+      expect(await restarted.findPhoneForLid(LID)).toBeNull();
+      await store.remember('159442138038327', '551187654321', s1);
+      const hidden = checkOn({ knownLocally: false, secondQuery: 'absent' });
+      engines.set(s1, hidden.adapter);
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBeNull();
+      await settle();
+      expect(hidden.queryWidExists).toHaveBeenCalledTimes(1);
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null, sessionId: s1 });
+    } finally {
+      await ds.destroy();
+      if (admin) {
+        await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+        await admin.destroy();
+      }
+    }
   });
 
   it('sends a second query when the page does not, and answers the phone it reads', async () => {

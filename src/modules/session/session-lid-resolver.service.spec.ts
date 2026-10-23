@@ -260,12 +260,15 @@ describe('SessionLidResolver', () => {
       }
     });
 
-    it('is the only answer looked up again: a cached phone stays', async () => {
+    it('looks a cached phone up again after five minutes', async () => {
       await resolver.resolveSenderPhone('s1', '111@lid');
-      clock += 3_600_000;
-      await resolver.resolveSenderPhone('s1', '111@lid');
+      resolveContactPhone.mockResolvedValue('628222');
+      clock += 299_999;
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111222333');
+      clock += 1;
 
-      expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628222');
+      expect(remember).toHaveBeenLastCalledWith('111', '628222', 's1');
     });
 
     it('forgets when to look it up again along with its cached answer', async () => {
@@ -277,6 +280,66 @@ describe('SessionLidResolver', () => {
 
       expect((resolver as unknown as { recheckAt: Map<string, number> }).recheckAt.size).toBe(5000);
     });
+  });
+
+  describe('a replacement engine', () => {
+    it('keeps its cached answer when an earlier engine report of the same phone fails', async () => {
+      let failReport!: () => void;
+      remember.mockImplementationOnce(() => new Promise<boolean>(resolve => (failReport = () => resolve(false))));
+      await resolver.resolveSenderPhone('s1', '111@lid');
+      const replacement = jest.fn().mockResolvedValue('628111222333');
+      engines.set('s1', { resolveContactPhone: replacement } as unknown as IWhatsAppEngine);
+      await resolver.resolveSenderPhone('s1', '111@lid');
+
+      failReport();
+      await settle();
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111222333');
+
+      expect(replacement).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not inherit the earlier engine cache or its unmapped retry hold', async () => {
+      await resolver.resolveSenderPhone('s1', '111@lid');
+      resolveContactPhone.mockRejectedValueOnce(new LidNotMappedError('404@lid'));
+      await resolver.resolveSenderPhone('s1', '404@lid');
+      engines.delete('s1');
+      engines.set('s1', { resolveContactPhone: () => Promise.resolve(null) } as unknown as IWhatsAppEngine);
+
+      await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
+      await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
+      expect(remember).toHaveBeenLastCalledWith('404', null, 's1');
+    });
+
+    it.each(['phone', 'unmapped'] as const)(
+      'ignores a retired lookup resolving as %s while its replacement is pending',
+      async answer => {
+        let finishOld!: () => void;
+        const oldGate = new Promise<void>(resolve => (finishOld = resolve));
+        resolveContactPhone.mockImplementation(async () => {
+          await oldGate;
+          if (answer === 'unmapped') throw new LidNotMappedError('111@lid');
+          return '628111';
+        });
+        const oldLookup = resolver.resolveSenderPhone('s1', '111@lid');
+        let finishNew!: () => void;
+        const newGate = new Promise<void>(resolve => (finishNew = resolve));
+        const replacement = jest.fn(async () => {
+          await newGate;
+          return '628222';
+        });
+        engines.set('s1', { resolveContactPhone: replacement } as unknown as IWhatsAppEngine);
+        const first = resolver.resolveSenderPhone('s1', '111@lid');
+        finishOld();
+        await expect(oldLookup).resolves.toBeNull();
+        const second = resolver.resolveSenderPhone('s1', '111@lid');
+        finishNew();
+
+        await expect(Promise.all([first, second])).resolves.toEqual(['628222', '628222']);
+        expect(replacement).toHaveBeenCalledTimes(1);
+        expect(remember).toHaveBeenCalledTimes(1);
+        expect(remember).toHaveBeenCalledWith('111', '628222', 's1');
+      },
+    );
   });
 
   it('never rejects when the mapping store write fails (fire-and-forget)', async () => {
@@ -324,6 +387,7 @@ describe('SessionLidResolver over the shared lid table', () => {
   let repo: Repository<LidMapping>;
   let store: LidMappingStoreService;
   let resolver: SessionLidResolver;
+  let engines: EngineRegistry;
   let warn: jest.SpyInstance;
   let wallClock: jest.SpyInstance<number, []>;
   /** The resolver's monotonic clock, in ms. */
@@ -354,7 +418,7 @@ describe('SessionLidResolver over the shared lid table', () => {
     store = new LidMappingStoreService(repo);
     warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
     await store.onModuleInit();
-    const engines = new EngineRegistry();
+    engines = new EngineRegistry();
     for (const session of [s1, s2]) {
       answers[session] = P;
       engines.set(session, {
@@ -420,5 +484,34 @@ describe('SessionLidResolver over the shared lid table', () => {
     expect(await row()).toMatchObject({ phone: null, sessionId: s2 });
     expect(await admitted(P)).toEqual([false, false]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('clears a newly learned number after its owner stops seeing it', async () => {
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await message(s1);
+    warn.mockClear();
+    answers[s1] = Q;
+    await message(s1);
+    expect(await admitted(Q)).toEqual([true, true]);
+    answers[s1] = null;
+    answers[s2] = null;
+    await message(s2);
+    clock += 300_000;
+
+    await message(s1);
+
+    expect(await row()).toMatchObject({ phone: null, sessionId: s1 });
+    expect(await admitted(Q)).toEqual([false, false]);
+  });
+
+  it('uses the replacement account answer after its earlier engine retires', async () => {
+    await message(s1);
+    engines.delete(s1);
+    engines.set(s1, { resolveContactPhone: () => Promise.resolve(null) } as unknown as IWhatsAppEngine);
+
+    await message(s1);
+
+    expect(await row()).toMatchObject({ phone: null, sessionId: s1 });
+    expect(await admitted(P)).toEqual([false, false]);
   });
 });

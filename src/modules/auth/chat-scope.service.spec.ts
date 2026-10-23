@@ -90,7 +90,7 @@ describe('ChatScopeService', () => {
   });
 
   it('follows a lid another node has re-mapped, in the single check and the list filter alike', async () => {
-    const rows = [{ lid: LID, phone: PHONE as string | null }];
+    const rows = [{ lid: LID, phone: PHONE as string | null, isReported: true }];
     const hit = (value: string | null, cond?: string | FindOperator<unknown>) =>
       cond === undefined || (cond instanceof FindOperator ? (cond.value as unknown[]).includes(value) : value === cond);
     const repo = {

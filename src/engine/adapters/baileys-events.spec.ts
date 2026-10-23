@@ -591,14 +591,25 @@ describe('BaileysEvents store writes across an unlink', () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => (release = resolve));
     const putStoredMessage = jest.fn(() => Promise.resolve());
+    const recordKeyLidMappings = jest.fn();
     const events = new BaileysEvents(
-      makeHost({ loadLib: () => gate.then(() => libStub), putStoredMessage, getOnMessage: () => jest.fn() }),
+      makeHost({
+        loadLib: () => gate.then(() => libStub),
+        putStoredMessage,
+        recordKeyLidMappings,
+        getOnMessage: () => jest.fn(),
+      }),
     );
     events.handleMessagesUpsert({
       type: 'notify',
       messages: [
         {
-          key: { id: 'wamid.unlink', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+          key: {
+            id: 'wamid.unlink',
+            remoteJid: '123456789@lid',
+            remoteJidAlt: '15550001111@s.whatsapp.net',
+            fromMe: false,
+          },
           messageTimestamp: 1_700_000_000,
           message: { conversation: 'hi' },
         },
@@ -608,20 +619,22 @@ describe('BaileysEvents store writes across an unlink', () => {
       release();
       for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
     };
-    return { events, putStoredMessage, settle };
+    return { events, putStoredMessage, recordKeyLidMappings, settle };
   };
 
   it('stores a message whose processing finishes with the account still linked', async () => {
-    const { putStoredMessage, settle } = held();
+    const { putStoredMessage, recordKeyLidMappings, settle } = held();
     await settle();
     expect(putStoredMessage).toHaveBeenCalledTimes(1);
+    expect(recordKeyLidMappings).toHaveBeenCalledTimes(1);
   });
 
   it('does not store a message still being processed when the account was unlinked', async () => {
-    const { events, putStoredMessage, settle } = held();
+    const { events, putStoredMessage, recordKeyLidMappings, settle } = held();
     events.fenceStoredWrites();
     await settle();
     expect(putStoredMessage).not.toHaveBeenCalled();
+    expect(recordKeyLidMappings).not.toHaveBeenCalled();
   });
 });
 

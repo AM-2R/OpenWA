@@ -80,7 +80,7 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
   let projector: MessageProjector;
   let hookStarts: string[];
 
-  const build = (type: string): void => {
+  const build = (type: string, findPhoneForLid?: jest.Mock): void => {
     rows = [];
     hookStarts = [];
     insertGate = () => Promise.resolve();
@@ -131,6 +131,10 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       hookManager as unknown as HookManager,
       statusStore as unknown as StatusStoreService,
       { resolveSenderPhone: jest.fn().mockResolvedValue(null) } as unknown as SessionLidResolver,
+      undefined,
+      undefined,
+      undefined,
+      findPhoneForLid ? ({ findPhoneForLid } as never) : undefined,
     );
   };
 
@@ -159,6 +163,288 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
   beforeEach(() => {
     process.env.INBOUND_MEDIA_CONCURRENCY = '1';
     build('postgres');
+  });
+
+  describe('reported identities before the row exists', () => {
+    const lid = '480001@lid';
+    const phone = '628001@c.us';
+    const edit = (chatId: string, body: string, timestamp = 2) => ({
+      ...message('A', chatId),
+      messageId: 'A',
+      senderId: chatId,
+      hasMedia: false,
+      body,
+      timestamp,
+    });
+
+    it.each(['edit', 'revoke', 'reaction'] as const)(
+      'waits for a reported pairing before applying a held %s',
+      async kind => {
+        const lookup = deferred<string | null>();
+        const findPhone = jest.fn(() => lookup.promise);
+        build('postgres', findPhone);
+        const ticket = admit(arrival('A', lid, false, false, false));
+        if (kind === 'edit') projector.applyMessageEditQueued('s1', edit(phone, 'edited', 2));
+        else if (kind === 'reaction')
+          projector.applyReactionQueued('s1', {
+            messageId: 'A',
+            chatId: phone,
+            senderId: phone,
+            reaction: 'yes',
+          });
+        else
+          projector.handleMessageRevoked('s1', engine, { ...message('A', phone), revokedId: 'A' } as RevokedMessage, {
+            fromMe: false,
+          });
+        const receipt = projector.handleInboundMessage('s1', engine, message('A', lid), ticket)!;
+        await flush();
+        expect(findPhone).toHaveBeenCalledWith(lid);
+        expect(hookStarts).toEqual([]);
+        expect(rows).toEqual([]);
+        lookup.resolve('628001');
+        await receipt.settled;
+        await flush();
+        expect(rows[0]).toMatchObject({
+          body: kind === 'revoke' ? '' : kind === 'edit' ? 'edited' : 'body of A',
+          type: kind === 'revoke' ? 'revoked' : 'text',
+        });
+        if (kind === 'reaction') expect(rows[0].metadata).toMatchObject({ reactions: { [phone]: 'yes' } });
+      },
+    );
+
+    it.each([null, '628999'])('does not accept an unreported or different pairing (%s)', async mapped => {
+      build('postgres', jest.fn().mockResolvedValue(mapped));
+      const ticket = admit(arrival('A', lid, false, false, false));
+      projector.applyMessageEditQueued('s1', edit(phone, 'foreign', 2));
+      const receipt = projector.handleInboundMessage('s1', engine, message('A', lid), ticket)!;
+      await receipt.settled;
+      await flush();
+      expect(rows[0].body).toBe('body of A');
+      expect(dispatched('message.edited')).toEqual([]);
+    });
+
+    it('keeps the arrival order when an exact edit follows an unresolved alias edit', async () => {
+      const lookup = deferred<string | null>();
+      build(
+        'postgres',
+        jest
+          .fn()
+          .mockImplementationOnce(() => lookup.promise)
+          .mockResolvedValue('628001'),
+      );
+      const ticket = admit(arrival('A', lid, false, false, false));
+      projector.applyMessageEditQueued('s1', edit(phone, 'first', 2));
+      projector.applyMessageEditQueued('s1', edit(lid, 'last', 3));
+      const receipt = projector.handleInboundMessage('s1', engine, message('A', lid), ticket)!;
+      await flush();
+      lookup.resolve('628001');
+      await receipt.settled;
+      await flush();
+      expect(dispatched('message.edited').map(change => change.body)).toEqual(['first', 'last']);
+      expect(rows[0].body).toBe('last');
+      expect(dispatched('message.received')[0].body).toBe('last');
+    });
+
+    it('waits for a pairing requested while the receive hook is running', async () => {
+      const lookup = deferred<string | null>();
+      const hook = deferred<void>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      hookManager.execute.mockImplementation(async (_event: string, data: unknown) => {
+        await hook.promise;
+        return { data };
+      });
+      const receipt = projector.handleInboundMessage(
+        's1',
+        engine,
+        message('A', lid),
+        admit(arrival('A', lid, false, false, false)),
+      )!;
+      await flush();
+      projector.applyMessageEditQueued('s1', edit(phone, 'edited', 2));
+      hook.resolve();
+      await flush();
+      expect(rows).toEqual([]);
+      expect(dispatched('message.received')).toEqual([]);
+      lookup.resolve('628001');
+      await receipt.settled;
+      await flush();
+      expect(rows[0].body).toBe('edited');
+      expect(dispatched('message.received')[0].body).toBe('edited');
+    });
+
+    it('waits for a pairing requested during the insert before announcing its content', async () => {
+      const lookup = deferred<string | null>();
+      const inserting = deferred<void>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      insertGate = () => inserting.promise;
+      const receipt = projector.handleInboundMessage(
+        's1',
+        engine,
+        message('A', lid),
+        admit(arrival('A', lid, false, false, false)),
+      )!;
+      await flush();
+      projector.applyMessageEditQueued('s1', edit(phone, 'edited', 2));
+      inserting.resolve();
+      await flush();
+      expect(dispatched('message.received')).toEqual([]);
+      lookup.resolve('628001');
+      await receipt.settled;
+      await flush();
+      expect(rows[0].body).toBe('edited');
+      expect(dispatched('message.received')[0].body).toBe('edited');
+    });
+
+    it.each(['edit', 'revoke'].flatMap(kind => [true, false].map(exact => ({ kind, exact }))))(
+      'keeps SQLite persisted notifications consistent with a held $kind (exact=$exact)',
+      async ({ kind, exact }) => {
+        const hook = deferred<void>();
+        build('better-sqlite3', jest.fn().mockResolvedValue('628001'));
+        const archived: Row[] = [];
+        Object.assign(projector, {
+          chatMediaArchive: {
+            archive: jest.fn((row: Row) => {
+              archived.push({ ...row });
+              return Promise.resolve();
+            }),
+          },
+        });
+        hookManager.execute.mockImplementation(async (event: string, data: unknown) => {
+          if (event === 'message:received') await hook.promise;
+          return { data };
+        });
+        const receipt = projector.handleInboundMessage('s1', engine, message('A', lid))!;
+        const target = exact ? lid : phone;
+        if (kind === 'edit') projector.applyMessageEditQueued('s1', edit(target, 'edited'));
+        else
+          projector.handleMessageRevoked('s1', engine, { ...message('A', target), revokedId: 'A' } as RevokedMessage, {
+            fromMe: false,
+          });
+        await flush();
+        hook.resolve();
+        await receipt.settled;
+        await flush();
+        expect(persistedHooks().length).toBeGreaterThan(0);
+        expect(archived).toHaveLength(1);
+        expect(archived[0]).toMatchObject({
+          body: kind === 'edit' ? 'edited' : '',
+          type: kind === 'edit' ? 'text' : 'revoked',
+        });
+        expect(
+          persistedHooks().every(
+            row =>
+              row.body === (kind === 'edit' ? 'edited' : '') && row.type === (kind === 'edit' ? 'text' : 'revoked'),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it('keeps an own-send echo behind an identity check started during its hook', async () => {
+      const lookup = deferred<string | null>();
+      const hook = deferred<void>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      hookManager.execute.mockImplementation(async (event: string, data: unknown) => {
+        if (event === 'message:sent') await hook.promise;
+        return { data };
+      });
+      projector.handleOwnSendEcho(
+        's1',
+        engine,
+        message('A', lid, { fromMe: true }),
+        admit(arrival('A', lid, false, false, true)),
+      );
+      await flush();
+      projector.applyMessageEditQueued('s1', { ...edit(phone, 'edited'), fromMe: true });
+      hook.resolve();
+      await flush();
+      expect(rows).toEqual([]);
+      expect(dispatched('message.sent')).toEqual([]);
+      lookup.resolve('628001');
+      await flush();
+      expect(rows[0].body).toBe('edited');
+      expect(dispatched('message.sent')[0].body).toBe('edited');
+    });
+
+    it.each(['edit', 'revoke'] as const)('keeps a requested %s while its alias identity is checked', async kind => {
+      const lookup = deferred<string | null>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      const ticket = admit(arrival('A', lid, false, false, true));
+      const source = { kind, chatId: phone, fromMe: true } as const;
+      const changed =
+        kind === 'edit'
+          ? projector.recordOutboundMessageEdit('s1', 'A', 'edited', source)
+          : projector.recordRevoke('s1', 'A', source);
+      const receipt = projector.handleInboundMessage('s1', engine, message('A', lid, { fromMe: true }), ticket)!;
+      await flush();
+      expect(rows).toEqual([]);
+      lookup.resolve('628001');
+      await changed;
+      await receipt.settled;
+      await flush();
+      expect(rows[0]).toMatchObject({
+        body: kind === 'edit' ? 'edited' : '',
+        type: kind === 'edit' ? 'text' : 'revoked',
+      });
+    });
+
+    it('drains a rejected identity read without applying the alias change', async () => {
+      build('postgres', jest.fn().mockRejectedValue(new Error('read unavailable')));
+      const ticket = admit(arrival('A', lid, false, false, false));
+      projector.applyMessageEditQueued('s1', edit(phone, 'foreign', 2));
+      await projector.handleInboundMessage('s1', engine, message('A', lid), ticket)!.settled;
+      await flush();
+      expect(rows[0].body).toBe('body of A');
+      expect(dispatched('message.edited')).toEqual([]);
+    });
+
+    it('does not apply a pending alias change to a replacement entry of another identity', async () => {
+      const lookup = deferred<string | null>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      admit(arrival('A', lid, false, false, false));
+      projector.applyMessageEditQueued('s1', edit(phone, 'foreign', 2));
+      await flush();
+      const entries = (projector as unknown as { inboundInFlight: Map<string, object> }).inboundInFlight;
+      const replacement = { ref: { chatId: '629999@c.us', direction: 'incoming' } };
+      entries.set('s1:A', replacement);
+      lookup.resolve('628001');
+      await flush();
+      expect(replacement).not.toHaveProperty('editedBody');
+      expect(dispatched('message.edited')).toEqual([]);
+    });
+
+    it('discards a directory result after the reporting engine retires', async () => {
+      const lookup = deferred<string | null>();
+      build(
+        'postgres',
+        jest.fn(() => lookup.promise),
+      );
+      const ticket = admit(arrival('A', lid, false, false, false));
+      projector.applyMessageEditQueued('s1', edit(phone, 'late', 2));
+      const receipt = projector.handleInboundMessage('s1', engine, message('A', lid), ticket)!;
+      await flush();
+      engines.set('s1', {} as IWhatsAppEngine);
+      lookup.resolve('628001');
+      await receipt.settled;
+      await flush();
+      expect(rows).toEqual([]);
+      expect(dispatched('message.edited')).toEqual([]);
+      expect(dispatched('message.received')).toEqual([]);
+    });
   });
 
   afterEach(() => {

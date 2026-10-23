@@ -6,7 +6,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import { mutationTargetsForeignRow, type MutationSource } from './message-mutation-guard';
+import { mutationTargetsForeignRowPersisted, type MutationSource } from './message-mutation-guard';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -25,6 +25,7 @@ export class MessageMutationProjector {
     private readonly logger: LoggerService,
     // Told of each row the marker below lands on.
     private readonly onMarkedEdited: (sessionId: string, waMessageId: string) => void = () => undefined,
+    private readonly resolveLid?: (jid: string) => Promise<string | null>,
   ) {}
 
   /**
@@ -74,7 +75,9 @@ export class MessageMutationProjector {
         where: { sessionId, waMessageId },
         select: { chatId: true, direction: true, author: true },
       });
-      return row ? { exists: true, reason: mutationTargetsForeignRow(row, source) } : { exists: false, reason: null };
+      return row
+        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid) }
+        : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null };
     }

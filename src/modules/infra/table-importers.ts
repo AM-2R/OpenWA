@@ -323,9 +323,15 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
   defineTableImporter({
     key: 'lidMappings',
     label: 'lid mapping',
-    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
+    sql: `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt", "isReported") VALUES ($1, $2, $3, $4, $5)`,
     id: (lm: LidMappingRow) => lm.lid,
-    map: (lm: LidMappingRow) => [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
+    map: (lm: LidMappingRow) => [
+      lm.lid,
+      lm.phone ?? null,
+      lm.sessionId ?? null,
+      lm.updatedAt,
+      lm.isReported === true || lm.isReported === 1,
+    ],
   }),
 
   // Import chat states (optional; not a FK, restored as a standalone per-session cache table)

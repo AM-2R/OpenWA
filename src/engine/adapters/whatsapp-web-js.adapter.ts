@@ -100,6 +100,8 @@ export interface WhatsAppWebJsConfig {
 // imports resolveWebVersionPin for use in initialize().
 
 export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
+  readonly contactPhoneLookupPersistence = 'seed' as const;
+
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
   // Bound concurrent inbound media downloads: each one holds the whole decrypted file in the browser
   // page and, when within the cap, its base64 in Node, so an unbounded burst could stack many multi-MB

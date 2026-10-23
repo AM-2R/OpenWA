@@ -20,6 +20,7 @@ import {
   mapBaileysMessageType,
   mapBaileysStatus,
   setBaileysText,
+  storedKeyInChatPersisted,
 } from './baileys-message-mapper';
 
 describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', () => {
@@ -1308,5 +1309,31 @@ describe('native poll choice metadata', () => {
       expect(poll.name).toHaveLength(POLL_TEXT_MAX_LENGTH);
       expect(extractBaileysBody(content(long, optionNames) as BaileysBodyContent)).toHaveLength(POLL_TEXT_MAX_LENGTH);
     });
+  });
+});
+
+describe('storedKeyInChatPersisted', () => {
+  it('accepts an exact identity without requiring a directory', async () => {
+    expect(await storedKeyInChatPersisted({ remoteJid: '111@lid' }, '111@lid')).toBe(true);
+    expect(await storedKeyInChatPersisted({ remoteJid: '628111@s.whatsapp.net' }, '628111@c.us')).toBe(true);
+  });
+
+  it('refuses cross-form identity when no directory is available', async () => {
+    expect(await storedKeyInChatPersisted({ remoteJid: '111@lid' }, '628111@c.us')).toBe(false);
+    expect(await storedKeyInChatPersisted({ remoteJid: '628111@s.whatsapp.net' }, '111@lid')).toBe(false);
+  });
+
+  it.each([null, '628222', '628111'])('uses only the reported pairing %s in either direction', async phone => {
+    const resolve = () => Promise.resolve(phone);
+    expect(await storedKeyInChatPersisted({ remoteJid: '111@lid' }, '628111@c.us', resolve)).toBe(phone === '628111');
+    expect(await storedKeyInChatPersisted({ remoteJid: '628111@s.whatsapp.net' }, '111@lid', resolve)).toBe(
+      phone === '628111',
+    );
+  });
+
+  it('keeps distinct raw LIDs separate even if a directory maps both to one phone', async () => {
+    expect(await storedKeyInChatPersisted({ remoteJid: '111@lid' }, '222@lid', () => Promise.resolve('628111'))).toBe(
+      false,
+    );
   });
 });

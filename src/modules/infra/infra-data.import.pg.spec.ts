@@ -134,6 +134,22 @@ describePostgres('InfraDataController.importData (postgres)', () => {
     expect((await claims.find()).map(claim => claim.sessionId)).toEqual([kept]);
   });
 
+  it('preserves reported mapping origin and restores legacy mappings as display data', async () => {
+    const mappings = ds.getRepository(LidMapping);
+    await mappings.insert([
+      { lid: '111', phone: '628111', sessionId: null, isReported: true },
+      { lid: '222', phone: '628222', sessionId: null, isReported: false },
+    ]);
+    const dump = await controller.exportData();
+    await expect(controller.importData(dump as never)).resolves.toMatchObject({ imported: true, warnings: [] });
+    expect(await mappings.findOneBy({ lid: '111' })).toMatchObject({ isReported: true });
+    expect(await mappings.findOneBy({ lid: '222' })).toMatchObject({ isReported: false });
+    const rows = (dump.tables as unknown as { lidMappings: { isReported?: boolean | number }[] }).lidMappings;
+    for (const row of rows) delete row.isReported;
+    await expect(controller.importData(dump as never)).resolves.toMatchObject({ imported: true, warnings: [] });
+    expect(await mappings.findOneBy({ lid: '111' })).toMatchObject({ phone: '628111', isReported: false });
+  });
+
   // The runtime pool cancels a statement that outlives statement_timeout (30 s by default), and the
   // clears of a replace-all import scale with the live tables, not with the archive. A slow trigger on
   // messages stands in for a table that has grown large: with the pool's timeout lowered below it, the

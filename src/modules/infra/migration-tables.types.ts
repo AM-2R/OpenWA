@@ -112,6 +112,7 @@ export interface BaileysStoredMessageRow {
 // `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly or a
 // backup→restore into a fresh DB loses the whole cache (it self-heals via re-lookup, but lossily).
 export interface LidMappingRow {
+  isReported?: boolean | number;
   lid: string;
   phone: string | null;
   sessionId: string | null;

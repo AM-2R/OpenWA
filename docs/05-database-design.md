@@ -729,6 +729,8 @@ The data connection also owns:
 - **`lid_mappings`** — LID↔phone-number identity mappings (`src/engine/identity/lid-mapping.entity.ts`).
 - **`chat_states`** (engine): per-session mute, archive and pin state of each Baileys chat (`src/engine/adapters/baileys-chat-state.entity.ts`), keyed `(sessionId, chatId)`. `chatId` is the person's phone JID (`<phone>@s.whatsapp.net`) whenever their lid resolves, so a state WhatsApp syncs under the lid and one set through the phone number land on the same row; it stays `<lid>@lid` while the lid is unresolved, and a row found under the lid later is folded onto the phone JID on the chat's next change (reads and the fold take each field from the newest row that observed it: `observed` lists the fields a row has seen, and null, on a row not written since the column was added, means the fields it holds a set value for; the next write that can read the row records the list). WhatsApp does not re-deliver that state, so it is kept in backups. A chat deleted on the phone or through the API loses its row, so a later message starts it clean.
 
+`lid_mappings.isReported` distinguishes engine mapping reports from cache-only display data. Phone/LID alias authorization, candidate expansion and list filters use only reported mappings. A conflicting cached phone revokes alias trust without replacing the stored phone, and a later actual report restores it. The migration conservatively marks older mixed-origin rows as display data; backups carry the flag, and older backups restore with alias access disabled until a new report arrives.
+
 Additionally, the `AddMessagesFts` migration creates the full-text-search structures over `messages` (a FTS5 virtual table on SQLite, a generated `body_ts` `tsvector` column plus GIN index on PostgreSQL) that back the `/search` endpoint.
 
 > [!NOTE]
@@ -933,7 +935,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1790812800000-AddMessageWindowIndexes.ts   # compound timestamp indexes for message-time pagination
 ├── 1791100000000-AddIntegrationDeliveryFailureDeliveryIndex.ts   # (pluginId, instanceId, deliveryId) index for the dead-letter guards
 ├── 1791200000000-AddWebhookOutboxSessionIndex.ts   # (sessionId) index for the per-session outbox delete
-└── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
+├── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
+└── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
 ```
 
 > [!NOTE]

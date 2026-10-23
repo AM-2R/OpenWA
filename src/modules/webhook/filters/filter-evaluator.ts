@@ -5,7 +5,7 @@ import {
   eventFamily,
   getFieldDefinition,
 } from './filter-types';
-import { toNeutralJid } from '../../../engine/identity/wa-id';
+import { parseWaId, toNeutralJid } from '../../../engine/identity/wa-id';
 
 /**
  * Resolves a lid JID to its phone user-part when the mapping is known (mirrors the engine adapter's
@@ -38,6 +38,41 @@ const canonicalInput = (value: string, resolve?: LidResolver): string => {
 
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+
+/** Read the current aliases once for both sides of the id conditions, rather than a resident mirror. */
+export async function prepareFilterLidResolver(
+  filters: readonly (WebhookFilters | null | undefined)[],
+  event: string,
+  data: Record<string, unknown>,
+  read?: (lids: string[]) => Promise<Record<string, string | null>>,
+): Promise<LidResolver | undefined> {
+  if (!read) return undefined;
+  const lids = new Set<string>();
+  const family = eventFamily(event);
+  for (const filter of filters) {
+    if (!Array.isArray(filter?.conditions)) continue;
+    for (const condition of filter.conditions) {
+      // The caller still rejects a malformed filter on its own, without dropping its siblings.
+      try {
+        const def = getFieldDefinition(family, condition.field);
+        if (!def || (def.kind !== 'id' && def.kind !== 'idArray')) continue;
+        const value = def.resolve(data);
+        const actual = typeof value === 'string' ? [value] : toStringArray(value);
+        for (const jid of [...actual, ...toStringArray(condition.value)]) {
+          const parsed = parseWaId(jid);
+          if (parsed.kind === 'lid') lids.add(parsed.userPart);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  const phones: Record<string, string | null> = lids.size ? await read([...lids]).catch(() => ({})) : {};
+  return jid => {
+    const lid = parseWaId(jid).userPart;
+    return Object.hasOwn(phones, lid) ? phones[lid] : null;
+  };
+}
 
 function evaluateCondition(
   def: FieldDefinition,

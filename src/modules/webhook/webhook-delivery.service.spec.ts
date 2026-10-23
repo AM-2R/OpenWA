@@ -78,7 +78,7 @@ describe('WebhookDeliveryService', () => {
   let configService: jest.Mocked<Partial<ConfigService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let webhookQueue: jest.Mocked<Record<string, jest.Mock>>;
-  let lidStore: { getCached: jest.Mock; resolveLid: jest.Mock };
+  let lidStore: { getCached: jest.Mock; resolveLid: jest.Mock; phonesForLidsPersisted: jest.Mock };
   let outboxService: { open: jest.Mock; close: jest.Mock; markQueued: jest.Mock };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
@@ -177,6 +177,9 @@ describe('WebhookDeliveryService', () => {
       getCached: jest.fn().mockReturnValue(null),
       // Mirrors the real implementation so tests keep driving resolution through getCached mocks.
       resolveLid: jest.fn((jid: string) => (lidStore.getCached(userPart(jid)) as string | null | undefined) ?? null),
+      phonesForLidsPersisted: jest.fn((lids: string[]) =>
+        Promise.resolve(Object.fromEntries(lids.map(lid => [lid, lidStore.getCached(lid) ?? null]))),
+      ),
     };
 
     outboxService = {

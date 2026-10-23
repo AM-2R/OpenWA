@@ -1611,7 +1611,7 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
   it('restores lid_mappings instead of dropping them on a backup→restore', async () => {
     await seedSession('s1');
     const lidRepo = ds.getRepository(LidMapping);
-    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1' }));
+    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1', isReported: true }));
     await lidRepo.save(lidRepo.create({ lid: '222', phone: null, sessionId: 's1' })); // negative cache
 
     const dump = await controller.exportData();
@@ -1626,6 +1626,14 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     expect(await lidRepo.count()).toBe(2);
     expect((await lidRepo.findOneByOrFail({ lid: '111' })).phone).toBe('628111');
     expect((await lidRepo.findOneByOrFail({ lid: '222' })).phone).toBeNull();
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).isReported).toBe(true);
+    expect((await lidRepo.findOneByOrFail({ lid: '222' })).isReported).toBe(false);
+
+    const mappings = (dump.tables as unknown as { lidMappings: { isReported?: boolean | number }[] }).lidMappings;
+    for (const mapping of mappings) delete mapping.isReported;
+    const legacy = await controller.importData({ tables: dump.tables });
+    expect(legacy.warnings).toEqual([]);
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).isReported).toBe(false);
   });
 
   // Restoring ONTO the instance that produced the archive is the rollback flow, and it is the one the

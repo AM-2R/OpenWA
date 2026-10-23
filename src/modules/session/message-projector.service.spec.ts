@@ -435,7 +435,11 @@ describe('MessageProjector', () => {
         metadata: null,
         timestamp: 1_700_000_000,
       };
-      messageRepository.find.mockResolvedValueOnce([{ waMessageId: 'WA1', type: 'text' }]).mockResolvedValueOnce([row]);
+      messageRepository.find
+        .mockResolvedValueOnce([
+          { waMessageId: 'WA1', type: 'text', chatId: 'c1@c.us', direction: MessageDirection.INCOMING },
+        ])
+        .mockResolvedValueOnce([row]);
       const builder = {
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
@@ -1957,13 +1961,13 @@ describe('MessageProjector (inbound projection)', () => {
       expect(outcome).toBeUndefined();
     });
 
-    it('reports nothing for a chat it cannot compare with the row, as a lid against a phone number', async () => {
+    it('reports a conflict for a LID without a reported pairing to the phone-keyed row', async () => {
       const outcome = await repeat(
         { chatId: '99887766@lid' },
         { chatId: '15550001111@c.us', direction: 'incoming', author: null },
       );
 
-      expect(outcome).toBeUndefined();
+      expect(outcome).toEqual({ conflict: true });
     });
 
     it('judges the message a hook left, as the row it would have written', async () => {

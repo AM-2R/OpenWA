@@ -5,7 +5,7 @@ import {
   IncomingMessage,
   MessageType,
 } from '../interfaces/whatsapp-engine.interface';
-import { chatKind } from '../identity/wa-id';
+import { chatKind, parseWaId, toNeutralJid } from '../identity/wa-id';
 import { boundPollOptions, boundPollText } from './message-mapper';
 
 /**
@@ -1062,6 +1062,25 @@ export function storedKeyInChat(
   const raw = key.remoteJid ?? '';
   const want = neutral(chatId);
   return neutral(raw) === want || neutral(baileysChatJid(raw, key.participant, key.fromMe === true)) === want;
+}
+
+/** Match a stored LID/phone alias only through a reported persisted pairing. */
+export async function storedKeyInChatPersisted(
+  key: { remoteJid?: string | null; participant?: string | null; fromMe?: boolean | null },
+  chatId: string,
+  resolveLid?: (jid: string) => Promise<string | null>,
+): Promise<boolean> {
+  if (storedKeyInChat(key, chatId, toNeutralJid)) return true;
+  if (!resolveLid) return false;
+  const want = parseWaId(chatId);
+  for (const raw of [key.remoteJid ?? '', baileysChatJid(key.remoteJid ?? '', key.participant, key.fromMe === true)]) {
+    const stored = parseWaId(raw);
+    if (!((stored.kind === 'lid' && want.kind === 'user') || (stored.kind === 'user' && want.kind === 'lid'))) continue;
+    const lid = stored.kind === 'lid' ? raw : chatId;
+    const phone = stored.kind === 'user' ? stored.userPart : want.userPart;
+    if ((await resolveLid(lid).catch(() => null)) === phone) return true;
+  }
+  return false;
 }
 
 /**
