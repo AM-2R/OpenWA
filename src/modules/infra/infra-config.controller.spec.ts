@@ -868,6 +868,40 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     expect(env).toContain('DATABASE_PASSWORD=keepme');
   });
 
+  it('an omitted builtIn follows the stored host beside stale true flags', () => {
+    const existing =
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=db.ext.example\nDATABASE_USERNAME=app\n' +
+      'DATABASE_PASSWORD=ExtPw12345!\nDATABASE_NAME=appdb\nPOSTGRES_SCHEMA=tenant\n' +
+      'REDIS_ENABLED=true\nREDIS_BUILTIN=true\nREDIS_HOST=cache.ext.example\nREDIS_PORT=6380\nREDIS_PASSWORD=RedisPw123456\n' +
+      'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=https://s3.ext.example\nS3_BUCKET=media\nS3_REGION=eu-west-1\n' +
+      'S3_ACCESS_KEY_ID=ExternalKey12345\nS3_SECRET_ACCESS_KEY=ExternalSecret1234567890\n';
+    const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
+
+    expect(
+      dotenv.parse(
+        written({ database: { poolSize: 25 }, redis: { port: '6381' }, storage: { s3Region: 'eu-west-2' } }, existing),
+      ),
+    ).toEqual({
+      ...dotenv.parse(existing),
+      DATABASE_POOL_SIZE: '25',
+      REDIS_PORT: '6381',
+      S3_REGION: 'eu-west-2',
+    });
+  });
+
+  it('a true flag beside an external host does not give its credentials to a newly chosen bundled container', () => {
+    const env = written(
+      { database: { type: 'postgres', builtIn: true }, storage: { type: 's3', builtIn: true } },
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=db.ext.example\nDATABASE_PASSWORD=ExtPw12345!\n' +
+        'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=https://s3.ext.example\nS3_ACCESS_KEY_ID=ExternalKey12345\n' +
+        'S3_SECRET_ACCESS_KEY=ExternalSecret1234567890\n',
+    );
+
+    expect(env).toContain('DATABASE_PASSWORD=openwa');
+    expect(env).toContain('S3_ACCESS_KEY_ID=minioadmin');
+    expect(env).toContain('S3_SECRET_ACCESS_KEY=minioadmin');
+  });
+
   it('a null pool size reads as absent and keeps the stored one', () => {
     const existing =
       'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=old.example.com\nDATABASE_PASSWORD=keepme\nDATABASE_POOL_SIZE=25\n';
@@ -1057,6 +1091,25 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       ]) {
         expect(env).toContain(line);
       }
+    });
+
+    it('keeps the details of a stored bundled host without a true flag while another host is pinned', () => {
+      pin({ DATABASE_HOST: 'db.ext.example', S3_ENDPOINT: 'https://s3.ext.example' });
+      const stored = STORED_EXTERNAL.replace('db.example.com', 'openwa-postgres').replace(
+        'https://s3.example.com',
+        'http://openwa-minio:9000',
+      );
+      const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
+
+      expect(dotenv.parse(written({ database: { poolSize: 25 }, storage: {} }, stored))).toEqual({
+        ...dotenv.parse(stored),
+        DATABASE_HOST: 'postgres',
+        DATABASE_PORT: '5432',
+        DATABASE_POOL_SIZE: '25',
+        POSTGRES_SCHEMA: 'public',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_REGION: 'us-east-1',
+      });
     });
 
     // The page leaves out an untouched flag beside a pinned host. The stored external flag is inherited then, so the
@@ -1516,8 +1569,8 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
     });
 
-    // The pinned password keeps that boot past the default-secret guard; the file's is what the rule decides.
-    it('still resets it when the environment pins another host over the bundled host in the file', () => {
+    // Removing the host pin restores the stored bundled host, so its own password must remain usable then.
+    it('keeps it when the environment pins another host over the bundled host in the file', () => {
       process.env.DATABASE_HOST = 'db.example.com';
       process.env.DATABASE_PASSWORD = 'PinnedPw456!';
       recordPinnedEnvKeys({ DATABASE_HOST: 'db.example.com', DATABASE_PASSWORD: 'PinnedPw456!' });
@@ -1525,8 +1578,7 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
         { database: { type: 'postgres', builtIn: true } },
         'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=ExternalPw!\n',
       );
-      expect(env).toContain('DATABASE_PASSWORD=openwa');
-      expect(env).not.toContain('ExternalPw!');
+      expect(env).toContain('DATABASE_PASSWORD=ExternalPw!');
     });
 
     // Any spelling that reaches the bundled container is the bundled host, as for the restart's stop and start rules.

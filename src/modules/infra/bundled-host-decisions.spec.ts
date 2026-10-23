@@ -194,7 +194,7 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
           ? { database: { type: 'postgres', builtIn: true } }
           : { storage: { type: 's3', builtIn: true } },
       );
-      const keep = c.flag === 'true' || reached;
+      const keep = c.position === 'pinned' || reached;
       if (c.service === 'database') expect(env.DATABASE_PASSWORD).toBe(keep ? 'StoredPw789!' : 'openwa');
       else
         expect([env.S3_ACCESS_KEY_ID, env.S3_SECRET_ACCESS_KEY]).toEqual(
@@ -230,6 +230,7 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
     const env = saved(section);
     expect(env[spec.flag]).toBe(c.flag === 'absent' ? undefined : c.flag);
     const sentHost = c.service === 'storage' ? c.host || undefined : c.host.trim() || 'localhost';
-    expect(env[spec.host]).toBe(c.flag === 'true' ? spec.bundledHost : sentHost);
+    const storedBundled = c.position === 'pinned' ? !c.reach : c.reach;
+    expect(env[spec.host]).toBe(storedBundled ? spec.bundledHost : sentHost);
   });
 });
