@@ -89,7 +89,7 @@ describe('ChatScopeService', () => {
     expect(await svc.idsForFilter(undefined)).toBeUndefined();
   });
 
-  it('does not admit a phone whose lid another node has re-mapped', async () => {
+  it('follows a lid another node has re-mapped, in the single check and the list filter alike', async () => {
     const rows = [{ lid: LID, phone: PHONE as string | null }];
     const hit = (value: string | null, cond?: string | FindOperator<unknown>) =>
       cond === undefined || (cond instanceof FindOperator ? (cond.value as unknown[]).includes(value) : value === cond);
@@ -106,9 +106,20 @@ describe('ChatScopeService', () => {
     await store.onModuleInit(); // the cache now indexes LID -> PHONE
     rows[0].phone = '918888888888'; // another node re-mapped the lid in the shared table
     const svc = new ChatScopeService(store);
-    expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, `${PHONE}@c.us`)).toBe(false);
-    // Until this node learns the re-map, the disagreement fails closed for the new phone too.
-    expect(await svc.allows({ allowedChats: [`${LID}@lid`] }, '918888888888@c.us')).toBe(false);
+    // The table is the truth across nodes: the lid now answers the new phone only, on both paths.
+    const lidKey = { allowedChats: [`${LID}@lid`] };
+    expect(await svc.allows(lidKey, `${PHONE}@c.us`)).toBe(false);
+    expect(await svc.allows(lidKey, '918888888888@c.us')).toBe(true);
+    const lidScope = (await svc.scopeForFilter(lidKey))!;
+    expect([lidScope.allowed.has(`${PHONE}@c.us`), lidScope.allowed.has('918888888888@c.us')]).toEqual([false, true]);
+    for (const [phone, admitted] of [
+      [PHONE, false],
+      ['918888888888', true],
+    ] as const) {
+      const key = { allowedChats: [`${phone}@c.us`] };
+      expect(await svc.allows(key, `${LID}@lid`)).toBe(admitted);
+      expect((await svc.scopeForFilter(key))!.allowed.has(`${LID}@lid`)).toBe(admitted);
+    }
   });
 
   it('degrades to exact dialects when no lid directory is available', async () => {
@@ -184,6 +195,40 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
     await store.remember(LID, null, s3);
 
     expect(await admitted()).toEqual([true, true]);
+  });
+
+  it('admits it for the phone another node has since stored, on both paths', async () => {
+    const other = new LidMappingStoreService(ds.getRepository(LidMapping)); // a second node on the same table
+    await other.onModuleInit();
+    await other.remember(LID, '628222', s2);
+
+    expect(await admitted()).toEqual([false, false]);
+    const newKey = { allowedChats: ['628222@c.us'] };
+    expect([
+      await svc.allows(newKey, `${LID}@lid`),
+      (await svc.scopeForFilter(newKey))!.allowed.has(`${LID}@lid`),
+    ]).toEqual([true, true]);
+  });
+
+  it('admits it for neither phone while a phone write of this node has not reached the table', async () => {
+    const newKey = { allowedChats: ['628222@c.us'] };
+    const admittedNew = async () => [
+      await svc.allows(newKey, `${LID}@lid`),
+      (await svc.scopeForFilter(newKey))!.allowed.has(`${LID}@lid`),
+    ];
+    jest.spyOn(ds.getRepository(LidMapping), 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember(LID, '628222', s1);
+    warn.mockClear();
+
+    expect([await admitted(), await admittedNew()]).toEqual([
+      [false, false],
+      [false, false],
+    ]);
+    await store.remember(LID, '628222', s1); // the write lands
+    expect([await admitted(), await admittedNew()]).toEqual([
+      [false, false],
+      [true, true],
+    ]);
   });
 
   it('stops admitting it once the session that stored the phone is deleted and another answers no phone', async () => {

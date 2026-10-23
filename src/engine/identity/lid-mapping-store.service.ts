@@ -119,6 +119,11 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    * entry, on an applied negative and on any release, and a session whose write failed leaves it.
    */
   private readonly seenBy = new Map<string, Set<string>>();
+  /**
+   * Cached lids whose phone failed to write here (see {@link unstored}). Kept only while the cache holds that
+   * phone: dropped with the cached entry, and once a write of it lands or a negative clears the row.
+   */
+  private readonly failedWrites = new Set<string>();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
   // the default is finite; the env override exists for operators who explicitly want the old behaviour.
   private readonly maxCachedLids: number;
@@ -157,6 +162,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       this.lidToPhone.clear();
       this.phoneToLids.clear();
       this.seenBy.clear();
+      this.failedWrites.clear();
       // A reload re-reads the table, so every recorded absence is a fresh question again.
       this.absentFromTable.clear();
       // Oldest first, so the newest row ends at the most-recent end of the LRU rather than the first
@@ -224,8 +230,9 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     try {
       for (const batch of chunk(lids)) {
         const rows = await this.repo.find({ where: { lid: In(batch) } });
+        for (const lid of batch) if (this.failedWrites.has(lid)) out[lid] = null;
         // The table WINS: a stale cached negative must not shadow a mapping another node persisted.
-        for (const row of rows) out[row.lid] = row.phone;
+        for (const row of rows) out[row.lid] = this.rowPhone(row.lid, row.phone);
       }
     } catch {
       // The table may not exist yet (migration pending); the mirror is the best available answer.
@@ -244,14 +251,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   }
 
   /**
-   * A lid answers a phone only when the cache and the table do not disagree: a cached reverse entry
-   * whose row another node has since re-mapped to a different phone is dropped, and a row this
-   * process has since re-mapped elsewhere is skipped. Either side alone may vouch for it (the row
-   * can be past the cache cap, the cached write can still be in flight). Throws on a read error.
+   * A lid answers the phone its row holds ({@link rowPhone}), and a cached reverse entry stands in for a lid
+   * the table has no row for (past the cache cap, or its write still in flight), unless that write failed.
+   * Throws on a read error.
    */
   private async readLidsForPhones(phones: string[]): Promise<Record<string, string[]>> {
     const out: Record<string, Set<string>> = {};
-    for (const phone of phones) out[phone] = new Set(this.lidsForPhone(phone));
+    for (const phone of phones)
+      out[phone] = new Set(this.lidsForPhone(phone).filter(lid => !this.failedWrites.has(lid)));
     const cachedLids = [...new Set(phones.flatMap(phone => [...out[phone]]))];
     for (const batch of chunk(cachedLids)) {
       for (const row of await this.repo.find({ where: { lid: In(batch) } })) {
@@ -261,11 +268,25 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     for (const batch of chunk(phones)) {
       for (const { lid, phone } of await this.repo.find({ where: { phone: In(batch) } })) {
         if (!phone || !out[phone]) continue;
-        const cached = this.lidToPhone.get(lid);
-        if (cached === undefined || cached === phone) out[phone].add(lid);
+        if (this.rowPhone(lid, phone) === phone) out[phone].add(lid);
       }
     }
     return Object.fromEntries(phones.map(phone => [phone, [...out[phone]]]));
+  }
+
+  /** This process has a phone write for the lid that the table does not have: in flight, or failed. */
+  private unstored(lid: string): boolean {
+    return this.unsettledWrites.has(lid) || this.failedWrites.has(lid);
+  }
+
+  /**
+   * The phone a lid's row answers. The table is the truth across nodes, but while a phone this process holds
+   * for the lid is not stored yet, a row that differs may be the number it replaces: the lid then answers
+   * none, so no fence lookup admits either one until the write lands.
+   */
+  private rowPhone(lid: string, phone: string | null): string | null {
+    const cached = this.lidToPhone.get(lid);
+    return this.unstored(lid) && cached !== undefined && cached !== phone ? null : phone;
   }
 
   /**
@@ -275,13 +296,16 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    * not enough: it is LRU-evicted at `LID_MAPPING_CACHE_MAX`, and nothing refreshes it when another
    * node re-maps a lid in the shared table, so a cache-first answer could resolve the same lid to
    * a phone the fence no longer sees, and a read behind the fence would serve that other chat. The
-   * row is not indexed into the cache, so a lookup cannot evict hot entries.
+   * row is not indexed into the cache, so a lookup cannot evict hot entries. A row is vetoed while this
+   * process has a different phone for the lid in flight or failed ({@link rowPhone}); with no row, a cached
+   * phone whose write failed answers none.
    */
   async findPhoneForLid(jid: string): Promise<string | null> {
     const lid = userPart(jid);
     try {
       const row = await this.repo.findOne({ where: { lid } });
-      if (row) return row.phone;
+      if (row) return this.rowPhone(lid, row.phone);
+      if (this.failedWrites.has(lid)) return null;
     } catch (err) {
       this.logger.warn(`Could not read the phone for a lid: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -301,10 +325,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     if (this.pendingLookups.has(lid)) this.racedLookups.add(lid);
     try {
       if (phone === null) await this.clear(lid, sessionId ?? null);
-      else await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
+      else {
+        await this.repo.upsert({ lid, phone, sessionId: sessionId ?? null, updatedAt: new Date() }, ['lid']);
+        if (this.lidToPhone.get(lid) === phone) this.failedWrites.delete(lid);
+      }
     } catch (err) {
       // The table does not have this report, so the session's next one writes again.
       if (sessionId) this.seenBy.get(lid)?.delete(sessionId);
+      if (phone !== null && this.lidToPhone.get(lid) === phone) this.failedWrites.add(lid);
       this.logger.warn(
         `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -346,6 +374,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     const cached = this.lidToPhone.get(lid);
     this.lidToPhone.delete(lid);
     this.seenBy.delete(lid);
+    this.failedWrites.delete(lid);
     if (cached) this.unindex(lid, cached);
     this.absentFromTable.delete(lid);
   }
@@ -454,6 +483,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       const phone = this.lidToPhone.get(oldest);
       this.lidToPhone.delete(oldest);
       this.seenBy.delete(oldest);
+      this.failedWrites.delete(oldest);
       if (phone) this.unindex(oldest, phone);
     }
   }
