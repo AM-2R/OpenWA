@@ -236,6 +236,49 @@ describe('SessionLidResolver', () => {
     });
   });
 
+  describe('a cached negative', () => {
+    it('is looked up again five minutes on, whatever the wall clock does, and reported again', async () => {
+      resolveContactPhone.mockResolvedValue(null);
+      const wall = Date.parse('2026-10-01T00:00:00Z');
+      const wallClock = jest.spyOn(Date, 'now').mockReturnValue(wall);
+      try {
+        await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
+        wallClock.mockReturnValue(wall + 3_600_000); // set forward an hour
+        clock += 299_999;
+        for (let i = 0; i < 100; i++) await resolver.resolveSenderPhone('s1', '404@lid');
+        expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+
+        clock += 1;
+        await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
+        await resolver.resolveSenderPhone('s1', '404@lid');
+
+        expect(resolveContactPhone).toHaveBeenCalledTimes(2);
+        expect(remember).toHaveBeenCalledTimes(2);
+        expect(remember).toHaveBeenLastCalledWith('404', null, 's1');
+      } finally {
+        wallClock.mockRestore();
+      }
+    });
+
+    it('is the only answer looked up again: a cached phone stays', async () => {
+      await resolver.resolveSenderPhone('s1', '111@lid');
+      clock += 3_600_000;
+      await resolver.resolveSenderPhone('s1', '111@lid');
+
+      expect(resolveContactPhone).toHaveBeenCalledTimes(1);
+    });
+
+    it('forgets when to look it up again along with its cached answer', async () => {
+      resolveContactPhone.mockResolvedValue(null);
+      remember.mockResolvedValueOnce(false);
+      await resolver.resolveSenderPhone('s1', '0@lid'); // dropped: its write failed
+      await settle();
+      for (let i = 1; i <= 5001; i++) await resolver.resolveSenderPhone('s1', `${i}@lid`);
+
+      expect((resolver as unknown as { recheckAt: Map<string, number> }).recheckAt.size).toBe(5000);
+    });
+  });
+
   it('never rejects when the mapping store write fails (fire-and-forget)', async () => {
     remember.mockRejectedValue(new Error('db down'));
 
@@ -283,6 +326,8 @@ describe('SessionLidResolver over the shared lid table', () => {
   let resolver: SessionLidResolver;
   let warn: jest.SpyInstance;
   let wallClock: jest.SpyInstance<number, []>;
+  /** The resolver's monotonic clock, in ms. */
+  let clock: number;
   /** What each session's engine answers for the contact's lid. */
   const answers: Record<string, string | null> = {};
   const row = () => repo.findOne({ where: { lid: '111' } });
@@ -317,6 +362,8 @@ describe('SessionLidResolver over the shared lid table', () => {
       } as unknown as IWhatsAppEngine);
     }
     resolver = new SessionLidResolver(engines, store);
+    clock = 0;
+    (resolver as unknown as { now: () => number }).now = () => clock;
     wallClock = jest.spyOn(Date, 'now').mockReturnValue(T);
   });
 
@@ -354,6 +401,24 @@ describe('SessionLidResolver over the shared lid table', () => {
     expect(await row()).toMatchObject({ phone: Q, sessionId: s1 });
     expect(await admitted(P)).toEqual([false, false]);
     expect(await admitted(Q)).toEqual([true, true]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('clears the number five minutes after a negative the owner refused, once that owner has logged out', async () => {
+    await message(s1); // s1 resolves the phone and stores it
+    answers[s2] = null; // the account of s2 cannot see the number
+    await message(s2); // refused: s1 is linked and owns the row
+    expect(await row()).toMatchObject({ phone: P, sessionId: s1 });
+    await ds.getRepository(Session).update({ id: s1 }, { phone: null }); // s1 logs out
+
+    clock += 299_999;
+    await message(s2);
+    expect(await admitted(P)).toEqual([true, true]);
+    clock += 1;
+    await message(s2);
+
+    expect(await row()).toMatchObject({ phone: null, sessionId: s2 });
+    expect(await admitted(P)).toEqual([false, false]);
     expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -16,9 +16,9 @@ import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 @Injectable()
 export class SessionLidResolver {
   /**
-   * Bounded cache keyed `${sessionId}:${lid}`. Caches misses (null) too, so a chatty unmapped sender
-   * isn't re-queried on every message (which also reduces engine rate-limit pressure). Best-effort
-   * feature, so staleness is acceptable.
+   * Bounded cache keyed `${sessionId}:${lid}`. Caches misses (null) too, for a while ({@link recheckAt}), so
+   * a chatty unmapped sender isn't re-queried on every message (which also reduces engine rate-limit
+   * pressure). Best-effort feature, so staleness is acceptable.
    */
   private readonly cache = new Map<string, string | null>();
   private static readonly CACHE_MAX = 5000;
@@ -31,6 +31,13 @@ export class SessionLidResolver {
   private static readonly RETRY_AFTER_MS = 60_000;
   /** Lookups under way, per key, so messages that arrive together from one sender share a single one. */
   private readonly inFlight = new Map<string, Promise<string | null>>();
+  /**
+   * When a cached negative is looked up again, per key, on {@link now}. The lid table refuses a negative while
+   * another linked session owns the phone, and a cached answer is otherwise never reported again, so that
+   * phone would stay mapped after its owner logged out. At most one lookup and one write per key per interval.
+   */
+  private readonly recheckAt = new Map<string, number>();
+  private static readonly NEGATIVE_RECHECK_MS = 5 * 60_000;
   /** Monotonic clock in ms, so a wall clock set back does not stretch a wait (a seam for tests). */
   private readonly now = (): number => performance.now();
 
@@ -50,7 +57,8 @@ export class SessionLidResolver {
     const key = `${sessionId}:${contactId}`;
     const cached = this.cache.get(key);
     if (cached !== undefined) {
-      return cached;
+      if (cached !== null || (this.recheckAt.get(key) ?? Infinity) > this.now()) return cached;
+      this.forget(key);
     }
     if ((this.retryAfter.get(key) ?? 0) > this.now()) {
       return null;
@@ -99,11 +107,12 @@ export class SessionLidResolver {
       // Bounded FIFO eviction: Map preserves insertion order, so the first key is the oldest.
       if (this.cache.size >= SessionLidResolver.CACHE_MAX) {
         for (const oldest of this.cache.keys()) {
-          this.cache.delete(oldest);
+          this.forget(oldest);
           break;
         }
       }
       this.cache.set(key, phone);
+      if (phone === null) this.recheckAt.set(key, this.now() + SessionLidResolver.NEGATIVE_RECHECK_MS);
     }
     // Persist the resolution so the read-path can bridge this contact's `@lid` and `@c.us` rows even
     // when the operator never sent to them (#583 R3 Phase 2). A definitive null is persisted too, so
@@ -125,8 +134,14 @@ export class SessionLidResolver {
     void this.lidMappingStore
       ?.remember(userPart(contactId), phone, sessionId)
       ?.then(stored => {
-        if (stored === false) this.cache.delete(key);
+        if (stored === false) this.forget(key);
       })
       .catch(() => {});
+  }
+
+  /** Drop a cached answer, and when it was due to be looked up again. */
+  private forget(key: string): void {
+    this.cache.delete(key);
+    this.recheckAt.delete(key);
   }
 }
