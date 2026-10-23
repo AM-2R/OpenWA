@@ -31,13 +31,6 @@ export class SessionLidResolver {
   private static readonly RETRY_AFTER_MS = 60_000;
   /** Lookups under way, per key, so messages that arrive together from one sender share a single one. */
   private readonly inFlight = new Map<string, Promise<string | null>>();
-  /**
-   * Cached answers the lid table did not take, per key, with when to report them again. An answer is
-   * otherwise reported once, so a negative that failed to write would leave a number the contact hid
-   * mapped until a restart (#1058), and a phone that failed would keep the lid out of a chat fence. At most
-   * one write per key per hold, as for an unmapped lid.
-   */
-  private readonly unstored = new Map<string, number>();
 
   constructor(
     private readonly engines: EngineRegistry,
@@ -55,7 +48,6 @@ export class SessionLidResolver {
     const key = `${sessionId}:${contactId}`;
     const cached = this.cache.get(key);
     if (cached !== undefined) {
-      if ((this.unstored.get(key) ?? Infinity) <= Date.now()) this.persist(key, sessionId, contactId, cached);
       return cached;
     }
     if ((this.retryAfter.get(key) ?? 0) > Date.now()) {
@@ -106,7 +98,6 @@ export class SessionLidResolver {
       if (this.cache.size >= SessionLidResolver.CACHE_MAX) {
         for (const oldest of this.cache.keys()) {
           this.cache.delete(oldest);
-          this.unstored.delete(oldest);
           break;
         }
       }
@@ -122,15 +113,17 @@ export class SessionLidResolver {
     return phone;
   }
 
-  /** Report an answer to the lid table; one the table did not take is reported again after the hold. */
+  /**
+   * Report an answer to the lid table. One the table did not take is dropped from the cache, so the sender's
+   * next message is looked up again and reports what the engine answers then: replaying this answer could
+   * write it over a newer phone the table has learned since, and a negative that never lands would leave a
+   * number the contact hid mapped until a restart (#1058).
+   */
   private persist(key: string, sessionId: string, contactId: string, phone: string | null): void {
-    this.unstored.delete(key);
     void this.lidMappingStore
       ?.remember(userPart(contactId), phone, sessionId)
       ?.then(stored => {
-        if (stored === false && this.cache.get(key) === phone) {
-          this.unstored.set(key, Date.now() + SessionLidResolver.RETRY_AFTER_MS);
-        }
+        if (stored === false) this.cache.delete(key);
       })
       .catch(() => {});
   }
