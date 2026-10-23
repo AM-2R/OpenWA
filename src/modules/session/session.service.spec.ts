@@ -2945,28 +2945,48 @@ describe('SessionService', () => {
       // A stop whose ownership query failed took nothing down, so the retry still has a session to
       // bring back. Counting that refusal skipped the retry and left the session DISCONNECTED with
       // its claim released, waiting for an operator.
-      it('start() still retries a transient failure when a stop refused by the fence landed during the delay', async () => {
-        const row = await seed();
-        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
-        mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      it.each([
+        [
+          'whose ownership query fails',
+          () =>
+            jest
+              .spyOn(ownership, 'isHeldByOtherNode')
+              .mockRejectedValueOnce(new Error('Connection terminated unexpectedly')),
+          'Connection terminated unexpectedly',
+        ],
+        [
+          'refused for a live peer',
+          () => jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true),
+          ConflictException,
+        ],
+        [
+          'that cannot record itself',
+          () => (repository.update as jest.Mock).mockRejectedValueOnce(new Error('db down')),
+          'db down',
+        ],
+      ])(
+        'start() still retries a transient failure when a stop %s landed during the delay',
+        async (_case, arrange, refusal) => {
+          const row = await seed();
+          (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
+          mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
 
-        const starting = service.start(row.id);
-        await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
-        jest
-          .spyOn(ownership, 'isHeldByOtherNode')
-          .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
-        await expect(service.stop(row.id)).rejects.toThrow('Connection terminated unexpectedly');
+          const starting = service.start(row.id);
+          await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
+          arrange();
+          await expect(service.stop(row.id)).rejects.toThrow(refusal);
 
-        await starting;
+          await starting;
 
-        expect(mockEngine.initialize).toHaveBeenCalledTimes(2);
-        expect(lifecycle.isEngineActive(row.id)).toBe(true);
-        expect(await nodeIdOf(row.id)).toBe('node-a');
-      });
+          expect(mockEngine.initialize).toHaveBeenCalledTimes(2);
+          expect(lifecycle.isEngineActive(row.id)).toBe(true);
+          expect(await nodeIdOf(row.id)).toBe('node-a');
+        },
+      );
 
-      // The rollback decrements, it does not clear: a stop that DID take the engine down stays
-      // counted when a later request is refused, so the retry it must cancel stays cancelled.
-      // Clearing instead would relaunch the session the first stop took down and re-claim its row.
+      // A refused stop withdraws only its own request: one that DID take the engine down still stands
+      // when a later request is refused, so the retry it must cancel stays cancelled. Clearing every
+      // request instead would relaunch the session the first stop took down and re-claim its row.
       it('start() does not retry when an effective stop during the delay is followed by a refused one', async () => {
         const row = await seed();
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));

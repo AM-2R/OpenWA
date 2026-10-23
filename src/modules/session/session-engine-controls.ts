@@ -149,8 +149,6 @@ export interface StopHooks {
   onReadFailed?: () => void;
   /** forceKill() only: runs synchronously once there is an engine to kill; records the stop request. */
   onEngineFound?: () => void;
-  /** forceKill() only: runs the write of the kill's stop record, which it is handed; without it, the write runs alone. */
-  recordStop?: (write: () => Promise<unknown>) => Promise<void>;
   /** delete() only: runs once the delete starts removing the session's data, the session:deleted hook first. */
   onRemoving?: () => void;
 }
@@ -749,14 +747,15 @@ export class SessionEngineControls {
     // explicit start. Recorded only once there is an engine to kill, and before the teardown, so a
     // POST /start that lands after the eviction clears it and stands. A failed write must not keep a
     // wedged engine alive, so it is logged and the kill goes on.
-    const write = (): Promise<unknown> => this.sessionRepository.update(id, { desiredState: 'stopped' });
-    await (hooks.recordStop ? hooks.recordStop(write) : write()).catch((error: unknown) =>
-      this.logger.error(
-        'Failed to record the force-kill as a stop',
-        error instanceof Error ? error.message : String(error),
-        { sessionId: id, action: 'force_kill_keep_down_failed' },
-      ),
-    );
+    await this.sessionRepository
+      .update(id, { desiredState: 'stopped' })
+      .catch((error: unknown) =>
+        this.logger.error(
+          'Failed to record the force-kill as a stop',
+          error instanceof Error ? error.message : String(error),
+          { sessionId: id, action: 'force_kill_keep_down_failed' },
+        ),
+      );
 
     // Announced by the write below rather than from the engine callback, as in stop().
     this.operatorTeardowns.set(id, engine);

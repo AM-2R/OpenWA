@@ -103,16 +103,28 @@ export interface SessionListOptions extends ListOptions {
   name?: string;
 }
 
-/** The deletes of one session running on this node, and the stop record they share; see SessionService.delete. */
-interface DeleteStops {
-  running: number;
-  /** One of them wrote the record on a row that had none. */
+/**
+ * One request on this node that wants a session down: a stop, a kill, a delete or an import's
+ * stopOrphanEngines. Withdrawn when it is refused or fails having taken nothing down; taken once its stop
+ * record is being written, or for a delete once it begins removing the session. See SessionService.stopRequests.
+ */
+interface StopRequest {
+  kind: 'stop' | 'delete';
+  /** From one sequence shared by every session, so a number is never issued twice. */
+  seq: number;
+  state: 'pending' | 'taken' | 'withdrawn';
+  /** Its call has returned; a request that was not withdrawn stays while a start that may predate it runs. */
+  ended: boolean;
+}
+
+/** The stop requests of one session on this node, and the record its deletes running here share. */
+interface SessionStops {
+  requests: Set<StopRequest>;
+  /** A delete still running wrote the 'deleting' record on a row that had none. */
   recorded: boolean;
-  /** One of them began removing the session's data. */
+  /** A delete still running began removing the session's data. */
   removing: boolean;
-  /** An operator stop or a kill recorded a stop while they ran. */
-  overtaken: boolean;
-  /** The last one out taking the record back. */
+  /** The last delete out taking the record back. */
   givingBack?: Promise<void>;
 }
 
@@ -154,14 +166,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /** Set at the top of onModuleDestroy so the detached run stops launching further sessions. */
   private shuttingDown = false;
   /**
-   * stop()/delete() requests per session, counted so the transient start retry can tell a stop issued
-   * after it began from a mark left over by an earlier stop, which start() clears by design.
+   * Per session, the stop requests on this node, so a start can tell a stop issued after it began from a mark
+   * left over by an earlier one, which start() clears by design. A start yields to any request issued after it
+   * began that is not withdrawn: one refused or failed before taking anything down leaves nothing it could take
+   * for a stop, and one that took effect stays visible however the others end. See claimAndStart().
    */
-  private readonly stopRequests = new Map<string, number>();
-  /** Stop records of stop() and forceKill() being written per session, which may land before a take-back; see delete(). */
-  private readonly stopWritesInFlight = new Map<string, number>();
-  /** Per session, the deletes running here; see delete(). */
-  private readonly deleteStops = new Map<string, DeleteStops>();
+  private readonly stopRequests = new Map<string, SessionStops>();
+  /** The last number given to a stop request. */
+  private stopRequestSeq = 0;
   /**
    * Starts past start()'s cap check, held until they return. That check counts them with the
    * engine's slot holders, so two starts at the last free slot cannot both pass it while their claims
@@ -634,83 +646,66 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // post-INITIALIZING check by the time that write settles; awaiting anything first — the fence's
     // COUNT, or delete()'s own requireSession — would let the mark land after that window. A mark
     // left behind when the fence refuses (409) is harmless and is cleared by the next start().
-    this.markStopping(id);
+    const request = this.markStopping(id, 'delete');
+    const stops = this.stopRequests.get(id)!;
     // Running from here, before the claim: a claim with nothing running behind it would read as idle to the
     // heartbeat, and a stop or a failed start here would hand it back while the rows are removed. It ends
     // before the claim is handed back.
     const endDelete = this.engineLifecycle.holdDelete(id);
-    // From here an operator stop or kill that records a stop is seen, also one whose record is already on its way.
-    const stops = this.joinDeleteStops(id);
     let claimed = false;
     try {
       try {
         if (this.ownership) {
-          await this.assertNotHeldElsewhere(id);
-          await this.claimForDelete(id, this.ownership);
+          await this.assertNotHeldElsewhere(id, request);
+          await this.claimForDelete(id, this.ownership, request);
           claimed = true;
         }
-        // A failed write took nothing down, so the mark and count are undone as for a failed claim.
+        // A failed write took nothing down, so the mark is dropped and the request withdrawn as for a failed claim.
         await this.keepDownForDelete(id, stops).catch((error: unknown) => {
           this.engineLifecycle.clearStopping(id);
-          this.uncountStopRequest(id);
+          this.withdrawStop(request);
           throw error;
         });
         // Refused or failed before it began removing (its row read, either fence), the delete leaves the session as
-        // it found it, so its count goes as a failed claim's does: a start it overlapped would take it for a stop.
-        let removing = false;
+        // it found it and withdraws its request, so a start it overlapped does not take it for a stop.
         await this.engineLifecycle
           .delete(id, {
             onRemoving: () => {
-              removing = true;
+              this.takeStop(request);
               stops.removing = true;
             },
           })
           .catch((error: unknown) => {
-            if (!removing) this.uncountStopRequest(id);
+            if (request.state !== 'taken') this.withdrawStop(request);
             throw error;
           });
       } finally {
         endDelete();
       }
       await this.releaseClaimBestEffort(id);
-      this.stopRequests.delete(id);
     } catch (error) {
       // A delete that removed nothing leaves the session as it found it. One that began to remove it leaves
       // it stopped, as a process that dies part-way does.
-      await this.leaveDelete(id, stops);
+      await this.leaveDelete(id, request);
       // The row survived. A claim left on it lapses with nothing to renew it, and a peer would then
       // adopt and restart the session the operator was deleting.
       if (claimed) await this.releaseAfterTeardown(id);
       this.discardStopMarkForMissingSession(id, error);
       throw error;
     }
-    await this.leaveDelete(id, stops);
-  }
-
-  private joinDeleteStops(id: string): DeleteStops {
-    let stops = this.deleteStops.get(id);
-    if (!stops) {
-      stops = { running: 0, recorded: false, removing: false, overtaken: false };
-      this.deleteStops.set(id, stops);
-    }
-    stops.running += 1;
-    return stops;
+    await this.leaveDelete(id, request);
   }
 
   /**
    * End a delete's share of the stop record. Another delete of the session still running here relies on it, so
-   * only the last one out takes it back, and only when they wrote it, none began removing the session, and no
-   * operator stop or kill recorded one meanwhile or is still writing one (it may land before the take-back).
+   * only the last one out takes it back, and only when they wrote it and none began removing the session. A stop
+   * written over it, here or on another node, is not 'deleting' and stays.
    */
-  private async leaveDelete(id: string, stops: DeleteStops): Promise<void> {
-    stops.running -= 1;
-    if (
-      stops.running === 0 &&
-      stops.recorded &&
-      !stops.removing &&
-      !stops.overtaken &&
-      !this.stopWritesInFlight.has(id)
-    ) {
+  private async leaveDelete(id: string, request: StopRequest): Promise<void> {
+    const stops = this.stopRequests.get(id)!;
+    request.ended = true;
+    const deleting = (): boolean => [...stops.requests].some(other => other.kind === 'delete' && !other.ended);
+    if (!deleting() && stops.recorded && !stops.removing) {
       // Not theirs while it is cleared, so a delete that begins and ends meanwhile leaves it alone.
       stops.recorded = false;
       stops.givingBack = this.clearDeleteStop(id).then(cleared => {
@@ -720,7 +715,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       });
       await stops.givingBack;
     }
-    if (stops.running === 0 && !stops.givingBack) this.deleteStops.delete(id);
+    if (!deleting() && !stops.givingBack) {
+      stops.recorded = false;
+      stops.removing = false;
+    }
+    this.endStop(id, request);
   }
 
   /**
@@ -731,13 +730,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Nothing has been removed when this refuses: a peer that claimed first answers the same 409 as
    * assertNotHeldElsewhere, and a failed write is undone like a failed ownership read.
    */
-  private async claimForDelete(id: string, ownership: SessionOwnershipService): Promise<void> {
+  private async claimForDelete(id: string, ownership: SessionOwnershipService, request: StopRequest): Promise<void> {
     let claimed: boolean;
     try {
       claimed = await ownership.claim(id);
     } catch (error) {
       this.engineLifecycle.clearStopping(id);
-      this.uncountStopRequest(id);
+      this.withdrawStop(request);
       this.logger.warn(`Could not claim session ${id} for the delete; nothing was deleted`, {
         sessionId: id,
         action: 'session_delete_claim_failed',
@@ -746,7 +745,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new ServiceUnavailableException(`Session ${id} could not be claimed for the delete; nothing was deleted`);
     }
     if (claimed) return;
-    this.uncountStopRequest(id);
+    this.withdrawStop(request);
     // The claim is a conditional UPDATE, so an id with no row matches nothing too: answer its 404.
     await this.findOne(id);
     throw new ConflictException(`Session ${id} is running on another node`);
@@ -758,7 +757,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * progress, which would otherwise clear it. 'deleting' rather than 'stopped', so the take-back can tell it
    * from a stop that replaced it, also one another node recorded.
    */
-  private async keepDownForDelete(id: string, stops: DeleteStops): Promise<void> {
+  private async keepDownForDelete(id: string, stops: SessionStops): Promise<void> {
     if (stops.givingBack) await stops.givingBack;
     const { affected } = await this.sessionRepository.update(
       { id, desiredState: IsNull() },
@@ -794,15 +793,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * their own requireSession, so for an id that never had one the entry is unreachable by every
    * reclamation path and survives for the life of the process. A 404 also means there is no engine
    * and no in-flight start() for the mark to guard, so dropping it is safe as well as necessary.
-   *
-   * The request count set on the same tick is dropped with it, and for the same reason: its only
-   * reader is the transient start retry, which cannot be guarding a session that has no row, so
-   * an id that never had one would otherwise keep a counter entry for the life of the process.
+   * The stop request set on the same tick needs nothing here: the read or claim that answered 404
+   * withdrew it, and a withdrawn request goes when its call returns.
    */
   private discardStopMarkForMissingSession(id: string, error: unknown): void {
     if (!(error instanceof NotFoundException)) return;
     this.engineLifecycle.clearStopping(id);
-    this.stopRequests.delete(id);
   }
 
   /**
@@ -815,20 +811,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * credentials outright, while the peer's engine keeps running. A LAPSED claim is not fenced: the
    * holder may be gone, and taking over is exactly what the claim rule allows.
    */
-  private async assertNotHeldElsewhere(id: string): Promise<void> {
-    // Both callers count the request and set the stop mark before this query. The MARK survives a
+  private async assertNotHeldElsewhere(id: string, request: StopRequest): Promise<void> {
+    // Both callers issue the request and set the stop mark before this query. The MARK survives a
     // 409 (harmless, cleared by the next start()) but not a failed query: that decided nothing, and
     // a mark left on a session running here would stop its next disconnect from reconnecting.
-    // Neither refusal keeps its COUNT. Nothing was taken down, and the count exists only so an
-    // in-flight start()'s transient retry can tell a stop that happened from one that did not;
-    // counting a refusal cancels that retry and leaves the session down with nothing to restart it.
+    // Either refusal withdraws the REQUEST. Nothing was taken down, and the request exists only so an
+    // in-flight start() can tell a stop that happened from one that did not; one left standing
+    // cancels that start and leaves the session down with nothing to restart it.
     const heldElsewhere = await this.ownership?.isHeldByOtherNode(id).catch((error: unknown) => {
       this.engineLifecycle.clearStopping(id);
-      this.uncountStopRequest(id);
+      this.withdrawStop(request);
       throw error;
     });
     if (heldElsewhere) {
-      this.uncountStopRequest(id);
+      this.withdrawStop(request);
       throw new ConflictException(`Session ${id} is running on another node`);
     }
   }
@@ -870,6 +866,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.startReservations.set(id, left);
       } else {
         this.startReservations.delete(id);
+        // No start of the session runs now to look at the stop requests that have returned.
+        this.dropEndedStops(id);
         if (this.releaseOwed.delete(id)) await this.releaseUnlessEngineActive(id);
       }
     }
@@ -881,7 +879,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   private async claimAndStart(id: string, explicit: boolean): Promise<Session> {
     // Read before the claim, so a stop that lands while the claim is pending counts against this start.
-    const stopRequestsBefore = this.stopRequests.get(id);
+    const stopRequestsBefore = this.stopRequestSeq;
     // Claimed before the engine is launched, never after: launching first and discovering the
     // session belongs elsewhere would already have opened a second connection to the account.
     if (this.ownership && !(await this.ownership.claim(id))) {
@@ -922,14 +920,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * unbounded loop here would hold the concurrency slot hostage. HTTP-shaped refusals (409
    * not-ready, 4xx) are NOT transient - they propagate immediately.
    */
-  private async startWithTransientRetry(
-    id: string,
-    explicit: boolean,
-    stopRequestsBefore: number | undefined,
-  ): Promise<Session> {
+  private async startWithTransientRetry(id: string, explicit: boolean, stopRequestsBefore: number): Promise<Session> {
     // A stop that finished during the claim answered 200 and left the claim to this start; the engine's own
     // stop-mark check cannot tell its mark from a stale one, so the start is refused here.
-    if (this.stopRequests.get(id) !== stopRequestsBefore) {
+    if (this.stoppedSince(id, stopRequestsBefore)) {
       throw new SessionStoppedException(`Session ${id} was stopped`);
     }
     // Shutdown may have begun while the claim was pending; the stop clear and the hook must not run.
@@ -949,7 +943,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // it, and a first attempt failing before that point would otherwise lose its retry. Answered
       // as the stop it yielded to, like the check above: a 503 reads as retryable, and a client that
       // replays the start would bring the session back.
-      if (this.stopRequests.get(id) !== stopRequestsBefore) {
+      if (this.stoppedSince(id, stopRequestsBefore)) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
       try {
@@ -962,7 +956,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           throw new ConflictException(`Session ${id} is running on another node`);
         }
         // Checked again: a stop that landed during the re-claim leaves the claim for claimAndStart's catch to release.
-        if (this.stopRequests.get(id) !== stopRequestsBefore) {
+        if (this.stoppedSince(id, stopRequestsBefore)) {
           throw new SessionStoppedException(`Session ${id} was stopped`);
         }
         // And shutdown may have begun during the re-claim; the stop clear and the hook must not run.
@@ -989,23 +983,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   async stop(id: string): Promise<Session> {
     // Synchronous stop-mark before the awaited fence — see delete() for why.
-    this.markStopping(id);
+    const request = this.markStopping(id, 'stop');
     let session: Session;
     try {
-      if (this.ownership) await this.assertNotHeldElsewhere(id);
+      if (this.ownership) await this.assertNotHeldElsewhere(id, request);
       // Recorded once the row read succeeds and BEFORE the teardown, so the 502
       // SESSION_STOP_INCOMPLETE path keeps it too: a stopped session stays down across restarts and
-      // takeover until an explicit start. A failed write took nothing down, so the mark and count are
-      // undone as for a failed ownership read; a failed read took nothing down either, and the
-      // lifecycle has already dropped the mark, so only the count is undone.
+      // takeover until an explicit start. A failed write took nothing down, so the mark is dropped and
+      // the request withdrawn as for a failed ownership read; a failed read took nothing down either,
+      // and the lifecycle has already dropped the mark, so only the request is withdrawn.
       session = await this.engineLifecycle.stop(id, {
-        afterRead: () =>
-          this.keepDown(id).catch((error: unknown) => {
+        afterRead: () => {
+          this.takeStop(request);
+          return this.keepDown(id).catch((error: unknown) => {
             this.engineLifecycle.clearStopping(id);
-            this.uncountStopRequest(id);
+            this.withdrawStop(request);
             throw error;
-          }),
-        onReadFailed: () => this.uncountStopRequest(id),
+          });
+        },
+        onReadFailed: () => this.withdrawStop(request),
       });
     } catch (error) {
       // Only the local 502 (SESSION_STOP_INCOMPLETE) releases: it evicted the engine and wrote
@@ -1015,6 +1011,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (error instanceof BadGatewayException) await this.releaseAfterTeardown(id);
       this.discardStopMarkForMissingSession(id, error);
       throw error;
+    } finally {
+      this.endStop(id, request);
     }
     // Handed back on the way out so a peer can pick it up immediately rather than waiting for the
     // lease to lapse. Stop is the deliberate end of this process's ownership — but a start() that
@@ -1042,63 +1040,42 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   async forceKill(id: string): Promise<Session> {
-    // Counted like stop(), so a start still waiting on its claim yields rather than relaunching, but
-    // only while there is an engine to kill: at once if one runs, so a start sent after the kill keeps
-    // its place, otherwise once the kill finds one. A kill that took nothing down (a 400, a 404 or a
-    // failed row read) is uncounted, so it cannot retire a start that is still waiting on its claim.
-    let counted = false;
-    const count = (): void => {
-      if (counted) return;
-      counted = true;
-      this.countStopRequest(id);
+    // A stop request like stop()'s, so a start still waiting on its claim yields rather than relaunching,
+    // but only while there is an engine to kill: issued at once if one runs, so a start sent after the
+    // kill keeps its place, otherwise once the kill finds one. A kill that took nothing down (a 400, a
+    // 404 or a failed row read) withdraws it, so it cannot retire a start still waiting on its claim. One
+    // that found an engine stands, even if its record cannot be written: the engine is killed.
+    let request: StopRequest | undefined;
+    const issue = (): StopRequest => (request ??= this.requestStop(id, 'stop'));
+    const withdraw = (): void => {
+      if (request) this.withdrawStop(request);
     };
-    const uncount = (): void => {
-      if (!counted) return;
-      counted = false;
-      this.uncountStopRequest(id);
-    };
-    if (this.engines.get(id)) count();
+    if (this.engines.get(id)) issue();
     try {
       // The engine kill records the stop itself, once it has an engine to kill.
       const session = await this.engineLifecycle.forceKill(id, {
-        onReadFailed: uncount,
-        onEngineFound: count,
-        recordStop: write => this.recordStop(id, write),
+        onReadFailed: withdraw,
+        onEngineFound: () => this.takeStop(issue()),
       });
       await this.releaseAfterTeardown(id);
       return session;
     } catch (error) {
-      // The 400 "not started" also keeps its claim as in logout(). The 502 did evict the engine: it
-      // stays counted and releases.
-      if (error instanceof BadRequestException) uncount();
+      // The 400 "not started" also keeps its claim as in logout(). The 502 did evict the engine: its
+      // request stands and it releases.
+      if (error instanceof BadRequestException) withdraw();
       if (!(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
       throw error;
+    } finally {
+      if (request) this.endStop(id, request);
     }
-  }
-
-  /** Persist the operator's stop so boot auto-start and the takeover sweep leave the session down. */
-  private async keepDown(id: string): Promise<void> {
-    await this.recordStop(id, () => this.sessionRepository.update(id, { desiredState: 'stopped' }));
   }
 
   /**
-   * Write an operator stop's or a kill's record of a stop. The deletes of the session running here keep their
-   * own record once it lands, and leave it alone while it is being written; it is written after a take-back
-   * in progress, which would otherwise clear it.
+   * Persist the operator's stop so boot auto-start and the takeover sweep leave the session down. A delete's
+   * take-back clears only its own 'deleting', so this needs no ordering against one.
    */
-  private async recordStop(id: string, write: () => Promise<unknown>): Promise<void> {
-    this.stopWritesInFlight.set(id, (this.stopWritesInFlight.get(id) ?? 0) + 1);
-    try {
-      const givingBack = this.deleteStops.get(id)?.givingBack;
-      if (givingBack) await givingBack;
-      await write();
-      const stops = this.deleteStops.get(id);
-      if (stops) stops.overtaken = true;
-    } finally {
-      const left = (this.stopWritesInFlight.get(id) ?? 1) - 1;
-      if (left > 0) this.stopWritesInFlight.set(id, left);
-      else this.stopWritesInFlight.delete(id);
-    }
+  private async keepDown(id: string): Promise<void> {
+    await this.sessionRepository.update(id, { desiredState: 'stopped' });
   }
 
   /**
@@ -1106,15 +1083,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * write conditional on the row still reading what it read, and a stop's own write leaves 'stopped'
    * unchanged, so a stop landing just before the clear was wiped from the row while its in-memory
    * mark retired the start. The session was down, but the next boot would relaunch it. Any stop
-   * counted while the start ran and leaving no engine behind is the operator's last word. A failed
-   * write is logged rather than thrown: the start's own outcome still stands.
+   * issued while the start ran whose record was written, or delete that began removing, and leaving no
+   * engine behind is the operator's last word; one still pending writes its own record or withdraws, so
+   * it re-records nothing here. A failed write is logged rather than thrown: the start's own outcome
+   * still stands.
    */
-  private async keepDownIfStoppedDuringStart(
-    id: string,
-    explicit: boolean,
-    stopRequestsBefore: number | undefined,
-  ): Promise<void> {
-    const stoppedMeanwhile = this.stopRequests.get(id) !== stopRequestsBefore;
+  private async keepDownIfStoppedDuringStart(id: string, explicit: boolean, stopRequestsBefore: number): Promise<void> {
+    const stoppedMeanwhile = this.stoppedSince(id, stopRequestsBefore, { taken: true });
     if (!explicit || !stoppedMeanwhile || this.engineLifecycle.isEngineActive(id)) return;
     await this.keepDown(id).catch((error: unknown) =>
       this.logger.error(
@@ -1125,25 +1100,67 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     );
   }
 
-  private markStopping(id: string): void {
-    this.countStopRequest(id);
+  private markStopping(id: string, kind: StopRequest['kind']): StopRequest {
+    const request = this.requestStop(id, kind);
     this.engineLifecycle.markStopping(id);
+    return request;
   }
 
-  private countStopRequest(id: string): void {
-    this.stopRequests.set(id, (this.stopRequests.get(id) ?? 0) + 1);
+  /** Issue a stop request for the session; the caller withdraws, takes and ends exactly this one. */
+  private requestStop(id: string, kind: StopRequest['kind']): StopRequest {
+    let stops = this.stopRequests.get(id);
+    if (!stops) {
+      stops = { requests: new Set(), recorded: false, removing: false };
+      this.stopRequests.set(id, stops);
+    }
+    const request: StopRequest = { kind, seq: ++this.stopRequestSeq, state: 'pending', ended: false };
+    stops.requests.add(request);
+    return request;
+  }
+
+  /** Its stop record is being written, or its delete began removing: it can no longer leave nothing behind. */
+  private takeStop(request: StopRequest): void {
+    if (request.state === 'pending') request.state = 'taken';
+  }
+
+  /** It was refused or failed having taken nothing down: no start yields to it. */
+  private withdrawStop(request: StopRequest): void {
+    request.state = 'withdrawn';
   }
 
   /**
-   * Undo markStopping()'s count for a request that took nothing down, and drop the entry once the
-   * count is back to zero so ids that are only ever refused cannot accumulate. Decrementing rather
-   * than deleting keeps a concurrent stop that DID take effect counted: it leaves the value one
-   * above what an in-flight start captured either way, so the retry it must cancel stays cancelled.
+   * The request's call returned. A withdrawn one goes at once; one that stands stays while a start of the
+   * session runs, which may have begun before it, and goes when the last start returns.
    */
-  private uncountStopRequest(id: string): void {
-    const remaining = (this.stopRequests.get(id) ?? 0) - 1;
-    if (remaining > 0) this.stopRequests.set(id, remaining);
-    else this.stopRequests.delete(id);
+  private endStop(id: string, request: StopRequest): void {
+    request.ended = true;
+    const stops = this.stopRequests.get(id);
+    if (!stops) return;
+    if (request.state === 'withdrawn' || !this.startReservations.has(id)) stops.requests.delete(request);
+    this.tidyStops(id, stops);
+  }
+
+  private dropEndedStops(id: string): void {
+    const stops = this.stopRequests.get(id);
+    if (!stops) return;
+    for (const request of stops.requests) if (request.ended) stops.requests.delete(request);
+    this.tidyStops(id, stops);
+  }
+
+  private tidyStops(id: string, stops: SessionStops): void {
+    if (stops.requests.size === 0 && !stops.givingBack) this.stopRequests.delete(id);
+  }
+
+  /**
+   * Whether a stop request issued after the number `since` (the last one issued when a start began) still
+   * stands, pending or taken; with `taken`, only one whose record was written or whose delete began removing.
+   * A request issued before the start is not one it yields to, however it ends.
+   */
+  private stoppedSince(id: string, since: number, { taken = false } = {}): boolean {
+    for (const request of this.stopRequests.get(id)?.requests ?? []) {
+      if (request.seq > since && request.state !== 'withdrawn' && (!taken || request.state === 'taken')) return true;
+    }
+    return false;
   }
 
   /**
@@ -1571,14 +1588,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   /**
    * Stop engines for session ids whose DB row is about to be replaced by an infra import.
-   * Owned by the lifecycle service; see SessionEngineLifecycle.stopOrphanEngines(). Counted as a
-   * stop too, so a start waiting on its claim or in its retry pause launches nothing: the engine's
+   * Owned by the lifecycle service; see SessionEngineLifecycle.stopOrphanEngines(). A stop request
+   * too, so a start waiting on its claim or in its retry pause launches nothing: the engine's
    * stop mark alone reads as stale to the start that follows.
    */
   async stopOrphanEngines(
     sessionIds: string[],
   ): Promise<{ stopped: string[]; notRunning: string[]; failed: string[] }> {
-    for (const id of sessionIds) this.countStopRequest(id);
+    for (const id of sessionIds) {
+      const request = this.requestStop(id, 'stop');
+      this.takeStop(request);
+      this.endStop(id, request);
+    }
     return this.engineLifecycle.stopOrphanEngines(sessionIds);
   }
 
