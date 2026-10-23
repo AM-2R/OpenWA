@@ -52,22 +52,25 @@ function flagValue(service: BuiltInService, saved: Record<string, string>): stri
 }
 
 /**
- * The built-in flag as GET /infra/status falls back to it with Docker unreachable. No host rule here: with no
- * container to see, a host called postgres is as likely an external server (a Kubernetes Service, say) and must
- * not read as the bundled container.
+ * The built-in flag the environment pins, else the saved one: this instance's own record that it chose the bundled
+ * container. GET /infra/status falls back to it with Docker unreachable, where a host called postgres alone is as
+ * likely an external server (a Kubernetes Service, say) and must not read as the bundled container; the flag alone
+ * does not either, since the process dials its host.
  */
 export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<string, string>): boolean {
   return flagValue(service, saved) === 'true';
 }
 
 /**
+ * The host the next boot dials decides whether the service is built-in; the flag only whether the bundled container
+ * starts at boot (a flag the environment pins true starts it at every boot, whatever host the file gives the app).
  * Rules, in order:
  *  1. A host pinned by the environment (or the project .env) decides, as it does at boot and in
  *     requestRestart: the bundled host in any spelling that reaches the container is built-in, any other is
  *     not, and no saved flag can be a pending switch because the pin outranks it.
- *  2. Otherwise the flag counts as saved when the environment pins it, or when the file stores it for a
- *     service the file also selects. A flag that is not true beside the bundled host name in the file is no
- *     choice of an external service, though: the next boot dials the container, so it reads as built-in and
+ *  2. Otherwise the file's host decides, and the flag counts as saved when the environment pins it, or when the file
+ *     stores it for a service the file also selects. A flag that is not true beside the bundled host name in the file
+ *     is no choice of an external service, though: the next boot dials the container, so it reads as built-in and
  *     nothing is saved.
  *  3. Otherwise there is nothing saved.
  */
@@ -81,5 +84,5 @@ export function savedBuiltInMode(service: BuiltInService, saved: Record<string, 
   const selectedInFile = saved[spec.selection] === spec.selected;
   const dialsBundled = namesBundledContainer(spec.profile, saved[spec.host]);
   if (flag !== 'true' && dialsBundled) return { builtIn: true, builtInSet: false };
-  return { builtIn: flag === 'true', builtInSet: flag !== undefined && (flagPinned || selectedInFile) };
+  return { builtIn: dialsBundled, builtInSet: flag !== undefined && (flagPinned || selectedInFile) };
 }

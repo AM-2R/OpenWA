@@ -214,8 +214,9 @@ export class InfraStatusController {
 
     // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
-    // pointed at the bundled service. Fall back to the saved *_BUILTIN flag (the environment's first) when
-    // Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488) The labelled
+    // pointed at the bundled service either way. Fall back to the saved *_BUILTIN flag (the environment's first)
+    // when Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off; a flag only
+    // decides whether the container starts at boot, so it counts beside the bundled host alone. (#488) The labelled
     // container may be another instance's on the same daemon: it counts whenever this one's host is spelled like the
     // bundled one (docs/13, Scaling Guidelines).
     // `running` names a container OpenWA created beside this instance's own built-in flag only: the container names
@@ -225,11 +226,11 @@ export class InfraStatusController {
       ? await this.dockerService.getRunningBuiltinServices()
       : null;
     const savedBuiltin = this.readSavedBuiltinFlags();
-    const dbBuiltIn = running ? !!running.database && namesBundledContainer('postgres', dbHost) : savedBuiltin.database;
-    const redisBuiltIn = running ? !!running.cache && namesBundledContainer('redis', redisHost) : savedBuiltin.cache;
-    const storageBuiltIn = running
-      ? !!running.storage && namesBundledContainer('minio', s3Endpoint)
-      : savedBuiltin.storage;
+    const dbBuiltIn =
+      (running ? !!running.database : savedBuiltin.database) && namesBundledContainer('postgres', dbHost);
+    const redisBuiltIn = (running ? !!running.cache : savedBuiltin.cache) && namesBundledContainer('redis', redisHost);
+    const storageBuiltIn =
+      (running ? !!running.storage : savedBuiltin.storage) && namesBundledContainer('minio', s3Endpoint);
     // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
     const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 

@@ -167,12 +167,13 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
   it('reads the built-in mode from the host', () => {
     arrange(c);
     const mode = controller().getConfig()[c.service];
+    // A flag of true beside a file host elsewhere is a saved choice of that host: the flag only starts the container.
     const expected =
       c.position === 'pinned'
         ? { builtIn: c.reach, builtInSet: false }
         : c.flag !== 'true' && c.reach
           ? { builtIn: true, builtInSet: false }
-          : { builtIn: c.flag === 'true', builtInSet: c.flag !== 'absent' };
+          : { builtIn: c.reach, builtInSet: c.flag !== 'absent' };
     expect({ builtIn: mode.builtIn, builtInSet: mode.builtInSet }).toEqual(expected);
   });
 

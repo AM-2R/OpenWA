@@ -44,6 +44,7 @@ import { resolveStorageRoot } from '../../config/storage-root';
 import { validateEnv } from '../../config/env.validation';
 import {
   EXPECTED_MODE,
+  EXPECTED_MODE_FLAG_PINNED,
   FILE_STATES,
   HOST_SPELLINGS,
   PIN_STATES,
@@ -2025,9 +2026,9 @@ describe('InfraConfigController.getConfig answers the saved built-in mode for ev
   const otherPin = (pin: PinState): PinState => (pin === 'external' ? 'bundled' : 'external');
   let pinnedKeys: string[] = [];
 
-  const arrange = (service: ServiceName, state: FileState, pin: PinState) => {
+  const arrange = (service: ServiceName, state: FileState, pin: PinState, extraPins: Record<string, string> = {}) => {
     const lines: string[] = [];
-    const pins: Record<string, string> = {};
+    const pins: Record<string, string> = { ...extraPins };
     for (const name of SERVICE_NAMES) {
       const own = name === service;
       lines.push(...fileLines(name, own ? state : otherState(state)));
@@ -2115,27 +2116,101 @@ describe('InfraConfigController.getConfig answers the saved built-in mode for ev
     }
   });
 
-  // An operator who pins the flag itself has decided it, whatever the file or the hosts say, unless a host pin does.
-  it('a flag pinned by the environment counts as stored, and a pinned host still outranks it', () => {
-    recordPinnedEnvKeys({
-      POSTGRES_BUILTIN: 'true',
-      REDIS_BUILTIN: 'false',
-      MINIO_BUILTIN: 'true',
-      S3_ENDPOINT: 'https://s3.external.example',
-    });
-    process.env.POSTGRES_BUILTIN = 'true';
-    process.env.REDIS_BUILTIN = 'false';
-    process.env.MINIO_BUILTIN = 'true';
-    process.env.S3_ENDPOINT = 'https://s3.external.example';
-    pinnedKeys = ['S3_ENDPOINT'];
+  // A flag the environment pins only decides whether the bundled container starts at boot. Whether the service is
+  // built-in is the host the next boot dials: the pinned one, else the file's beside the pinned flag, which then
+  // counts as a saved choice.
+  describe.each(SERVICE_NAMES)('%s beside a flag the environment pins', service => {
+    for (const state of FILE_STATES) {
+      for (const flag of ['true', 'false'] as const) {
+        for (const pin of PIN_STATES) {
+          const host = pin === 'none' ? 'no host pin' : `the host pinned ${pin}`;
+          it(`a ${state} file with the flag pinned ${flag} and ${host}`, () => {
+            arrange(service, state, pin, { [SERVICES[service].flag]: flag });
+
+            expect(modeOf(newController().getConfig(), service)).toEqual(
+              pin === 'none' ? EXPECTED_MODE_FLAG_PINNED[state][flag] : EXPECTED_MODE[state][pin],
+            );
+          });
+        }
+      }
+    }
+  });
+
+  // The switch the page writes beside flags the environment pins true (the documented manual flags): the flags false
+  // and external hosts in the file. The restart applies it, so it reads as the saved external choice it is.
+  it('a switch to external servers saved beside flags pinned true reads as external', () => {
+    const pins = { POSTGRES_BUILTIN: 'true', REDIS_BUILTIN: 'true', MINIO_BUILTIN: 'true' };
+    recordPinnedEnvKeys(pins);
+    Object.assign(process.env, pins);
+    pinnedKeys = Object.keys(pins);
     (fs.existsSync as jest.Mock).mockReturnValue(true);
-    (fs.readFileSync as jest.Mock).mockReturnValue('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\nMINIO_BUILTIN=false\n');
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.ext.example\nREDIS_ENABLED=true\n' +
+        'REDIS_BUILTIN=false\nREDIS_HOST=cache.ext.example\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+        'S3_ENDPOINT=https://s3.ext.example\n',
+    );
 
     const cfg = newController().getConfig();
 
-    expect(modeOf(cfg, 'database')).toEqual({ builtIn: true, builtInSet: true });
-    expect(modeOf(cfg, 'redis')).toEqual({ builtIn: false, builtInSet: true });
-    expect(modeOf(cfg, 'storage')).toEqual({ builtIn: false, builtInSet: false });
+    for (const service of SERVICE_NAMES) expect(modeOf(cfg, service)).toEqual({ builtIn: false, builtInSet: true });
+  });
+});
+
+// The save of what GET /config reports, with an unrelated setting changed, as the Infrastructure page sends it after
+// a switch to external servers beside flags the environment pins true: the next boot keeps dialling those servers
+// with the values saved for them. The pinned flags only start the bundled containers at boot.
+describe('InfraConfigController.saveConfig beside flags the environment pins true', () => {
+  const STORED =
+    'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.ext.example\nDATABASE_PORT=5432\n' +
+    'DATABASE_USERNAME=app\nDATABASE_PASSWORD=ExtPw12345!\nDATABASE_NAME=appdb\nPOSTGRES_SCHEMA=tenant\n' +
+    'REDIS_ENABLED=true\nREDIS_BUILTIN=false\nREDIS_HOST=cache.ext.example\nREDIS_PORT=6380\n' +
+    'REDIS_PASSWORD=RedisPw123456\nQUEUE_ENABLED=false\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+    'S3_ENDPOINT=https://s3.ext.example\nS3_BUCKET=media\nS3_REGION=eu-west-1\nS3_ACCESS_KEY_ID=AKIAEXTERNAL12345\n' +
+    'S3_SECRET_ACCESS_KEY=ExternalSecret1234567890\nPUPPETEER_HEADLESS=true\n';
+  const pins = { POSTGRES_BUILTIN: 'true', REDIS_BUILTIN: 'true', MINIO_BUILTIN: 'true' };
+  const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
+
+  beforeEach(() => {
+    recordPinnedEnvKeys(pins);
+    Object.assign(process.env, pins);
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(STORED);
+    (fs.writeFileSync as jest.Mock).mockClear();
+  });
+  afterEach(() => {
+    for (const key of Object.keys(pins)) delete process.env[key];
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+  });
+
+  it('keeps every external value when only Headless Mode changes', () => {
+    const controller = new InfraConfigController({ getAvailableEngines: () => [] } as never, {} as never, {} as never);
+    const cfg = controller.getConfig();
+    // What the form seeds from GET /config and sends: no host is pinned, so every flag is sent; secrets are blank.
+    controller.saveConfig({
+      database: { ...cfg.database, password: '' },
+      redis: { enabled: cfg.redis.enabled, builtIn: cfg.redis.builtIn, host: cfg.redis.host, port: cfg.redis.port },
+      queue: cfg.queue,
+      storage: {
+        type: cfg.storage.type,
+        builtIn: cfg.storage.builtIn,
+        s3Bucket: cfg.storage.s3Bucket,
+        s3Region: cfg.storage.s3Region,
+        s3Endpoint: cfg.storage.s3Endpoint,
+        s3AccessKey: '',
+        s3SecretKey: '',
+      },
+      engine: { headless: !cfg.engine.headless },
+    });
+
+    const written = dotenv.parse(((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1]);
+    expect(written).toEqual({
+      ...dotenv.parse(STORED),
+      DATABASE_POOL_SIZE: '10',
+      DATABASE_SSL: 'false',
+      PUPPETEER_HEADLESS: 'false',
+    });
   });
 });
 

@@ -25,7 +25,8 @@ export class InfraDatabaseStatusDto {
     description:
       "Whether OpenWA's own bundled container is actually running and backing this service, " +
       'detected live from the labelled container rather than read from the saved intent. When Docker is ' +
-      "unavailable it falls back to the saved flag (the environment's first), and a host name alone proves nothing.",
+      "unavailable it falls back to the saved flag (the environment's first) beside a host that reaches the " +
+      'bundled container: neither a host name nor the flag alone proves it.',
     example: true,
   })
   builtIn!: boolean;

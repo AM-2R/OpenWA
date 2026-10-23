@@ -2,13 +2,15 @@
 // environment pins for the service's host key. One table for both halves of the Infrastructure page: the
 // controller specs assert the answer, the dashboard page tests render the form from it.
 //
-// The rule, per service (database, redis, storage):
+// The rule, per service (database, redis, storage): the host the next boot dials decides whether the service is
+// built-in, and a *_BUILTIN flag only whether the bundled container starts at boot.
 //  1. A host pinned by the environment decides: pinned to the bundled host is built-in, anything else is not,
 //     and the saved flag says nothing (builtInSet false).
-//  2. Otherwise the saved flag counts (builtInSet true) only when the file also selects the service. The first
-//     boot writes every flag as false next to a service that is not selected, which is a default, not a choice.
-//     A flag that is not true beside the bundled host name in the file is no choice of an external service either:
-//     the next boot dials the container (builtIn true, builtInSet false).
+//  2. Otherwise the file's host decides (none is the default host, which is not the bundled container). The flag
+//     counts as a saved choice (builtInSet true) when the environment pins it or the file also selects the service.
+//     The first boot writes every flag as false next to a service that is not selected, which is a default, not a
+//     choice. A flag that is not true beside the bundled host name in the file is no choice of an external service
+//     either: the next boot dials the container (builtIn true, builtInSet false).
 //  3. Otherwise nothing is saved (builtInSet false) and the page follows what runs.
 
 export type FileState =
@@ -96,14 +98,15 @@ export const EXPECTED_MODE: Record<FileState, Record<PinState, SavedMode>> = {
     bundled: PINNED_BUNDLED,
     external: PINNED_EXTERNAL,
   },
+  // The flag true without the bundled host: the next boot dials the default host, so the choice is external.
   'stored-true': {
-    none: { builtIn: true, builtInSet: true },
+    none: { builtIn: false, builtInSet: true },
     bundled: PINNED_BUNDLED,
     external: PINNED_EXTERNAL,
   },
   // A flag left true beside a service the file does not select.
   'unselected-true': {
-    none: { builtIn: true, builtInSet: false },
+    none: { builtIn: false, builtInSet: false },
     bundled: PINNED_BUNDLED,
     external: PINNED_EXTERNAL,
   },
@@ -122,19 +125,40 @@ export const EXPECTED_MODE: Record<FileState, Record<PinState, SavedMode>> = {
 };
 
 /**
- * What GET /infra/status answers with Docker unreachable, where there is no container to see. A host name proves
- * nothing there (an external server may be called postgres), so only the flag counts: the environment's, else the
- * file's, whatever the host pins say.
+ * The built-in mode GET /infra/config answers when the environment pins the service's flag and not its host: the
+ * file's host still decides (rule 2), and the pinned flag counts as a saved choice. A pinned host decides as in
+ * EXPECTED_MODE whatever the flag.
  */
-export const FALLBACK_BUILT_IN: Record<FileState, boolean> = {
-  absent: false,
-  template: false,
-  'stored-false': false,
-  'stored-true': true,
-  'unselected-true': true,
-  'bundled-host': false,
-  'saved-bundled': true,
+export const EXPECTED_MODE_FLAG_PINNED: Record<FileState, Record<'true' | 'false', SavedMode>> = {
+  absent: { true: { builtIn: false, builtInSet: true }, false: { builtIn: false, builtInSet: true } },
+  template: { true: { builtIn: false, builtInSet: true }, false: { builtIn: false, builtInSet: true } },
+  'stored-false': { true: { builtIn: false, builtInSet: true }, false: { builtIn: false, builtInSet: true } },
+  'stored-true': { true: { builtIn: false, builtInSet: true }, false: { builtIn: false, builtInSet: true } },
+  'unselected-true': { true: { builtIn: false, builtInSet: true }, false: { builtIn: false, builtInSet: true } },
+  'bundled-host': { true: { builtIn: true, builtInSet: true }, false: { builtIn: true, builtInSet: false } },
+  'saved-bundled': { true: { builtIn: true, builtInSet: true }, false: { builtIn: true, builtInSet: false } },
 };
+
+/**
+ * What GET /infra/status answers with Docker unreachable, where there is no container to see. A host name alone proves
+ * nothing there (an external server may be called postgres), so the flag must be true, the environment's, else the
+ * file's; and a flag beside a host that does not reach the bundled container proves nothing either, since the process
+ * dials that host. The process runs on the pinned host, else the file's.
+ */
+export const FALLBACK_BUILT_IN: Record<FileState, Record<PinState, boolean>> = {
+  absent: { none: false, bundled: false, external: false },
+  template: { none: false, bundled: false, external: false },
+  'stored-false': { none: false, bundled: false, external: false },
+  'stored-true': { none: false, bundled: true, external: false },
+  'unselected-true': { none: false, bundled: true, external: false },
+  'bundled-host': { none: false, bundled: false, external: false },
+  'saved-bundled': { none: true, bundled: true, external: false },
+};
+
+/** The host the file names for a service in a given state, or undefined when it names none. */
+export function fileHost(service: ServiceName, state: FileState): string | undefined {
+  return state === 'bundled-host' || state === 'saved-bundled' ? SERVICES[service].bundledHost : undefined;
+}
 
 /** The lines a saved file holds about one service in a given state. */
 export function fileLines(service: ServiceName, state: FileState): string[] {

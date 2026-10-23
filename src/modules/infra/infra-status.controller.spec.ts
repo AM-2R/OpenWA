@@ -29,10 +29,12 @@ import {
   PIN_STATES,
   SERVICES,
   SERVICE_NAMES,
+  fileHost,
   fileLines,
   pinnedHost,
   type FileState,
   type PinState,
+  type ServiceName,
 } from '../../../test/fixtures/builtin-mode-cases';
 
 describe('InfraStatusController.getStatus DB health (active SELECT 1 probe, not just isInitialized)', () => {
@@ -382,10 +384,17 @@ describe('InfraStatusController.getStatus envPinned', () => {
 
 // With Docker unreachable the status falls back to the saved flag, the environment's first. A host name proves
 // nothing without a container to see (an external server may be called postgres), so a pinned bundled host must not
-// read as built-in there: it would replace the stored external credentials with the bundled defaults on a save.
+// read as built-in there: it would replace the stored external credentials with the bundled defaults on a save. Nor
+// does a flag beside a host that does not reach the bundled container: the process dials that host.
 describe('InfraStatusController.getStatus built-in fallback reads the flag only when Docker is unreachable', () => {
-  const build = () => {
-    const config = { get: (k: string, def?: unknown) => (k === 'engine.type' ? 'baileys' : def) };
+  // The hosts the process runs with, as configuration.ts reads them at boot.
+  const build = (hosts: Partial<Record<ServiceName, string>> = {}) => {
+    const key: Record<string, string | undefined> = {
+      'dataDatabase.host': hosts.database,
+      'redis.host': hosts.redis,
+      'storage.s3.endpoint': hosts.storage,
+    };
+    const config = { get: (k: string, def?: unknown) => (k === 'engine.type' ? 'baileys' : (key[k] ?? def)) };
     const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
     return new InfraStatusController(
       config as never,
@@ -416,11 +425,13 @@ describe('InfraStatusController.getStatus built-in fallback reads the flag only 
         it(`${service}: a ${state} file with ${pin === 'none' ? 'no host pin' : `the host pinned ${pin}`}`, async () => {
           const lines: string[] = [];
           const pins: Record<string, string> = {};
+          const hosts: Partial<Record<ServiceName, string>> = {};
           for (const name of SERVICE_NAMES) {
             const own = name === service;
             lines.push(...fileLines(name, own ? state : otherState(state)));
             const host = pinnedHost(name, own ? pin : otherPin(pin));
             if (host !== undefined) pins[SERVICES[name].host] = host;
+            hosts[name] = host ?? fileHost(name, own ? state : otherState(state));
           }
           recordPinnedEnvKeys(pins);
           for (const [key, value] of Object.entries(pins)) process.env[key] = value;
@@ -428,9 +439,9 @@ describe('InfraStatusController.getStatus built-in fallback reads the flag only 
           (fs.existsSync as jest.Mock).mockReturnValue(true);
           (fs.readFileSync as jest.Mock).mockReturnValue(`${lines.join('\n')}\n`);
 
-          const status = await build().getStatus();
+          const status = await build(hosts).getStatus();
 
-          expect(status[service].builtIn).toBe(FALLBACK_BUILT_IN[state]);
+          expect(status[service].builtIn).toBe(FALLBACK_BUILT_IN[state][pin]);
         });
       }
     }
@@ -450,9 +461,32 @@ describe('InfraStatusController.getStatus built-in fallback reads the flag only 
     (fs.existsSync as jest.Mock).mockReturnValue(true);
     (fs.readFileSync as jest.Mock).mockReturnValue('POSTGRES_BUILTIN=false\nREDIS_BUILTIN=true\nMINIO_BUILTIN=false\n');
 
-    const status = await build().getStatus();
+    const status = await build({ database: 'postgres', redis: 'redis', storage: 'http://minio:9000' }).getStatus();
 
     expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([true, false, false]);
+  });
+
+  // The page switched the three services to external servers beside flags the environment pins true, and the restart
+  // applied it: the flags still start the containers at boot, but the process dials the external hosts.
+  it('a flag pinned true beside a host that does not reach the bundled container reads as no built-in', async () => {
+    const pins = { POSTGRES_BUILTIN: 'true', REDIS_BUILTIN: 'true', MINIO_BUILTIN: 'true' };
+    recordPinnedEnvKeys(pins);
+    Object.assign(process.env, pins);
+    pinnedKeys = Object.keys(pins);
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.ext.example\nREDIS_ENABLED=true\n' +
+        'REDIS_BUILTIN=false\nREDIS_HOST=cache.ext.example\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+        'S3_ENDPOINT=https://s3.ext.example\n',
+    );
+
+    const status = await build({
+      database: 'db.ext.example',
+      redis: 'cache.ext.example',
+      storage: 'https://s3.ext.example',
+    }).getStatus();
+
+    expect([status.database.builtIn, status.redis.builtIn, status.storage.builtIn]).toEqual([false, false, false]);
   });
 });
 
