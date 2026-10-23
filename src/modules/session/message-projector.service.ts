@@ -1088,10 +1088,13 @@ export class MessageProjector {
    * is taken back only if the revoke agrees with it, and the row is cleared only if the revoke is not
    * foreign to it. Without one, the revoke was judged by the caller (the engine's revoke event is).
    */
-  recordRevoke(sessionId: string, waMessageId: string, source?: MutationSource): Promise<void> {
+  recordRevoke(sessionId: string, waMessageId: string, source?: MutationSource, announced = false): Promise<void> {
     let stored: Promise<void> | undefined;
     const pending = this.changeInFlight(sessionId, waMessageId, source, (needsRow, entry) => {
-      if (entry && !needsRow) this.holdRevoked(sessionId, entry);
+      if (entry && !needsRow) {
+        this.holdRevoked(sessionId, entry);
+        if (announced) entry.revokeAnnounced = true;
+      }
       stored = new Promise(resolve =>
         this.enqueueMessageMutation(sessionId, waMessageId, () =>
           this.revokeRow(sessionId, waMessageId, true, source).finally(resolve),
@@ -1360,9 +1363,12 @@ export class MessageProjector {
         // That row may be older than this delivery and edited since, the edit still being written: announced once the
         // changes queued for the message have run, with the mark they left.
         rowMarked = await new Promise<boolean>(resolve =>
-          this.enqueueMessageMutation(id, outgoing.id, () =>
-            Promise.resolve(resolve(this.markedEdited.get(id)?.has(outgoing.id) === true)),
-          ),
+          this.enqueueMessageMutation(id, outgoing.id, async () => {
+            const marked = this.markedEdited.get(id)?.has(outgoing.id) === true;
+            const foreign =
+              marked && (await this.mutationProjector.foreignRowReason(id, outgoing.id, claimOf(outgoing)));
+            resolve(marked && !foreign);
+          }),
         );
       }
       if (outcome.landed === 'yes') {
@@ -1554,10 +1560,9 @@ export class MessageProjector {
     // `message.id` is the revocation notification, which never matches a stored row.
     // `revokedId` falls back to `id` (Baileys, where the two are the same).
     const revokedWaMessageId = message.revokedId ?? message.id;
+    const source = actor ? ({ kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const) : undefined;
     const apply = (): void => {
-      void this.recordRevoke(id, revokedWaMessageId);
-      const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
-      if (inFlight) inFlight.revokeAnnounced = true;
+      void this.recordRevoke(id, revokedWaMessageId, source, true);
 
       // Notify consumers regardless of whether the row existed: webhook (message.revoked
       // is a declared event) + the real-time dashboard stream.
@@ -1569,11 +1574,10 @@ export class MessageProjector {
     // once: its ids name the chat, so no row of another chat can hold the id. An engine that applies no
     // validation to a revoke says who made it, and the stored row says whose message it names: a revoke the
     // row proves foreign is dropped, announcement included.
-    if (!actor) {
+    if (!source) {
       apply();
       return;
     }
-    const source = { kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const;
     void this.changeInFlight(id, revokedWaMessageId, source, (needsRow, inFlight) => {
       if (inFlight && !needsRow) {
         this.holdRevoked(id, inFlight);

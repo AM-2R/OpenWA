@@ -809,4 +809,166 @@ describe('reported identities before a tombstone delivery reaches its hooks', ()
       );
     },
   );
+
+  it.each(
+    ['unknown', 'unreported', 'reported', 'sameLid', 'distinctLid'].flatMap(origin =>
+      [false, true].map(own => [origin, own] as const),
+    ),
+  )('scopes a stored revoke to the held %s identity, own=%s', async (origin, own) => {
+    await remember(origin);
+    if (origin === 'distinctLid') {
+      await remember('reported');
+      await mappings.remember('595959', '628111', 'peer');
+    }
+    const storedChat = origin === 'sameLid' ? '484848:7@hosted.lid' : origin === 'distinctLid' ? '595959@lid' : PHONE;
+    await repository.insert({
+      sessionId: 's1',
+      waMessageId: 'A',
+      chatId: storedChat,
+      from: own ? SELF : storedChat,
+      to: own ? storedChat : SELF,
+      direction: own ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+      body: 'stored content',
+      type: 'text',
+      timestamp: 1_700_000_000,
+    });
+    const ticket = projector.admitInbound('s1', engine, {
+      id: 'A',
+      chatId: LID,
+      fromMe: own,
+      needsRoom: true,
+      status: false,
+    })!;
+    projector.handleMessageRevoked('s1', engine, { id: 'A', revokedId: 'A', chatId: storedChat } as never, {
+      fromMe: own,
+    });
+    await flush();
+    const revoked = ticket.revoked;
+    const granted = await ticket.reserve();
+    if (own) projector.handleOwnSendEcho('s1', engine, incoming('A', LID, own), ticket);
+    else await projector.handleInboundMessage('s1', engine, incoming('A', LID, own), ticket)?.settled;
+    await flush();
+    const accepted = origin === 'reported' || origin === 'sameLid';
+    expect({ revoked, granted, hooked: hooked.map(m => ({ body: m.body, type: m.type })) }).toEqual({
+      revoked: accepted,
+      granted: !accepted,
+      hooked: accepted ? [] : [{ body: 'content', type: 'text' }],
+    });
+    expect(await repository.findOneByOrFail({ waMessageId: 'A' })).toMatchObject({
+      chatId: storedChat,
+      body: '',
+      type: 'revoked',
+    });
+    expect(sent).toEqual(
+      own && !accepted ? [expect.objectContaining({ chatId: LID, body: 'content', type: 'text' })] : [],
+    );
+    expect((projector as unknown as { inboundInFlight: Map<string, unknown> }).inboundInFlight.size).toBe(0);
+  });
+
+  it.each([false, true])('marks a new matching entry announced after the revoke row read, own=%s', async own => {
+    const read = deferred<void>();
+    const findOne = repository.findOne.bind(repository);
+    let reading = false;
+    jest.spyOn(repository, 'findOne').mockImplementation(async options => {
+      if (!reading && !(options.where as { type?: string }).type) {
+        reading = true;
+        await read.promise;
+      }
+      return findOne(options);
+    });
+    projector.handleMessageRevoked('s1', engine, { id: 'A', revokedId: 'A', chatId: PHONE } as never, { fromMe: own });
+    await flush();
+    expect(reading).toBe(true);
+    const ticket = projector.admitInbound('s1', engine, {
+      id: 'A',
+      chatId: PHONE,
+      fromMe: own,
+      needsRoom: true,
+      status: false,
+    })!;
+    read.resolve();
+    await flush();
+    const revoked = ticket.revoked;
+    if (own) projector.handleOwnSendEcho('s1', engine, incoming('A', PHONE, own), ticket);
+    else await projector.handleInboundMessage('s1', engine, incoming('A', PHONE, own), ticket)?.settled;
+    await flush();
+    expect({ revoked, hooked, dispatched }).toEqual({ revoked: true, hooked: [], dispatched: [] });
+    expect(await repository.findOneByOrFail({ waMessageId: 'A' })).toMatchObject({
+      chatId: PHONE,
+      body: '',
+      type: 'revoked',
+    });
+  });
+
+  it.each(['edit', 'reaction'] as const)('keeps foreign held content when the stored row accepts %s', async kind => {
+    await repository.insert({
+      sessionId: 's1',
+      waMessageId: 'A',
+      chatId: PHONE,
+      from: PHONE,
+      to: SELF,
+      direction: MessageDirection.INCOMING,
+      body: 'stored content',
+      type: 'text',
+      timestamp: 1_700_000_000,
+    });
+    const ticket = projector.admitInbound('s1', engine, {
+      id: 'A',
+      chatId: LID,
+      fromMe: false,
+      needsRoom: true,
+      status: false,
+    })!;
+    if (kind === 'edit')
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        chatId: PHONE,
+        fromMe: false,
+        body: 'corrected',
+      } as never);
+    else projector.applyReactionQueued('s1', { messageId: 'A', chatId: PHONE, senderId: PHONE, reaction: 'x' });
+    await flush();
+    const granted = await ticket.reserve();
+    await projector.handleInboundMessage('s1', engine, incoming('A', LID), ticket)?.settled;
+    await flush();
+    expect({ granted, hooked: hooked.map(m => ({ body: m.body, type: m.type })) }).toEqual({
+      granted: true,
+      hooked: [{ body: 'content', type: 'text' }],
+    });
+    const row = await repository.findOneByOrFail({ waMessageId: 'A' });
+    expect(row.body).toBe(kind === 'edit' ? 'corrected' : 'stored content');
+    if (kind === 'reaction') expect(row.metadata).toMatchObject({ reactions: { [PHONE]: 'x' } });
+  });
+  it.each(['reported', 'unreported', 'unknown'])(
+    'inherits a stored edited mark only from its identity, origin=%s',
+    async origin => {
+      await remember(origin);
+      await repository.insert({
+        sessionId: 's1',
+        waMessageId: 'A',
+        chatId: PHONE,
+        from: SELF,
+        to: PHONE,
+        direction: MessageDirection.OUTGOING,
+        body: 'stored content',
+        type: 'text',
+        timestamp: 1_700_000_000,
+      });
+      await projector.recordOutboundMessageEdit('s1', 'A', 'edited stored content', {
+        kind: 'edit',
+        chatId: PHONE,
+        fromMe: true,
+      });
+      deliver(incoming('A', LID, true));
+      await flush();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ chatId: LID, body: 'content', type: 'text' });
+      expect((sent[0] as IncomingMessage & { edited?: true }).edited).toBe(origin === 'reported' ? true : undefined);
+      expect(await repository.findOneByOrFail({ waMessageId: 'A' })).toMatchObject({
+        chatId: PHONE,
+        body: 'edited stored content',
+        metadata: { edited: true },
+      });
+    },
+  );
 });
