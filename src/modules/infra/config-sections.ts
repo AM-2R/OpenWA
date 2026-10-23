@@ -246,7 +246,15 @@ export function applyStorageSection(
       updates.STORAGE_LOCAL_PATH = storage.localPath || './data/media';
     }
     // Switching to local: drop stale S3 keys.
-    for (const k of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION']) {
+    for (const k of [
+      'S3_ENDPOINT',
+      'S3_ACCESS_KEY_ID',
+      'S3_SECRET_ACCESS_KEY',
+      'S3_ACCESS_KEY',
+      'S3_SECRET_KEY',
+      'S3_BUCKET',
+      'S3_REGION',
+    ]) {
       staleKeys.add(k);
     }
   } else {

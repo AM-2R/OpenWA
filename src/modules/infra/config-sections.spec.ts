@@ -250,3 +250,22 @@ it.each([true, false])('writes explicitly chosen database TLS under an external 
     DATABASE_SSL_REJECT_UNAUTHORIZED: 'false',
   });
 });
+
+const credentialNames = [
+  ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+  ['S3_ACCESS_KEY', 'S3_SECRET_KEY'],
+] as const;
+
+it.each(credentialNames)('removes inactive S3 credentials %s and %s when selecting local storage', (access, secret) => {
+  const existing = {
+    STORAGE_TYPE: 's3',
+    S3_ENDPOINT: 'https://s3.old.example',
+    [access]: 'StoredKey123456',
+    [secret]: 'StoredSecret1234567890',
+  };
+  const ctx = context();
+
+  applyStorageSection({ type: 'local' }, existing, ctx);
+
+  expect(savedValues(existing, ctx)).toEqual({ STORAGE_TYPE: 'local', MINIO_BUILTIN: 'false' });
+});

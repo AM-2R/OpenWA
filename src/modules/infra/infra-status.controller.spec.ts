@@ -373,6 +373,9 @@ describe('InfraStatusController.getStatus envPinned', () => {
       saver.applyConfigSections(payload as SaveConfigDto, {}, ctx);
       [...Object.keys(ctx.updates), ...ctx.staleKeys].forEach(key => written.add(key));
     }
+    // Removing legacy aliases changes the canonical credential fields, which are the ones the form writes.
+    written.delete('S3_ACCESS_KEY');
+    written.delete('S3_SECRET_KEY');
     // Every compose forward is pinned beside them, so a reported key no save writes would show up too.
     recordPinnedEnvKeys(Object.fromEntries([...BLANK_SHADOWED_ENV_KEYS, ...written].map(key => [key, 'x'])));
 
