@@ -3,7 +3,7 @@ import { DEFAULT_PUPPETEER_ARGS } from '../../config/configuration';
 import { isEnvPinned } from '../../config/env-precedence';
 import { postgresSchemaError } from '../../config/env.validation';
 import type { EngineFactory } from '../../engine/engine.factory';
-import { datastoreInUse, namesBundledContainer } from '../docker';
+import { datastoreInUse, hostPinnedElsewhere, namesBundledContainer } from '../docker';
 import { DatabaseConfigDto, EngineConfigDto, RedisConfigDto, StorageConfigDto } from './dto/save-config.dto';
 
 // Mutable accumulator threaded through the pipeline stages and per-section appliers extracted
@@ -144,7 +144,13 @@ export function applyDatabaseSection(
       }
       updates.DATABASE_POOL_SIZE = String(database.poolSize || 10);
     }
-    if (database.sslEnabled !== undefined) {
+    // The bundled container runs without TLS (getContainerSpec sets none up), so a built-in database the next boot
+    // dials there connects without it: SSL kept from an external server would refuse every connection. Beside a host
+    // pinned elsewhere the next boot dials that server, and the setting sent stays.
+    if (dbBuiltIn && !hostPinnedElsewhere('postgres')) {
+      updates.DATABASE_SSL = 'false';
+      staleKeys.add('DATABASE_SSL_REJECT_UNAUTHORIZED');
+    } else if (database.sslEnabled !== undefined) {
       updates.DATABASE_SSL = database.sslEnabled ? 'true' : 'false';
       if (database.sslEnabled) {
         // Default to certificate verification; only relax it when the operator opts out

@@ -297,6 +297,23 @@ test('a refetch after the form is seeded does not overwrite an edit in progress'
   assert.equal(result.current.buildSavePayload().database?.host, 'edited-host');
 });
 
+// The bundled container runs without TLS, so turning Use Built-in on over an external database saved with SSL sends
+// SSL off; off again, the card's own setting goes out. Beside a host the environment pins elsewhere the next boot
+// keeps dialling that server, whose setting stays as shown.
+test('a built-in database is saved with SSL off', () => {
+  const { result } = renderForm({ status: RUNNING, saved: SAVED });
+  rtl.act(() => result.current.updateDbConfig('builtIn', true));
+  assert.equal(result.current.buildSavePayload().database?.sslEnabled, false);
+  rtl.act(() => result.current.updateDbConfig('builtIn', false));
+  assert.equal(result.current.buildSavePayload().database?.sslEnabled, true);
+});
+
+test('beside a host pinned elsewhere a built-in database keeps the SSL setting shown', () => {
+  const { result } = renderForm({ status: { ...RUNNING, envPinned: ['DATABASE_HOST'] }, saved: SAVED });
+  rtl.act(() => result.current.updateDbConfig('builtIn', true));
+  assert.equal(result.current.buildSavePayload().database?.sslEnabled, true);
+});
+
 // parseInt('') is NaN, which JSON writes as null, and the gateway refuses a null pool size.
 test('an emptied pool size is left out of the save instead of going out as null', () => {
   const { result } = renderForm({ status: RUNNING, saved: SAVED });

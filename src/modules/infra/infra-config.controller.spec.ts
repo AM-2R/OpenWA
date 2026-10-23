@@ -95,6 +95,59 @@ describe('InfraConfigController.saveConfig SSL reject-unauthorized', () => {
     const env = writtenEnv({ database: { type: 'postgres', sslEnabled: false, password: 'unit-test-pw' } });
     expect(env).not.toContain('DATABASE_SSL_REJECT_UNAUTHORIZED');
   });
+
+  // The bundled PostgreSQL container runs without TLS, so the built-in database connects without it: SSL carried
+  // over from an external server would refuse every connection of the next boot.
+  describe('with the built-in database', () => {
+    const EXTERNAL_TLS =
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.ext.example\nDATABASE_PASSWORD=ExtPw12345!\n' +
+      'DATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n';
+    const parsed = (text: string) => jest.requireActual<typeof import('dotenv')>('dotenv').parse(text);
+    beforeEach(() => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(EXTERNAL_TLS);
+    });
+    afterEach(() => {
+      delete process.env.DATABASE_HOST;
+      delete process.env.DATABASE_PASSWORD;
+      recordPinnedEnvKeys({});
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      (fs.readFileSync as jest.Mock).mockReturnValue('');
+    });
+
+    it('writes DATABASE_SSL=false and drops the verify setting over a file with SSL on', () => {
+      const env = parsed(
+        writtenEnv({
+          database: { type: 'postgres', builtIn: true, sslEnabled: true, sslRejectUnauthorized: false },
+        }),
+      );
+      expect([env.DATABASE_HOST, env.DATABASE_SSL, env.DATABASE_SSL_REJECT_UNAUTHORIZED]).toEqual([
+        'postgres',
+        'false',
+        undefined,
+      ]);
+    });
+
+    it('writes it for a stored built-in database the section keeps without a flag', () => {
+      (fs.readFileSync as jest.Mock).mockReturnValue(
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_SSL=true\n',
+      );
+      const env = parsed(writtenEnv({ database: { type: 'postgres', sslEnabled: true } }));
+      expect([env.DATABASE_SSL, env.DATABASE_SSL_REJECT_UNAUTHORIZED]).toEqual(['false', undefined]);
+    });
+
+    it('keeps the setting sent beside a host pinned elsewhere, which the next boot dials', () => {
+      process.env.DATABASE_HOST = 'db.ext.example';
+      process.env.DATABASE_PASSWORD = 'PinnedPw456!';
+      recordPinnedEnvKeys({ DATABASE_HOST: 'db.ext.example', DATABASE_PASSWORD: 'PinnedPw456!' });
+      const env = parsed(
+        writtenEnv({
+          database: { type: 'postgres', builtIn: true, sslEnabled: true, sslRejectUnauthorized: false },
+        }),
+      );
+      expect([env.DATABASE_SSL, env.DATABASE_SSL_REJECT_UNAUTHORIZED]).toEqual(['true', 'false']);
+    });
+  });
 });
 
 // The saved file is loaded by the next boot, whose validation refuses these values and crash-loops the

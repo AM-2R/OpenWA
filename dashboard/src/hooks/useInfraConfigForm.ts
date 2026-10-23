@@ -281,6 +281,16 @@ export function useInfraConfigForm(
           ? undefined
           : dbConfig.builtIn,
       password: dbConfig.builtIn ? '' : dbConfig.password,
+      // The bundled container runs without TLS, so a built-in database is saved with SSL off (the gateway writes that
+      // too); beside a host pinned elsewhere the next boot dials that server, and the setting shown stays.
+      sslEnabled:
+        dbConfig.builtIn &&
+        !(
+          infraStatus?.envPinned?.includes('DATABASE_HOST') &&
+          !namesBundledContainer('postgres', savedConfig?.database.host)
+        )
+          ? false
+          : dbConfig.sslEnabled,
       poolSize: Number.isInteger(dbConfig.poolSize) ? dbConfig.poolSize : undefined,
     },
     // `connected` is runtime-only status, not persisted configuration. Keep it out of the

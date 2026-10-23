@@ -522,6 +522,29 @@ describe('validateEnv', () => {
     );
   });
 
+  // The bundled PostgreSQL container runs without TLS: a built-in database with DATABASE_SSL=true would retry its
+  // connection until the boot gives up, so the boot refuses it at once and names the key.
+  describe('DATABASE_SSL with the built-in PostgreSQL container', () => {
+    const builtIn = {
+      DATABASE_TYPE: 'postgres',
+      POSTGRES_BUILTIN: 'true',
+      DATABASE_HOST: 'postgres',
+      DATABASE_USERNAME: 'openwa',
+      DATABASE_PASSWORD: 'openwa',
+    };
+    it.each(['postgres', 'Postgres', 'postgres.', 'openwa-postgres'])('refuses it beside the host %j', host => {
+      expect(() => validateEnv({ ...builtIn, DATABASE_HOST: host, DATABASE_SSL: 'true' })).toThrow(
+        /DATABASE_SSL=true .*built-in PostgreSQL container/,
+      );
+    });
+    it('accepts it off, and on for another host or without the built-in flag', () => {
+      expect(() => validateEnv({ ...builtIn, DATABASE_SSL: 'false' })).not.toThrow();
+      expect(() => validateEnv({ ...builtIn, DATABASE_HOST: 'db.ext.example', DATABASE_SSL: 'true' })).not.toThrow();
+      // A server of its own named postgres (a Kubernetes Service, a compose service with TLS set up) may serve TLS.
+      expect(() => validateEnv({ ...builtIn, POSTGRES_BUILTIN: 'false', DATABASE_SSL: 'true' })).not.toThrow();
+    });
+  });
+
   it('rejects DATABASE_SYNCHRONIZE=true with DATABASE_TYPE=postgres (drops body_ts → /search 501)', () => {
     // The Postgres data connection hardcodes migrationsRun=true; an opted-in synchronize=true makes
     // TypeORM re-sync from entities on every boot, dropping the migration-created `body_ts` generated
