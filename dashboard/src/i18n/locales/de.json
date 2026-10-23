@@ -1205,7 +1205,7 @@
       "disabled": "Deaktiviert"
     },
     "envPinNote": "Durch die Umgebungsvariable {{name}} festgelegt — dies ist der aktuell verwendete Wert. Änderungen im Dashboard werden erst wirksam, wenn diese Variable entfernt wird.",
-    "envPinFlagNote": "Durch die Umgebungsvariable {{name}} festgelegt: Solange sie auf true steht, startet der integrierte Container bei jedem Serverstart, auch wenn dieser Schalter aus ist.",
+    "envPinFlagNote": "Durch die Umgebungsvariable {{name}} festgelegt: Solange sie auf true steht und dieser Dienst verwendet wird, startet der integrierte Container bei jedem Serverstart, auch wenn dieser Schalter aus ist.",
     "pendingRestartNote": "Gespeichert, aber noch nicht übernommen — starten Sie den Server neu, damit diese Änderung wirksam wird.",
     "pendingBuiltInNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit einem externen Dienst, ein Neustart wechselt zum integrierten Container.",
     "pendingExternalNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit dem integrierten Container, ein Neustart wechselt zu einem externen Dienst.",

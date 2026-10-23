@@ -1235,7 +1235,7 @@
       "saveFailed": "Erro ao salvar"
     },
     "envPinNote": "Fixado pela variável de ambiente {{name}}: este é o valor em execução; as alterações do painel não serão aplicadas até que essa variável seja removida.",
-    "envPinFlagNote": "Fixado pela variável de ambiente {{name}}: enquanto valer true, o contêiner integrado é iniciado a cada inicialização do servidor, mesmo com esta opção desativada.",
+    "envPinFlagNote": "Fixado pela variável de ambiente {{name}}: enquanto valer true e este serviço estiver em uso, o contêiner integrado é iniciado a cada inicialização do servidor, mesmo com esta opção desativada.",
     "pendingRestartNote": "Salvo, mas ainda não aplicado: reinicie o servidor para que esta alteração tenha efeito.",
     "pendingBuiltInNote": "Salvo, mas ainda não aplicado: o servidor está usando um serviço externo agora, e uma reinicialização o trocará para o contêiner integrado.",
     "pendingExternalNote": "Salvo, mas ainda não aplicado: o servidor está usando o contêiner integrado agora, e uma reinicialização o trocará para um serviço externo.",

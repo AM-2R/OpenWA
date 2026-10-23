@@ -1235,7 +1235,7 @@
       "saveFailed": "Error al guardar"
     },
     "envPinNote": "Fijado por la variable de entorno {{name}}: este es el valor en ejecución; los cambios del panel no se aplicarán hasta que esa variable se elimine.",
-    "envPinFlagNote": "Fijado por la variable de entorno {{name}}: mientras valga true, el contenedor integrado se inicia en cada arranque del servidor, aunque este interruptor esté desactivado.",
+    "envPinFlagNote": "Fijado por la variable de entorno {{name}}: mientras valga true y este servicio esté en uso, el contenedor integrado se inicia en cada arranque del servidor, aunque este interruptor esté desactivado.",
     "pendingRestartNote": "Guardado, pero aún no aplicado: reinicia el servidor para que este cambio surta efecto.",
     "pendingBuiltInNote": "Guardado, pero aún no aplicado: el servidor usa ahora un servicio externo y un reinicio lo cambiará al contenedor integrado.",
     "pendingExternalNote": "Guardado, pero aún no aplicado: el servidor usa ahora el contenedor integrado y un reinicio lo cambiará a un servicio externo.",

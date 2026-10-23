@@ -1235,7 +1235,7 @@
       "saveFailed": "Salvataggio Fallito"
     },
     "envPinNote": "Fissato dalla variabile d'ambiente {{name}}: questo è il valore in esecuzione; le modifiche dalla dashboard non verranno applicate finché quella variabile non viene rimossa.",
-    "envPinFlagNote": "Fissato dalla variabile d'ambiente {{name}}: finché vale true, il container integrato viene avviato a ogni avvio del server, anche con questo interruttore disattivato.",
+    "envPinFlagNote": "Fissato dalla variabile d'ambiente {{name}}: finché vale true e questo servizio è in uso, il container integrato viene avviato a ogni avvio del server, anche con questo interruttore disattivato.",
     "pendingRestartNote": "Salvato, ma non ancora applicato: riavvia il server perché questa modifica abbia effetto.",
     "pendingBuiltInNote": "Salvato, ma non ancora applicato: il server usa ora un servizio esterno e un riavvio lo passerà al container integrato.",
     "pendingExternalNote": "Salvato, ma non ancora applicato: il server usa ora il container integrato e un riavvio lo passerà a un servizio esterno.",

@@ -1880,7 +1880,7 @@ test('without a reported pin the settings a save writes show no pin note', async
 // applied it: GET /config reads the saved external choice (the host decides), the containers run because the pinned
 // flags start them at every boot. The note under each toggle says so, and an unrelated save keeps the switch.
 const FLAG_PIN_NOTE = (name: string) =>
-  `Pinned by the environment variable ${name}: the built-in container still starts at every boot while it is set to true, even with this toggle off.`;
+  `Pinned by the environment variable ${name}: the built-in container still starts at every boot while it is set to true and this service is in use, even with this toggle off.`;
 const RUNNING_EXTERNAL_FLAGS_PINNED: InfraStatus = {
   ...RUNNING_EXTERNAL_ALL,
   database: { ...RUNNING_EXTERNAL_ALL.database, running: true },

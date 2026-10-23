@@ -1205,7 +1205,7 @@
       "disabled": "Disabled"
     },
     "envPinNote": "Pinned by the environment variable {{name}} — this is the running value; dashboard changes won't apply until that variable is unset.",
-    "envPinFlagNote": "Pinned by the environment variable {{name}}: the built-in container still starts at every boot while it is set to true, even with this toggle off.",
+    "envPinFlagNote": "Pinned by the environment variable {{name}}: the built-in container still starts at every boot while it is set to true and this service is in use, even with this toggle off.",
     "pendingRestartNote": "Saved, but not applied yet — restart the server for this change to take effect.",
     "pendingBuiltInNote": "Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.",
     "pendingExternalNote": "Saved, but not applied yet: the server runs with the built-in container now, and a restart switches it to an external service.",

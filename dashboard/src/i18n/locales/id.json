@@ -1205,7 +1205,7 @@
       "disabled": "Dinonaktifkan"
     },
     "envPinNote": "Disematkan oleh variabel lingkungan {{name}} — ini adalah nilai yang berjalan; perubahan dasbor tidak akan berlaku sampai variabel tersebut dihapus.",
-    "envPinFlagNote": "Disematkan oleh variabel lingkungan {{name}}: selama bernilai true, container bawaan tetap dijalankan setiap kali server mulai, meskipun sakelar ini mati.",
+    "envPinFlagNote": "Disematkan oleh variabel lingkungan {{name}}: selama bernilai true dan layanan ini digunakan, container bawaan tetap dijalankan setiap kali server mulai, meskipun sakelar ini mati.",
     "pendingRestartNote": "Tersimpan, tetapi belum diterapkan — restart server agar perubahan berlaku.",
     "pendingBuiltInNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan layanan eksternal, dan restart akan mengalihkannya ke container bawaan.",
     "pendingExternalNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan container bawaan, dan restart akan mengalihkannya ke layanan eksternal.",
