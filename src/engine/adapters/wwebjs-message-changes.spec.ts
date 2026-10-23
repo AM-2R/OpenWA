@@ -142,6 +142,11 @@ describe.each([
   // The bodies the message:received and message:sent hooks were given, and a gate that holds the first of them.
   let hooked: string[];
   let hookGate: Promise<void> | undefined;
+  // The rows handed to message:persisted, as they were then; what a plugin's message hook returns instead; an
+  // insert that fails for good (not a unique violation, not transient).
+  let persisted: Row[];
+  let rewrite: ((data: Row) => Row) | undefined;
+  let failInsert: ((row: Row) => boolean) | undefined;
   let engines: EngineRegistry;
   let engine: IWhatsAppEngine;
   let findOne: jest.Mock;
@@ -154,6 +159,9 @@ describe.each([
     rows = [];
     hooked = [];
     hookGate = undefined;
+    persisted = [];
+    rewrite = undefined;
+    failInsert = undefined;
     holdWrite = () => undefined;
     findOne = jest.fn(({ where }: { where: Row }) => Promise.resolve(rows.find(r => matches(r, where)) ?? null));
     // The real projector over a stand-in `messages` table, wired as the database wires it: only PostgreSQL
@@ -164,6 +172,11 @@ describe.each([
       findOne,
       create: jest.fn((x: Row) => ({ ...x })),
       insert: jest.fn((row: Row) => {
+        if (failInsert?.(row)) {
+          return Promise.reject(
+            Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' }),
+          );
+        }
         // As the real table's unique index refuses a second row under an id.
         if (rows.some(r => r.waMessageId === row.waMessageId)) {
           return Promise.reject(
@@ -195,9 +208,11 @@ describe.each([
       { dispatch } as unknown as WebhookService,
       {
         execute: jest.fn(async (event: string, data: unknown) => {
-          if (event === 'message:received' || event === 'message:sent') hooked.push(String((data as Row).body));
+          if (event === 'message:persisted') persisted.push({ ...(data as { message: Row }).message });
+          if (event !== 'message:received' && event !== 'message:sent') return { continue: true, data };
+          hooked.push(String((data as Row).body));
           if (event === 'message:received') await hookGate;
-          return { continue: true, data };
+          return { continue: true, data: rewrite ? rewrite(data as Row) : data };
         }),
       } as unknown as HookManager,
       { ingest: jest.fn() } as unknown as StatusStoreService,
@@ -786,6 +801,91 @@ describe.each([
 
     expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', type: 'revoked', metadata: null })]);
     expect(sentMarks()).toEqual([undefined, undefined]);
+  });
+
+  // whatsapp-web.js raises message and message_create for a message added to WhatsApp Web already deleted, with no
+  // revoke event: such a delivery takes the message back as the revoke would, and lends nothing of its content.
+  const deletedRow = (id: string) => ({ waMessageId: id, body: '', type: 'revoked', metadata: null });
+  const deletedDelivery = (id: string, fromMe = false) => ({ ...incoming(id, '', { fromMe }), type: 'revoked' });
+
+  it('stores an own message stored and edited, then delivered again as deleted, as deleted', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    client.emit('message_create', deletedDelivery('S', true));
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('S'))]);
+    expect(persisted.at(-1)).toEqual(expect.objectContaining(deletedRow('S')));
+    expect(events('message.sent')).toEqual([
+      expect.objectContaining({ body: 'orig', type: 'text' }),
+      expect.objectContaining({ body: '', type: 'revoked' }),
+    ]);
+  });
+
+  it('stores a message stored, then delivered again as deleted, as deleted', async () => {
+    client.emit('message', incoming('A', 'secret'));
+    await flush();
+    client.emit('message', deletedDelivery('A'));
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('A'))]);
+    expect(persisted.at(-1)).toEqual(expect.objectContaining(deletedRow('A')));
+  });
+
+  it.each([
+    ['a message', false],
+    ['an own message', true],
+  ])('keeps a message stored in another chat under the id of %s delivered deleted', async (_, fromMe) => {
+    rows.push({
+      sessionId: 's1',
+      waMessageId: 'A',
+      chatId: '628999@c.us',
+      direction: fromMe ? 'outgoing' : 'incoming',
+      type: 'text',
+      body: 'kept',
+    });
+    client.emit(fromMe ? 'message_create' : 'message', deletedDelivery('A', fromMe));
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: 'kept', type: 'text' })]);
+  });
+
+  // The first delivery's row is lost to a failed insert: the one that came deleted inserts it, with an edit held.
+  it.each([
+    ['an own message', true],
+    ['a message', false],
+  ])(
+    'stores %s delivered again as deleted while its edit waits as deleted, the first insert failed',
+    async (_, fromMe) => {
+      const hook = deferred<void>();
+      hookGate = hook.promise;
+      client.emit('message', incoming('P', 'earlier'));
+      await flush();
+      failInsert = row => row.waMessageId === 'S' && row.type !== 'revoked';
+      client.emit(fromMe ? 'message_create' : 'message', incoming('S', 'orig', { fromMe }));
+      await flush();
+      editEvent(client, 'S', 'e0', { fromMe });
+      await flush();
+      client.emit(fromMe ? 'message_create' : 'message', deletedDelivery('S', fromMe));
+      await flush();
+      hook.resolve();
+      await flush();
+
+      expect(rows.filter(r => r.waMessageId === 'S')).toEqual([expect.objectContaining(deletedRow('S'))]);
+      expect(persisted.filter(r => r.waMessageId === 'S')).toEqual([expect.objectContaining(deletedRow('S'))]);
+    },
+  );
+
+  it('stores a message delivered deleted as deleted whatever its hook returns', async () => {
+    rewrite = data => ({ ...data, body: `${String(data.body)} signed` });
+    client.emit('message_create', deletedDelivery('S', true));
+    client.emit('message', deletedDelivery('A'));
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining(deletedRow('S')), expect.objectContaining(deletedRow('A'))]);
+    expect(persisted).toEqual([expect.objectContaining(deletedRow('S')), expect.objectContaining(deletedRow('A'))]);
   });
 
   it('announces an own message stored again after its row was removed without the mark of that row', async () => {

@@ -1,7 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
@@ -778,18 +778,29 @@ export class MessageProjector {
     // A duplicate on the retry is ambiguous: the first attempt may have committed before its error,
     // in which case nothing dispatched yet, so dispatch fail-open (without the row-bound hook), and
     // that row still has to take a revoke or edit that arrived in flight.
+    if (outcome.landed === 'dup' && outcome.retried) {
+      this.applyChangesMadeInFlight(id, incoming.id, false, claimOf(incoming));
+    }
+    // A delivery that came deleted clears the row it lost to, as a revoke does, once the row proves to be the message.
+    if (outcome.landed === 'dup' && incoming.type === 'revoked') {
+      void this.recordRevoke(id, incoming.id, claimOf(incoming));
+    }
     if (outcome.landed === 'dup' && !outcome.retried) return 'repeat';
-    if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, incoming.id, false, claimOf(incoming));
     return { dbMessage, persisted: false };
   }
 
   /**
    * PostgreSQL holds a message from its arrival, so a revoke or edit often lands before its row: write
    * the row as the change leaves it, so `message:persisted` and the media archive never see content
-   * that was taken back. A change landing during the insert is still applied after it. Returns whether
-   * the row is written cleared.
+   * that was taken back. A change landing during the insert is still applied after it. A message
+   * delivered deleted is written cleared on either database, as the history sync stores one, and takes
+   * no edit. Returns whether the row is written cleared.
    */
   private applyHeldChanges(id: string, dbMessage: Message): boolean {
+    if (dbMessage.type === 'revoked') {
+      Object.assign(dbMessage, REVOKED_ROW_PATCH);
+      return true;
+    }
     if (!this.holdsInbound) return false;
     const entry = dbMessage.waMessageId ? this.inboundInFlight.get(`${id}:${dbMessage.waMessageId}`) : undefined;
     if (entry?.revoked) Object.assign(dbMessage, REVOKED_ROW_PATCH);
@@ -915,8 +926,12 @@ export class MessageProjector {
   ): Promise<void> {
     if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
     try {
+      // Never onto a revoked row, as the edit paths: a message delivered deleted, or deleted before it, stays cleared.
       if (pending.editedBody !== undefined) {
-        await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
+        await this.messageRepository.update(
+          { sessionId: id, waMessageId, type: Not('revoked') },
+          { body: pending.editedBody },
+        );
       }
       if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
       // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
@@ -940,9 +955,9 @@ export class MessageProjector {
 
   /**
    * Clear a revoked message's stored row, on the message's mutation chain so a reaction or edit queued
-   * before it cannot write content back afterwards. Used by the engine's revoke event and by the REST
-   * delete. Best-effort like every stored-message mutation: never rejects, and resolves once the write
-   * has run.
+   * before it cannot write content back afterwards. Used by the engine's revoke event, by the REST
+   * delete, and by a delivery that came deleted and lost its insert. Best-effort like every stored-message
+   * mutation: never rejects, and resolves once the write has run.
    *
    * With `source`, the caller has not had the stored row judge the revoke yet: the message still arriving
    * is taken back only if the revoke agrees with it, and the row is cleared only if the revoke is not
@@ -1047,7 +1062,9 @@ export class MessageProjector {
    * engine revoke, and the message still exists for its sender) or when it was delivered deleted, the edited
    * body when edited (message.edited already went out with it), plus `edited: true` when the row is marked
    * for it or already was (`rowMarked`): a consumer that held no copy of the message could not apply that
-   * event. The stored row takes the same changes in {@link applyChangesMadeInFlight}.
+   * event. The stored row takes the same changes in {@link applyChangesMadeInFlight}. One delivered deleted
+   * is stored cleared and takes no edit ({@link applyHeldChanges}), and clears the row it lost its insert to
+   * when that row is the message.
    */
   private withChangesMadeInFlight(
     id: string,
@@ -1200,6 +1217,8 @@ export class MessageProjector {
       // The REST writer may have won either attempt; its row still takes the echo's pending changes.
       if (outcome.landed === 'dup') {
         this.applyChangesMadeInFlight(id, outgoing.id, false, claimOf(outgoing));
+        // A delivery that came deleted clears that row, as a revoke does, once the row proves to be the message.
+        if (outgoing.type === 'revoked') void this.recordRevoke(id, outgoing.id, claimOf(outgoing));
         // That row may be older than this delivery and edited since, the edit still being written: announced once the
         // changes queued for the message have run, with the mark they left.
         rowMarked = await new Promise<boolean>(resolve =>

@@ -834,7 +834,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[where, { body: 'second fix' }]]);
+        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'second fix' }]]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
 
@@ -960,7 +960,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[where, { body: 'genuine edit' }]]);
+        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'genuine edit' }]]);
       });
 
       it('keeps a reaction from another chat out of the message while its row is not written', async () => {
@@ -1534,7 +1534,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[whereS, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(
           SESSION_ID,
           'message.sent',
@@ -1572,7 +1572,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[whereS, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
       });
 
       it('stores reactions that arrived before the row, without announcing them again', async () => {
