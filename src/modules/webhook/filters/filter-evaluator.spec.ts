@@ -211,6 +211,26 @@ describe('evaluateFilters', () => {
   // engine emits and regardless of how the filter is written (bare digits or a JID).
 
   describe('engine-neutral id matching', () => {
+    it.each(['sender', 'mentions'])('preserves raw LID identity in %s conditions', field => {
+      const resolve = () => '628999';
+      const matches = (actual: string, candidate: string, operator: 'is' | 'isNot' = 'is') =>
+        evaluateFilters(
+          filters({ field, operator, value: [candidate] }),
+          'message.received',
+          msg({ from: actual, mentionedIds: [actual] }),
+          resolve,
+        );
+      expect(matches('111@lid', '222@lid')).toBe(false);
+      expect(matches('111@lid', '222@lid', 'isNot')).toBe(true);
+      expect(matches('111:7@lid', '111:2@LID')).toBe(true);
+      expect(matches('111:7@lid', '111:2@LID', 'isNot')).toBe(false);
+      expect(matches('111@lid', '+62 (89) 99')).toBe(true);
+      expect(matches('628999:7@s.whatsapp.net', '111@lid')).toBe(true);
+      expect(matches('111@lid', '628999:7@s.whatsapp.net')).toBe(true);
+      expect(matches('628999@c.us', '628999:7@s.whatsapp.net')).toBe(true);
+      expect(matches('111@lid', '628888@c.us')).toBe(false);
+    });
+
     it('matches the same user across @c.us and @s.whatsapp.net', () => {
       const f = filters({ field: 'sender', operator: 'is', value: ['111@c.us'] });
       expect(evaluateFilters(f, 'message.received', msg({ from: '111@s.whatsapp.net' }))).toBe(true);

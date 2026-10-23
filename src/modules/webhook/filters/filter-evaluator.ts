@@ -14,11 +14,7 @@ import { parseWaId, toNeutralJid } from '../../../engine/identity/wa-id';
  */
 export type LidResolver = (jid: string) => string | null;
 
-// Reduce an id to its engine-neutral canonical key so the same contact matches regardless of dialect.
-// An engine-emitted JID (any of @c.us / @s.whatsapp.net / @lid, an optional :device suffix, a lid the
-// table resolves to its phone) and a user-typed filter value (bare digits or a JID) both collapse to
-// the same neutral string (`<phone>@c.us` / `<id>@g.us` / `<lid>@lid`). So a phone filter now matches
-// the person across user dialects AND any lid resolving to that phone - previously a silent miss.
+// Normalize dialect and device suffixes without losing the original LID identity.
 const canonicalActor = (jid: string, resolve?: LidResolver): string => toNeutralJid(jid, resolve).toLowerCase();
 const canonicalInput = (value: string, resolve?: LidResolver): string => {
   // Bare digits are a phone-addressed user; anything else parses as a JID. Mirrors the engine's
@@ -29,15 +25,24 @@ const canonicalInput = (value: string, resolve?: LidResolver): string => {
   if (trimmed && !trimmed.includes('@')) {
     return `${trimmed.replace(/\D/g, '') || trimmed}@c.us`.toLowerCase();
   }
-  // Through the same resolver as the payload side. A rule can hold a lid: the dashboard's chat
-  // picker stores whatever id the chat carries. Canonicalising only one side meant the two stopped
-  // agreeing the moment the gateway learned that lid's phone, which silently flips an exclusion
-  // open and an inclusion shut, with the rule still reading correctly in the UI.
   return toNeutralJid(trimmed, resolve).toLowerCase();
 };
 
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+
+function identitiesIntersect(candidates: string[], actual: string[], resolve?: LidResolver): boolean {
+  const literal = new Set(candidates.map(v => canonicalInput(v)));
+  const lidPhones = new Set(candidates.filter(v => parseWaId(v).kind === 'lid').map(v => canonicalInput(v, resolve)));
+  return actual.some(jid => {
+    const key = canonicalActor(jid);
+    if (literal.has(key)) return true;
+    const kind = parseWaId(jid).kind;
+    // A reported pair bridges LID and phone, never two different LIDs sharing a phone.
+    if (kind === 'lid') return literal.has(canonicalActor(jid, resolve));
+    return kind === 'user' && lidPhones.has(key);
+  });
+}
 
 /** Read the current aliases once for both sides of the id conditions, rather than a resident mirror. */
 export async function prepareFilterLidResolver(
@@ -85,9 +90,8 @@ function evaluateCondition(
 
   switch (def.kind) {
     case 'id': {
-      const candidates = new Set(toStringArray(value).map(v => canonicalInput(v, resolve)));
-      const actual = typeof resolved === 'string' ? resolved : undefined;
-      const isMatch = actual != null && candidates.has(canonicalActor(actual, resolve));
+      const actual = typeof resolved === 'string' ? [resolved] : [];
+      const isMatch = identitiesIntersect(toStringArray(value), actual, resolve);
       return operator === 'isNot' ? !isMatch : isMatch;
     }
 
@@ -99,9 +103,7 @@ function evaluateCondition(
     }
 
     case 'idArray': {
-      const candidates = new Set(toStringArray(value).map(v => canonicalInput(v, resolve)));
-      const actual = toStringArray(resolved).map(jid => canonicalActor(jid, resolve));
-      const intersects = actual.some(v => candidates.has(v));
+      const intersects = identitiesIntersect(toStringArray(value), toStringArray(resolved), resolve);
       return operator === 'isNot' ? !intersects : intersects;
     }
 

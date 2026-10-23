@@ -26,10 +26,10 @@ import { WebhookFilters } from './filter-types';
 const LID = '484848@lid';
 const P = '628111@c.us';
 const Q = '628222@c.us';
-const filtersFor = (jid: string): WebhookFilters => ({
-  conditions: [{ field: 'sender', operator: 'is', value: [jid] }],
+const filtersFor = (jid: string, field = 'sender', operator: 'is' | 'isNot' = 'is'): WebhookFilters => ({
+  conditions: [{ field, operator, value: [jid] }],
 });
-const message = { from: LID, to: '620000@c.us', chatId: LID, body: 'hello', type: 'text' };
+const message = { from: LID, to: '620000@c.us', chatId: LID, mentionedIds: [LID], body: 'hello', type: 'text' };
 
 describe('Identity readers after a peer changes a mapping', () => {
   let db: DataSource;
@@ -54,7 +54,7 @@ describe('Identity readers after a peer changes a mapping', () => {
     await db.destroy();
   });
 
-  async function webhookMatches(jid: string): Promise<Webhook[]> {
+  async function webhookMatches(jid: string, field = 'sender', operator: 'is' | 'isNot' = 'is'): Promise<Webhook[]> {
     const delivery = new WebhookDeliveryService(
       {} as Repository<Webhook>,
       {} as Repository<WebhookDeliveryFailure>,
@@ -68,17 +68,20 @@ describe('Identity readers after a peer changes a mapping', () => {
         filterMatchingWebhooks: (rows: Webhook[], event: string, data: Record<string, unknown>) => Promise<Webhook[]>;
       }
     ).filterMatchingWebhooks(
-      [{ id: 'w', events: ['message.received'], filters: filtersFor(jid) } as Webhook],
+      [{ id: 'w', events: ['message.received'], filters: filtersFor(jid, field, operator) } as Webhook],
       'message.received',
       message,
     );
   }
 
-  async function automationSends(jid: string): Promise<jest.Mock> {
+  async function automationSends(jid: string, field = 'sender', operator: 'is' | 'isNot' = 'is'): Promise<jest.Mock> {
     const sendText = jest.fn().mockResolvedValue({});
     const rules = new AutomationRulesService(
       {
-        find: () => Promise.resolve([{ id: 'r', conditions: filtersFor(jid), replyText: 'reply', cooldownSeconds: 0 }]),
+        find: () =>
+          Promise.resolve([
+            { id: 'r', conditions: filtersFor(jid, field, operator), replyText: 'reply', cooldownSeconds: 0 },
+          ]),
       } as unknown as Repository<AutomationRule>,
       {} as Repository<Session>,
       { get: () => ({ sendText }) } as unknown as ModuleRef,
@@ -149,5 +152,22 @@ describe('Identity readers after a peer changes a mapping', () => {
     expect(await automationSends(P)).toHaveBeenCalledTimes(1);
     expect(await pluginCapability().canonicalChatId('s', LID)).toBe(P);
     expect(await pluginCapability().canonicalChatId('s', Q)).toBe(Q);
+  });
+
+  it.each([
+    ['sender', 'is'],
+    ['sender', 'isNot'],
+    ['mentions', 'is'],
+    ['mentions', 'isNot'],
+  ] as const)('keeps distinct reported LIDs separate for %s %s rules', async (field, operator) => {
+    const other = '595959@lid';
+    await peer.remember('595959', '628111', 'peer');
+    const matches = operator === 'is' ? 0 : 1;
+    expect(await webhookMatches(other, field, operator)).toHaveLength(matches);
+    expect(await automationSends(other, field, operator)).toHaveBeenCalledTimes(matches);
+    expect(await webhookMatches(P, field)).toHaveLength(1);
+    expect(await automationSends(P, field)).toHaveBeenCalledTimes(1);
+    expect(await webhookMatches(LID, field)).toHaveLength(1);
+    expect(await automationSends(LID, field)).toHaveBeenCalledTimes(1);
   });
 });
