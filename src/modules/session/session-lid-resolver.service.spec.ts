@@ -17,6 +17,8 @@ describe('SessionLidResolver', () => {
   let resolveContactPhone: jest.Mock;
   let remember: jest.Mock;
   let resolver: SessionLidResolver;
+  /** The resolver's monotonic clock, in ms. */
+  let clock: number;
 
   beforeEach(() => {
     engines = new EngineRegistry();
@@ -24,6 +26,8 @@ describe('SessionLidResolver', () => {
     engines.set('s1', { resolveContactPhone } as unknown as IWhatsAppEngine);
     remember = jest.fn().mockResolvedValue(undefined);
     resolver = new SessionLidResolver(engines, { remember } as unknown as LidMappingStoreService);
+    clock = 1_000_000;
+    (resolver as unknown as { now: () => number }).now = () => clock;
   });
 
   it('resolves a phone through the engine', async () => {
@@ -62,12 +66,29 @@ describe('SessionLidResolver', () => {
     await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
   });
 
+  it('times the hold of an unmapped lid on a monotonic clock of its own', async () => {
+    jest.useFakeTimers();
+    try {
+      const own = new SessionLidResolver(engines, { remember } as unknown as LidMappingStoreService);
+      resolveContactPhone.mockRejectedValueOnce(new LidNotMappedError('111@lid')).mockResolvedValueOnce('628111');
+
+      await expect(own.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
+      jest.setSystemTime(Date.now() - 3_600_000); // the wall clock alone is set back an hour
+      jest.advanceTimersByTime(60_001);
+
+      await expect(own.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   describe('a rejected lookup', () => {
-    let now: jest.SpyInstance<number, []>;
+    const wall = Date.parse('2026-10-01T00:00:00Z');
+    let wallClock: jest.SpyInstance<number, []>;
     beforeEach(() => {
-      now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+      wallClock = jest.spyOn(Date, 'now').mockReturnValue(wall);
     });
-    afterEach(() => now.mockRestore());
+    afterEach(() => wallClock.mockRestore());
 
     it('does not cache a transient failure, so the sender resolves once the engine answers', async () => {
       resolveContactPhone.mockRejectedValueOnce(new Error('Evaluation failed')).mockResolvedValueOnce('628111');
@@ -77,11 +98,12 @@ describe('SessionLidResolver', () => {
       expect(resolveContactPhone).toHaveBeenCalledTimes(2);
     });
 
-    it('retries an unmapped lid once the hold expires', async () => {
+    it('retries an unmapped lid once the hold expires, whatever the wall clock does', async () => {
       resolveContactPhone.mockRejectedValueOnce(new LidNotMappedError('111@lid')).mockResolvedValueOnce('628111');
 
       await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBeNull();
-      now.mockReturnValue(1_000_000 + 60_001);
+      wallClock.mockReturnValue(wall - 3_600_000); // set back an hour
+      clock += 60_001;
       await expect(resolver.resolveSenderPhone('s1', '111@lid')).resolves.toBe('628111');
       expect(resolveContactPhone).toHaveBeenCalledTimes(2);
     });
@@ -90,7 +112,8 @@ describe('SessionLidResolver', () => {
       resolveContactPhone.mockRejectedValue(new LidNotMappedError('404@lid'));
 
       await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
-      now.mockReturnValue(1_000_000 + 59_000);
+      wallClock.mockReturnValue(wall + 3_600_000); // set forward an hour
+      clock += 59_000;
       await expect(resolver.resolveSenderPhone('s1', '404@lid')).resolves.toBeNull();
 
       expect(resolveContactPhone).toHaveBeenCalledTimes(1);

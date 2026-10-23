@@ -23,14 +23,16 @@ export class SessionLidResolver {
   private readonly cache = new Map<string, string | null>();
   private static readonly CACHE_MAX = 5000;
   /**
-   * When an unmapped-lid lookup may be retried, per key. A rejection is not cached above (it is not
-   * an answer), but a sender whose lid no store maps rejects on every message, and each retry costs
+   * When an unmapped-lid lookup may be retried, per key, on {@link now}. A rejection is not cached above (it
+   * is not an answer), but a sender whose lid no store maps rejects on every message, and each retry costs
    * the engine a table query and a key-store read. Kept in memory only and never persisted.
    */
   private readonly retryAfter = new Map<string, number>();
   private static readonly RETRY_AFTER_MS = 60_000;
   /** Lookups under way, per key, so messages that arrive together from one sender share a single one. */
   private readonly inFlight = new Map<string, Promise<string | null>>();
+  /** Monotonic clock in ms, so a wall clock set back does not stretch a wait (a seam for tests). */
+  private readonly now = (): number => performance.now();
 
   constructor(
     private readonly engines: EngineRegistry,
@@ -50,7 +52,7 @@ export class SessionLidResolver {
     if (cached !== undefined) {
       return cached;
     }
-    if ((this.retryAfter.get(key) ?? 0) > Date.now()) {
+    if ((this.retryAfter.get(key) ?? 0) > this.now()) {
       return null;
     }
     // Neither the cache nor the hold above is set until a lookup lands, so a burst of messages from a
@@ -88,7 +90,7 @@ export class SessionLidResolver {
         if (this.retryAfter.size >= SessionLidResolver.CACHE_MAX) {
           this.retryAfter.delete(this.retryAfter.keys().next().value!);
         }
-        this.retryAfter.set(key, Date.now() + SessionLidResolver.RETRY_AFTER_MS);
+        this.retryAfter.set(key, this.now() + SessionLidResolver.RETRY_AFTER_MS);
       }
     }
     // Only a definitive answer is cached: a transient null would otherwise stick for the process life.
