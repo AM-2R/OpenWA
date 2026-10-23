@@ -55,7 +55,7 @@
 > A stop during a delete preserves its claim, including repeated stops after its lease expires or
 > becomes NULL. If another node takes over an expired claim, each later removal transaction checks
 > the new owner and refuses the old delete. No transaction remains open across a hook.
-> Adoption cleanup commits with its claim or expired-claim release, so delayed cleanup cannot fail
+> Successful adoption cleanup commits with its claim or expired-claim release, so delayed cleanup cannot fail
 > a later owner's new batches. Older nodes do not preserve these delete holds, fence each removal
 > transaction, or serialize adoption cleanup with ownership changes. Upgrade every
 > node before relying on them; older backup importers also treat the combined delete/stop record

@@ -62,8 +62,8 @@ export function effectiveBuiltInFlag(service: BuiltInService, saved: Record<stri
 }
 
 /**
- * The host the next boot dials decides whether the service is built-in; the flag only whether the bundled container
- * starts at boot (a flag the environment pins true starts it at every boot, whatever host the file gives the app).
+ * The next boot's host decides whether the service is built-in. A true flag starts the bundled container only
+ * while its datastore is in use and the environment does not pin the host to another server.
  * Rules, in order:
  *  1. A host pinned by the environment (or the project .env) decides, as it does at boot and in
  *     requestRestart: the bundled host in any spelling that reaches the container is built-in, any other is

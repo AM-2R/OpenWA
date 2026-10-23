@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Update dashboard validation tooling to Zod 4.6.7.
 - Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility, from PHP SDK 0.7.0 (#1870).
 - Reject empty PHP SDK `defaultHeaders` lists before sending requests, from PHP SDK 0.7.0; use `''` for an empty header value (#1870).
 - Convert legacy message types in a one-time migration instead of on every boot, which read the whole messages table before the HTTP port opened.
@@ -91,14 +92,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show hours for a session active within the last day on the Sessions page, as the Dashboard does.
 - List a whatsapp-web.js contact held under both its LID and its phone once in the contacts and blocked lists, and give it the phone as `number` in the contacts list and by id, where the first copy carried the LID digits.
 - Clear both entries when unblocking a whatsapp-web.js contact blocked under its phone number and its LID; it stayed in the blocked list after a successful unblock.
-- Show a localized edited indicator in Chats, including after a reload, for a message whose text an observed edit changed, also when a later edit restored it: its stored row carries `metadata.edited: true` and a `message.received` or `message.sent` announced after the edit carries `edited: true`, while an edit that repeats the text sets neither, a deleted message keeps its placeholder and existing messages are not marked retroactively (#1905). Thanks @yederlv.
-- Announce a message WhatsApp delivers already deleted with an empty `body` in `message.received` and `message.sent`, instead of the text of an edit made while it was being processed.
+- Show a localized edited indicator in Chats for observed edits before or after storage, including after reload; deleted messages retain their placeholder (#1905). Thanks @yederlv.
+- Store messages delivered already deleted as empty tombstones and clear earlier history and search content; suppress repeated content in hooks and events when a stored tombstone can be read.
 - Answer 409 to a start of a session whose delete is still running; it started an engine that stayed registered for the deleted session.
-- Claim a session for the whole of its delete, so another node can no longer start or adopt it meanwhile; the delete answers 503 and removes nothing when the claim cannot be written.
+- Preserve a pending session delete's lease fields when another stop arrives.
+- Stop an older delete before its next removal transaction after ownership changes; a failed claim write answers 503 without removing data.
 - Keep a session create, a session delete and a plugin instance delete on SQLite out of another request's open transaction, whose rollback could undo a write already answered as done and bring a deleted session back after a `204`; each waits up to 10 s for that transaction to end.
 - Stop two session creates or plugin instance deletes at the same moment on SQLite from leaving every later data import refused with `409` until a restart.
 - Save a webhook or automation rule without a transaction, so on SQLite one that fails because its session was just deleted no longer undoes the writes other requests made meanwhile.
-- Stop a session delete that fails or is refused from leaving the session stopped when nobody stopped it.
+- Preserve pending start retries when a session delete is refused before removal, while retaining independent operator stops.
+- Prevent in-flight session starts and expired-owner renewals from undoing an accepted stop.
+- Prevent overlapping session reconnects from leaking engines or retiring their replacements.
+- Commit successful expired-owner batch cleanup with the ownership transition, so delayed cleanup cannot fail a later owner's new batches.
 - Remove the auth directories a deleted session's name keyed before 0.23.5 on PostgreSQL too; a failed id lookup left the old WhatsApp login on the volume.
 - List a Baileys contact blocked under both its LID and its phone once in the blocked list, as whatsapp-web.js does.
 - Hold a queued ingress delivery and a reconciler replay for a plugin still restoring after startup without spending a retry attempt, instead of dead-lettering it; held deliveries wake together, which keeps their order apart from the limits docs/25 states.
@@ -130,7 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seed the Use Built-in toggles of the Infrastructure page from the saved configuration, add a pending-restart note per card and warn in the restart dialog for a switch between a bundled and an external service or to another S3 bucket or endpoint; settings typed beside a switch awaiting a restart were discarded on save.
 - Stop a save of the Infrastructure page from writing an untouched database type, storage type or Redis switch that the environment pins over the stored choice.
 - Treat a host that reaches a bundled container by its container name, another letter case or a trailing dot as that container in `GET /api/infra/status` and on the Infrastructure page, whose Use Built-in toggles, notes and switch warnings follow it.
-- Keep the stored database password, user, database name and schema and the S3 keys, bucket and region when the Infrastructure page saves a database or storage whose saved or pinned host already reaches the bundled container, under any of those spellings, instead of resetting them to the bundled defaults.
+- Preserve saved bundled database and S3 connection details beneath host pins, including PostgreSQL TLS when the built-in choice is omitted.
+- Disable PostgreSQL TLS when an Infrastructure save selects the bundled database for the next boot.
+- Keep saved PostgreSQL and S3 credentials with their selected service host; inactive SQLite and local-storage settings no longer seed a newly selected service.
+- Clear supported legacy S3 credential aliases when switching to local storage.
 - Start a built-in container at boot only for a datastore in use whose host the environment does not pin elsewhere; a restart from the Infrastructure page, whose dialog names each container it stops, stops the built-in Redis when Redis is switched off and neither the queue nor the cache uses it, and a container the dashboard created whose host the environment now pins to another server. A leftover flag started a container nothing used.
 - Allow saving the Infrastructure page with the PostgreSQL pool size field emptied, which sent null and answered 400.
 - Allow saving a plugin config whose secret field declares a pattern, which the stored mask failed.
@@ -141,7 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scroll a message sent while its chat or an older page is still loading into view, keep a reader at the bottom of the chat when an image decodes as their sent message is confirmed, and open a chat at its own saved position when an image of the previous chat was still decoding.
 - Keep keyboard focus on the Copy button after a copy where the Clipboard API is missing (plain HTTP), on the API keys, webhooks, templates, plugins and Infrastructure pages.
 - Fix the dashboard layout on phones, short and half-screen windows: the Dashboard sessions table, Sessions cards, login screen, API key names, install dialog header, webhook filter rows and popover, Infrastructure, Plugins and Templates columns, page headers, Infrastructure card titles and the Chats search scope in longer languages, the Plugins rail and its config dialog's tab strip, the Templates session select, the closed navigation drawer's edge, the language menu, icons at larger text sizes and the page height under a phone browser toolbar.
-- Make the dashboard usable by keyboard and under right-to-left languages: Infrastructure choices and toggles reachable with visible focus, a focus ring on global search results, visible keyboard focus on form fields, filter builder fields and native checkboxes, every focus ring at 3:1 or better in the light theme, the toast close icon and select arrow shown, one main landmark per page, raised text contrast in both themes (error text, muted text, status badges, pills and danger buttons, text on the brand green and amber fills, the read tick on the dark outgoing bubble), reduced motion honoured, and mirrored layout and icons under Arabic and Hebrew.
+- Improve dashboard keyboard focus, text contrast and right-to-left layouts, and honor reduced motion.
 - Stop the Message Tester multi-group send when the session is not running or the gateway cannot be reached, instead of recording one failure per remaining group.
 - Read phone numbers typed in native digits in the Message Tester, bulk list, webhook filter, pairing field, the chat, channel and status searches, the status recipient search and the chat access list of an API key.
 - Keep the database, Redis and S3 secret fields of the Infrastructure page from being filled by a browser's password manager with the saved dashboard key.
@@ -158,8 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop whatsapp-web.js from announcing `message.edited` and overwriting the stored caption when WhatsApp Web only replaces a media thumbnail or a location preview.
 - Retry a whatsapp-web.js profile picture asked for by phone id under the contact's LID when the phone form answers nothing or fails, for a contact WhatsApp keys by LID.
 - Stop a session that cannot see a contact's number from erasing the number another session stored for that contact's lid, so a key restricted to that number keeps the chat; the number is cleared by the session that stored it, or by any session once that one is deleted, logged out or unlinked.
-- Write a lid's phone, or the clearing of a number its contact hid, to the lid table again on a later report when the write failed, at most once a minute per lid, instead of only after a restart, so a chat-restricted key stops matching a hidden number (#1058).
-- Answer a `@lid` chat for a chat-restricted API key by the lid table in both the single-chat check and the chat lists, which could disagree after another node changed the number, and admit neither number while this node's write of a new one has not reached the table.
+- Retry failed LID mapping writes on fresh observations without replaying cached answers as new reports (#1058).
+- Keep LID lookup expiry independent of system clock changes.
+- Refresh cached missing LID numbers on the first message after five minutes.
+- Use shared reported LID mappings consistently for single-chat and chat-list access checks, and withhold stale local aliases after a failed identity change.
+- Preserve LIDs as message and listing IDs, with display phone numbers separate.
+- Require an engine-reported LID/phone pair for alias matching in routing, filters and message changes; distinct LIDs remain separate.
 - Wait for the message writes still in flight for the sessions a data import removes, so no message row is left for a removed session; an import that does not commit fails the unfinished bulk batches of those sessions.
 - Name each font in the dashboard status composer (System, System text, Script, Bold, Morning Breeze, Calistoga, Exo 2, Courier Prime) instead of its number, offer only ids 0 to 7 on whatsapp-web.js, which posts 8 to 10 in the default font, and draw a received status with font 1 in the system face instead of a serif one.
 - Throw `OpenWATimeoutException` from the PHP SDK on a host without ext-curl when the gateway stays silent past `timeout`, instead of a Guzzle exception, from PHP SDK 0.7.0.
@@ -181,9 +193,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /info` through the bundled Docker socket proxy is refused; a client of your own that reads it needs `INFO: 1` on the proxy.
 - Changing `QUEUE_PREFIX` on a live deployment leaves the jobs queued under the old prefix unprocessed.
 - The first boot on PostgreSQL converts the legacy message types in one statement inside the boot transaction, about 1 minute per million legacy rows while the port stays closed; raise `startupProbe.failureThreshold` or run the migrations first (docs/14, section 14.5).
-- A session delete removes its messages, webhook outbox rows and delivery failures in batches (about 150 ms each and at most 2000 rows on SQLite, 500 rows on PostgreSQL) before the final transaction, so it is no longer atomic: a failure part-way leaves the session stopped with fewer rows until the delete is repeated. A large session takes longer than the single statement of 0.25.0: 3 to 4.5 times as long on SQLite, which 0.25.0 froze meanwhile, and 13 to 50 times on PostgreSQL (17 to 67 s for a million messages on a loaded test host); give a client or proxy a timeout that covers a large session.
-- During a rolling upgrade, a node still on 0.25.0 does not read the `deleting` record a session delete keeps in `sessions.desiredState` while it runs, after it fails part-way or after its node dies, which newer nodes treat as a stop until an explicit `POST /start`: such a node can adopt that session, and a `POST /start` it serves leaves the record in place.
-- On SQLite, `POST /api/sessions`, `DELETE /api/sessions/{sessionId}` and `DELETE /api/integration/plugins/{pluginId}/instances/{instanceId}` wait for another open database transaction and answer `503` when it stays open for 10 s: the create stores nothing, the instance delete deletes nothing and the session delete leaves the session stopped, possibly with fewer rows; retry them.
+- Session deletion commits bounded batches before the final transaction. Earlier removals survive a later failure; repeat DELETE to finish, or explicitly start the remaining session. Size client and proxy timeouts for large histories (docs/14, section 14.5).
+- During rolling upgrades, 0.25.0 nodes can explicitly start or take over sessions marked `deleting` or `deleting-stopped` without clearing those records. Upgrade every node before relying on delete holds, removal fences or serialized batch cleanup.
+- LID mappings inherited from older versions or backups without report-origin data no longer authorize phone aliases until an engine reports the pair. Upgrade every reader together; Baileys now returns LIDs with display phone numbers separate.
+- On SQLite, `POST /api/sessions`, `DELETE /api/sessions/{sessionId}` and `DELETE /api/integration/plugins/{pluginId}/instances/{instanceId}` wait for another open database transaction and answer `503` when it stays open for 10 s: the create stores nothing and the instance delete deletes nothing; a session delete may already have committed earlier batches. Retry after the transaction ends.
 - A storage export or file count now answers 409 on a symbolic link inside the local storage directory (replace it with the real directory or a bind mount), on a directory the app cannot read and on one nested 20 levels deep.
 - Request validation is stricter: a JSON boolean or object in a string field, an object for a list or an array for an object, a body nested over 100 levels and a `muteUntil` above 9007199254740991 answer `400` where they were accepted or answered `500`; a client that posts a number for a string field is unaffected.
 - ⚠️ **Breaking (SDK types only, no gateway change).** From SDK 0.7.0, the JavaScript, Python and Go SDKs type the response fields the gateway always sends as required and no longer allow the `null` it never sends, the Go response fields marked required no longer leave a zero value out when marshaled, `ParticipantsResult` no longer extends `SuccessResult` in the JavaScript and Python SDKs, and the key validation `role` is typed `admin`, `operator` or `viewer` in both; code that builds these objects by hand or tests those fields for `null` needs updating.
