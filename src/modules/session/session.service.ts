@@ -655,13 +655,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           this.uncountStopRequest(id);
           throw error;
         });
-        await this.engineLifecycle.delete(id, {
-          // A failed row read deleted nothing: the lifecycle drops the mark, and the count goes with it.
-          onReadFailed: () => this.uncountStopRequest(id),
-          onRemoving: () => {
-            stops.removing = true;
-          },
-        });
+        // Refused or failed before it began removing (its row read, either fence), the delete leaves the session as
+        // it found it, so its count goes as a failed claim's does: a start it overlapped would take it for a stop.
+        let removing = false;
+        await this.engineLifecycle
+          .delete(id, {
+            onRemoving: () => {
+              removing = true;
+              stops.removing = true;
+            },
+          })
+          .catch((error: unknown) => {
+            if (!removing) this.uncountStopRequest(id);
+            throw error;
+          });
       } finally {
         endDelete();
       }
