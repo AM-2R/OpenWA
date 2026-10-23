@@ -724,6 +724,118 @@ describe('SessionEngineLifecycle races', () => {
   });
 
   describe('a reconnect attempt failing while the next one tears its engine down', () => {
+    it.each(['older first', 'later first'])(
+      'launches only the latest attempt when teardown finishes %s',
+      async order => {
+        const state: ReconnectState = { attempts: 2, timer: null, maxAttempts: 5, baseDelay: 5000 };
+        internals.reconnectStates.set(ID, state);
+        const olderDestroy = deferred();
+        const laterDestroy = deferred();
+        const oldEngine = {
+          ...makeEngine(),
+          destroy: jest.fn().mockReturnValueOnce(olderDestroy.promise).mockReturnValueOnce(laterDestroy.promise),
+        };
+        internals.engines.set(ID, oldEngine as unknown as IWhatsAppEngine);
+        const older = internals.executeReconnect(ID, session(), state);
+        await flush();
+        const later = internals.executeReconnect(ID, session(), state);
+        await flush();
+        try {
+          if (order === 'older first') {
+            olderDestroy.resolve();
+            await older;
+            laterDestroy.resolve();
+            await later;
+          } else {
+            laterDestroy.resolve();
+            await later;
+            olderDestroy.resolve();
+            await older;
+          }
+          expect(engineFactory.create).toHaveBeenCalledTimes(1);
+          const replacement = engineFactory.create.mock.results[0].value as Record<string, jest.Mock>;
+          expect(internals.engines.get(ID)).toBe(replacement);
+          expect(replacement.destroy).not.toHaveBeenCalled();
+          expect(replacement.forceDestroy).not.toHaveBeenCalled();
+          expect(state).toMatchObject({ attempts: 2, started: 2, timer: null });
+          expect(internals.reconnectStates.get(ID)).toBe(state);
+        } finally {
+          olderDestroy.resolve();
+          laterDestroy.resolve();
+          await Promise.allSettled([older, later]);
+        }
+      },
+    );
+
+    it.each(['resolves', 'rejects'])(
+      'keeps the later initialization and parked failure when the older one %s',
+      async outcome => {
+        const state: ReconnectState = { attempts: 2, timer: null, maxAttempts: 5, baseDelay: 5000 };
+        internals.reconnectStates.set(ID, state);
+        const olderInit = deferred();
+        const laterInit = deferred();
+        const olderEngine = { ...makeEngine(), initialize: jest.fn().mockReturnValue(olderInit.promise) };
+        const laterEngine: Record<string, jest.Mock> = {
+          ...makeEngine(),
+          initialize: jest.fn().mockReturnValue(laterInit.promise),
+        };
+        engineFactory.create.mockReturnValueOnce(olderEngine).mockReturnValueOnce(laterEngine);
+        const older = internals.executeReconnect(ID, session(), state);
+        await flush();
+        const later = internals.executeReconnect(ID, session(), state);
+        await flush();
+        try {
+          const callbacks = (laterEngine.initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+          callbacks.onError?.('temporary network failure');
+          const parked = state.parkedFailure;
+          expect(parked).toBeDefined();
+          if (outcome === 'resolves') olderInit.resolve();
+          else olderInit.reject(new Error('Target closed'));
+          await older;
+          expect(state.initInFlight).toBe(true);
+          expect(state.parkedFailure).toBe(parked);
+          expect(internals.engines.get(ID)).toBe(laterEngine);
+          expect(laterEngine.destroy).not.toHaveBeenCalled();
+          expect(laterEngine.forceDestroy).not.toHaveBeenCalled();
+          expect(state).toMatchObject({ attempts: 2, started: 2, timer: null });
+        } finally {
+          olderInit.resolve();
+          laterInit.resolve();
+          await Promise.allSettled([older, later]);
+        }
+      },
+    );
+
+    it.each(['removed', 'stopped'])(
+      'keeps the replacement when an older retirement read finds the session %s',
+      async retired => {
+        const state: ReconnectState = { attempts: 2, timer: null, maxAttempts: 5, baseDelay: 5000 };
+        internals.reconnectStates.set(ID, state);
+        const read = deferred<Session | null>();
+        repository.findOne.mockReturnValueOnce(read.promise);
+        const olderEngine = makeEngine();
+        const laterEngine = makeEngine();
+        engineFactory.create.mockReturnValueOnce(olderEngine).mockReturnValueOnce(laterEngine);
+        const older = internals.executeReconnect(ID, session(), state);
+        await flush();
+        const later = internals.executeReconnect(ID, session(), state);
+        try {
+          await later;
+          read.resolve(retired === 'removed' ? null : session({ desiredState: 'stopped' }));
+          await older;
+          expect(internals.engines.get(ID)).toBe(laterEngine);
+          expect(olderEngine.destroy).toHaveBeenCalledTimes(1);
+          expect(laterEngine.destroy).not.toHaveBeenCalled();
+          expect(laterEngine.forceDestroy).not.toHaveBeenCalled();
+          expect(internals.reconnectStates.get(ID)).toBe(state);
+          expect(state).toMatchObject({ attempts: 2, started: 2, timer: null });
+        } finally {
+          read.resolve(session());
+          await Promise.allSettled([older, later]);
+        }
+      },
+    );
+
     it('leaves the episode to the later attempt instead of arming another over it', async () => {
       const state: ReconnectState = { attempts: 1, timer: null, maxAttempts: 5, baseDelay: 5000 };
       internals.reconnectStates.set(ID, state);

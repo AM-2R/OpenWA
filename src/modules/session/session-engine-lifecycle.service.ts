@@ -1389,6 +1389,8 @@ export class SessionEngineLifecycle {
         if (this.reconnectStates.get(id) === state) this.cancelReconnect(id);
         return;
       }
+      // Another attempt can finish tearing down this same engine first while sharing the episode.
+      if (state.started !== attempt) return;
 
       // Re-initialize. An engine failure reported inside this window is parked (see
       // parkReconnectInitFailure): a failed launch must retry, not land FAILED and strand the session.
@@ -1400,8 +1402,9 @@ export class SessionEngineLifecycle {
         mine = registered !== before ? registered : undefined;
         await init;
       } finally {
-        state.initInFlight = false;
+        if (state.started === attempt) state.initInFlight = false;
       }
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
       // Init resolved, so a failure the engine reported meanwhile (a stuck-auth or readiness timer, an
       // auth failure) is real: apply it, unless a stop/delete/start already replaced this state.
       const parked = state.parkedFailure;
@@ -1422,10 +1425,10 @@ export class SessionEngineLifecycle {
         retired = false;
       }
       if (retired) {
-        const resurrected = this.engines.get(id);
-        if (resurrected) {
-          await this.fences.destroyWithEscalation(id, resurrected);
-          this.engines.deleteIfLive(id, resurrected);
+        // The read can outlive this attempt. Only its captured engine is ours to retire.
+        if (mine && this.engines.isLive(id, mine)) {
+          await this.fences.destroyWithEscalation(id, mine);
+          this.engines.deleteIfLive(id, mine);
         }
         // Same start/delete window as start()'s post-init guard: this re-init re-created auth dirs
         // delete() had already purged — purge again so no credentials outlive the row.
@@ -1438,12 +1441,11 @@ export class SessionEngineLifecycle {
         sessionId: id,
         action: 'reconnect_error',
       });
+      // A delete (or delete + start) replaced this state while init ran: nothing here is ours any more,
+      // and a later attempt in the same episode owns its initialization marker and parked failure too.
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
       const parked = state.parkedFailure;
       state.parkedFailure = undefined;
-      // A delete (or delete + start) replaced this state while init ran: nothing here is ours any more,
-      // and the engine in the map may be the replacement's. No await may sit between this check and
-      // the eviction/scheduling below.
-      if (this.reconnectStates.get(id) !== state) return;
       // A failure only the operator can fix (re-scan, stale profile) stays terminal on a reconnect too.
       if (parked && (parked.terminal || isKnownTerminalEngineFailure(errorMessage))) {
         parked.run();
