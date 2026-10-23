@@ -1042,6 +1042,28 @@ describe('reported identities before a tombstone delivery reaches its hooks', ()
     },
   );
 
+  it('drops a duplicate retired while waiting for its edited mark', async () => {
+    await repository.insert({
+      sessionId: 's1',
+      waMessageId: 'A',
+      chatId: PHONE,
+      from: SELF,
+      to: PHONE,
+      direction: MessageDirection.OUTGOING,
+      body: 'content',
+      type: 'text',
+      timestamp: 1_700_000_000,
+    });
+    const gate = deferred<void>();
+    projector.enqueueMessageMutation('s1', 'A', () => gate.promise);
+    deliver(incoming('A', PHONE, true));
+    await flush();
+    expect(sent).toEqual([]);
+    engines.delete('s1');
+    gate.resolve();
+    await flush();
+    expect({ sent, dispatched, emitted }).toEqual({ sent: [], dispatched: [], emitted: [] });
+  });
   it.each([false, true])('runs admitted hooks with a stored tombstone cleared, own=%s', async own => {
     await tombstone(PHONE, own);
     const ticket = projector.admitInbound('s1', engine, {

@@ -1396,6 +1396,7 @@ export class MessageProjector {
       }
     }
 
+    if (!this.engines.isLive(id, engine)) return;
     const sent = this.withChangesMadeInFlight(finalMessage, entry, rowMarked);
     if (!sent) return;
     void this.webhookService.dispatch(id, 'message.sent', sent);
