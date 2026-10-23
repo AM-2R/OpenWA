@@ -1112,6 +1112,28 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       });
     });
 
+    it('an inherited bundled mode does not reuse details from stored SQLite or local storage', () => {
+      pin({ DATABASE_HOST: 'postgres', S3_ENDPOINT: 'http://minio:9000' });
+      const env = written(
+        { database: { type: 'postgres' }, storage: { type: 's3' } },
+        'DATABASE_TYPE=sqlite\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_USERNAME=stale\n' +
+          'DATABASE_NAME=./data/openwa.sqlite\nPOSTGRES_SCHEMA=stale\nSTORAGE_TYPE=local\nMINIO_BUILTIN=true\n' +
+          'S3_ENDPOINT=http://minio:9000\nS3_BUCKET=stale\nS3_REGION=stale\n',
+      );
+
+      for (const line of [
+        'DATABASE_USERNAME=openwa',
+        'DATABASE_NAME=openwa',
+        'POSTGRES_SCHEMA=public',
+        'S3_BUCKET=openwa',
+        'S3_REGION=us-east-1',
+      ]) {
+        expect(env).toContain(line);
+      }
+      expect(env).not.toContain('stale');
+      expect(env).not.toContain('openwa.sqlite');
+    });
+
     // The page leaves out an untouched flag beside a pinned host. The stored external flag is inherited then, so the
     // credentials the pinned host may need stay as stored, where a flag of true would write the bundled ones.
     it('keeps stored external credentials when the flag is left out beside a pinned bundled host', () => {
