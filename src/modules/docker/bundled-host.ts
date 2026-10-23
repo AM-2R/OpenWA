@@ -1,9 +1,15 @@
-/** The env key and value that point the app at each managed profile's bundled container. */
-export const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
-  postgres: ['DATABASE_HOST', 'postgres'],
-  redis: ['REDIS_HOST', 'redis'],
-  minio: ['S3_ENDPOINT', 'http://minio:9000'],
-};
+/**
+ * The env key and value that point the app at each managed profile's bundled container. Looked up by the profile names
+ * a restart request carries, so it has no prototype: a name such as `constructor` finds nothing, like any other.
+ */
+export const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = Object.assign(
+  Object.create(null) as Record<string, [string, string]>,
+  {
+    postgres: ['DATABASE_HOST', 'postgres'],
+    redis: ['REDIS_HOST', 'redis'],
+    minio: ['S3_ENDPOINT', 'http://minio:9000'],
+  },
+);
 
 /**
  * Whether a host (for minio, the host of an S3 endpoint) reaches the profile's bundled container: its network alias

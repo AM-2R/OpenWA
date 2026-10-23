@@ -5,6 +5,8 @@ import { namesBundledContainer as serverRule } from '../../../src/modules/docker
 import { HOST_SPELLINGS, type ServiceName } from '../../../test/fixtures/builtin-mode-cases.ts';
 
 const PROFILE: Record<ServiceName, string> = { database: 'postgres', redis: 'redis', storage: 'minio' };
+// Names every object inherits, which are no profile.
+const INHERITED = ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'];
 
 // Every host spelling the shared table lists, plus generated ones: letter cases, trailing dots and spaces around the
 // alias, the container name and a few other names, bare and inside endpoint URLs.
@@ -18,13 +20,14 @@ function candidates(): string[] {
     ),
   );
   const listed = Object.values(HOST_SPELLINGS).flatMap(s => [...s.reach, ...s.elsewhere]);
-  return [...new Set([...listed, ...hosts, ...urls, '', ' ', 'not a url'])];
+  const inherited = INHERITED.flatMap(n => [n, `openwa-${n}`, `http://${n}:9000`]);
+  return [...new Set([...listed, ...hosts, ...urls, ...inherited, '', ' ', 'not a url'])];
 }
 
 test('the page reads every host spelling the way the server does', () => {
   const values = candidates();
   let compared = 0;
-  for (const profile of ['postgres', 'redis', 'minio', 'other']) {
+  for (const profile of ['postgres', 'redis', 'minio', 'other', ...INHERITED]) {
     for (const value of [...values, undefined]) {
       assert.equal(
         namesBundledContainer(profile, value),
@@ -44,6 +47,15 @@ test('the shared spellings reach the bundled container, the others do not', () =
   ][]) {
     for (const host of reach) assert.ok(namesBundledContainer(PROFILE[service], host), `${service} ${host}`);
     for (const host of elsewhere) assert.ok(!namesBundledContainer(PROFILE[service], host), `${service} ${host}`);
+  }
+});
+
+test('a name every object inherits is no profile, on the page and on the server', () => {
+  for (const name of INHERITED) {
+    for (const host of [name, `openwa-${name}`]) {
+      assert.equal(namesBundledContainer(name, host), false, `page ${name} ${host}`);
+      assert.equal(serverRule(name, host), false, `server ${name} ${host}`);
+    }
   }
 });
 

@@ -26,10 +26,17 @@ jest.mock('../../config/storage-root', () => {
   return { ...actual, resolveStorageRoot: jest.fn((options: { configured?: string }) => options.configured ?? '') };
 });
 
-import { BadRequestException } from '@nestjs/common';
+import type { Server } from 'http';
+import { BadRequestException, type INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import request from 'supertest';
 import { InfraConfigController } from './infra-config.controller';
+import { applyGlobalValidation } from '../../config/app-validation';
+import { ShutdownService } from '../../common/services/shutdown.service';
+import { EngineFactory } from '../../engine/engine.factory';
+import { DockerService } from '../docker';
 import { SaveConfigDto } from './dto/save-config.dto';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
@@ -2084,6 +2091,46 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
       errors: ['Failed to stop redis'],
     });
     expect(JSON.stringify(result.removal)).not.toContain('removed');
+  });
+
+  // A name every object inherits is no profile either: it is ignored like any other unknown name, and the managed
+  // names beside it still act.
+  describe('POST /api/infra/restart with a profile name an object inherits', () => {
+    const stopManagedService = jest.fn().mockResolvedValue(true);
+    const orchestrateProfiles = jest.fn().mockResolvedValue({});
+    let app: INestApplication;
+
+    beforeAll(async () => {
+      const moduleRef = await Test.createTestingModule({
+        controllers: [InfraConfigController],
+        providers: [
+          { provide: EngineFactory, useValue: {} },
+          {
+            provide: DockerService,
+            useValue: { isDockerAvailable: () => true, stopManagedService, orchestrateProfiles },
+          },
+          { provide: ShutdownService, useValue: { shutdown: jest.fn() } },
+        ],
+      }).compile();
+      app = moduleRef.createNestApplication({ logger: false });
+      applyGlobalValidation(app);
+      await app.init();
+    });
+    afterAll(() => app.close());
+    beforeEach(() => {
+      stopManagedService.mockClear();
+      orchestrateProfiles.mockClear();
+    });
+
+    it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'])('ignores %s', async name => {
+      const res = await request(app.getHttpServer() as Server)
+        .post('/api/infra/restart')
+        .send({ profiles: [name, 'redis'], profilesToRemove: [name, 'postgres'] });
+
+      expect(res.status).toBe(200);
+      expect(orchestrateProfiles.mock.calls).toEqual([[['redis']]]);
+      expect(stopManagedService.mock.calls).toEqual([['postgres']]);
+    });
   });
 
   describe('a service the environment pins the app to', () => {
