@@ -591,8 +591,8 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     expect(ids).toEqual(['own-lid', 'own-phone']);
   });
 
-  it('listByContact forward-resolves a lid the store only holds in its table, not its cache', async () => {
-    const table = [{ lid: '111', phone: '628111' }];
+  it.each([true, false])('listByContact checks table origin with an empty cache (reported=%s)', async isReported => {
+    const table = [{ lid: '111', phone: '628111', isReported }];
     const store = new LidMappingStoreService({
       find: () => Promise.resolve([]),
       findOne: ({ where }: { where: { lid: string } }) => Promise.resolve(table.find(r => r.lid === where.lid) ?? null),
@@ -601,7 +601,7 @@ describe('StatusStoreService contact identity (read-time lid resolution)', () =>
     await svc.ingest('sess', { waStatusId: 'l6', contactJid: '628111@c.us', type: 'text', postedAt: Date.now() });
 
     const out = await svc.listByContact('sess', '111@lid');
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(isReported ? 1 : 0);
   });
 
   it('never resolves phone-shaped JIDs through the lid map (digit-collision guard)', async () => {

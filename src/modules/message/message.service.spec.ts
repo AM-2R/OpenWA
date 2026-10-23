@@ -393,33 +393,36 @@ describe('MessageService', () => {
       expect(messages.map(m => m.id).sort()).toEqual(['m-dm', 'm-lid']);
     });
 
-    it('finds the lid-authored message through a real store whose cache no longer holds the lid', async () => {
-      // The mapping is only in the table: past the preload cap or evicted by the LRU.
-      const table = [{ lid: '111', phone: '628999' }];
-      const store = new LidMappingStoreService({
-        find: ({ where }: { where: { lid?: FindOperator<string>; phone?: FindOperator<string> } }) =>
-          Promise.resolve(table.filter(r => inList(r.lid, where.lid) && inList(r.phone, where.phone))),
-      } as unknown as Repository<LidMapping>);
-      const qb = makeFilteringQb();
-      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
-      const withStore = new MessageService(
-        repository as Repository<Message>,
-        engines,
-        messageProjector as unknown as MessageProjector,
-        hookManager as HookManager,
-        store,
-        inertPacing(),
-        {} as MessageSendService,
-      );
+    it.each([true, false])(
+      'uses table origin for a phone filter with an empty cache (reported=%s)',
+      async isReported => {
+        // The mapping is only in the table: past the preload cap or evicted by the LRU.
+        const table = [{ lid: '111', phone: '628999', isReported }];
+        const store = new LidMappingStoreService({
+          find: ({ where }: { where: { lid?: FindOperator<string>; phone?: FindOperator<string> } }) =>
+            Promise.resolve(table.filter(r => inList(r.lid, where.lid) && inList(r.phone, where.phone))),
+        } as unknown as Repository<LidMapping>);
+        const qb = makeFilteringQb();
+        (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+        const withStore = new MessageService(
+          repository as Repository<Message>,
+          engines,
+          messageProjector as unknown as MessageProjector,
+          hookManager as HookManager,
+          store,
+          inertPacing(),
+          {} as MessageSendService,
+        );
 
-      const { messages } = await withStore.getMessages('sess-1', { from: '628999' });
+        const { messages } = await withStore.getMessages('sess-1', { from: '628999' });
 
-      expect(store.lidsForPhone('628999')).toEqual([]);
-      expect(messages.map(m => m.id).sort()).toEqual(['m-dm', 'm-lid']);
-    });
+        expect(store.lidsForPhone('628999')).toEqual([]);
+        expect(messages.map(m => m.id).sort()).toEqual(isReported ? ['m-dm', 'm-lid'] : ['m-dm']);
+      },
+    );
 
-    it('finds the phone-form message for a @lid filter through a real store whose cache lacks the lid', async () => {
-      const table = [{ lid: '111', phone: '628999' }];
+    it.each([true, false])('uses table origin for a LID filter with an empty cache (reported=%s)', async isReported => {
+      const table = [{ lid: '111', phone: '628999', isReported }];
       const store = new LidMappingStoreService({
         findOne: ({ where }: { where: { lid: string } }) =>
           Promise.resolve(table.find(r => r.lid === where.lid) ?? null),
@@ -438,7 +441,7 @@ describe('MessageService', () => {
 
       const { messages } = await withStore.getMessages('sess-1', { from: '111@lid' });
 
-      expect(messages.map(m => m.id).sort()).toEqual(['m-dm', 'm-lid']);
+      expect(messages.map(m => m.id).sort()).toEqual(isReported ? ['m-dm', 'm-lid'] : ['m-lid']);
     });
 
     it('misses the lid-authored message when the table has no mapping (the prior silent miss)', async () => {
@@ -572,7 +575,7 @@ describe('MessageService', () => {
       // This node cached lid 111 -> 628999; another node has since re-mapped it to 628777 in the
       // shared table. The chat fence reads the table, so history must expand to the same phone or a
       // key allowed only 111@lid would read chat 628999.
-      const table = [{ lid: '111', phone: '628999' }];
+      const table = [{ lid: '111', phone: '628999', isReported: true }];
       const store = new LidMappingStoreService({
         find: ({ where }: { where: { lid?: FindOperator<string>; phone?: FindOperator<string> } }) =>
           Promise.resolve(table.filter(r => inList(r.lid, where.lid) && inList(r.phone, where.phone))),
