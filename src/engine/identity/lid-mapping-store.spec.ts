@@ -101,6 +101,27 @@ describe('LidMappingStoreService', () => {
     expect(second.lidsForPhone('628999')).toEqual(['111']);
   });
 
+  it('times the warning about failed writes on a monotonic clock of its own', async () => {
+    jest.useFakeTimers();
+    try {
+      const repo = makeFakeRepo();
+      const store = await newStore(repo);
+      const warn = jest
+        .spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn')
+        .mockImplementation(() => {});
+      repo.upsert.mockRejectedValue(new Error('connection lost'));
+
+      await store.remember('111', '628111', 's1');
+      jest.setSystemTime(Date.now() - 3_600_000); // the wall clock alone is set back an hour
+      jest.advanceTimersByTime(60_000);
+      await store.remember('111', '628111', 's1');
+
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does not throw when the table is unavailable on boot', async () => {
     const repo = makeFakeRepo();
     repo.find.mockRejectedValueOnce(new Error('no such table: lid_mappings'));
