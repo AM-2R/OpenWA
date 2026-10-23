@@ -263,12 +263,22 @@ export function Infrastructure() {
   // flag and the two paths do have a running and a saved value, but show only a reported pin as well, and so
   // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides, and every other setting a
   // save writes, after the row that holds its field (a note inside a narrow port field would not fit).
-  const pinNote = (envKey: string) =>
+  const pinNote = (envKey: string, note = 'infrastructure.envPinNote') =>
     infraStatus?.envPinned?.includes(envKey) ? (
       <p className="env-pin-note">
-        <AlertTriangle size={14} /> {t('infrastructure.envPinNote', { name: envKey })}
+        <AlertTriangle size={14} /> {t(note, { name: envKey })}
       </p>
     ) : null;
+  // A pinned *_BUILTIN flag decides only whether the boot starts the bundled container, at every boot while it is
+  // true; whether the service uses it follows its host. Beside a host pinned elsewhere the boot starts nothing.
+  const flagPinNote = (flagKey: string, profile: string) =>
+    pinNote(
+      flagKey,
+      infraStatus.envPinned?.includes(HOST_KEY[profile]) &&
+        !namesBundledContainer(profile, nextBootHost(profile, savedConfig))
+        ? 'infrastructure.envPinNote'
+        : 'infrastructure.envPinFlagNote',
+    );
   const settingNote = (envKey: string, running: unknown, saved: unknown) => {
     if (infraStatus?.envPinned?.includes(envKey)) return pinNote(envKey);
     // Hidden only while the save request is in flight (`configSave.saving`).
@@ -374,7 +384,7 @@ export function Infrastructure() {
                 namesBundledContainer('postgres', infraStatus.database.host),
               )}
               {pinNote('DATABASE_HOST')}
-              {pinNote('POSTGRES_BUILTIN')}
+              {flagPinNote('POSTGRES_BUILTIN', 'postgres')}
 
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
@@ -688,7 +698,7 @@ export function Infrastructure() {
                 namesBundledContainer('redis', infraStatus.redis.host),
               )}
               {pinNote('REDIS_HOST')}
-              {pinNote('REDIS_BUILTIN')}
+              {flagPinNote('REDIS_BUILTIN', 'redis')}
 
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
@@ -892,7 +902,7 @@ export function Infrastructure() {
                   namesBundledContainer('minio', infraStatus.storage.endpoint),
                 )}
                 {pinNote('S3_ENDPOINT')}
-                {pinNote('MINIO_BUILTIN')}
+                {flagPinNote('MINIO_BUILTIN', 'minio')}
 
                 {!configForm.storageConfig.builtIn && (
                   <>

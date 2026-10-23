@@ -1427,7 +1427,7 @@ function notesUnderToggle(container: HTMLElement, labelText: string): string[] {
   return notes;
 }
 
-const ENV_PIN_NOTE = /^Pinned by the environment variable (\S+)/;
+const ENV_PIN_NOTE = /^Pinned by the environment variable ([A-Z][A-Z0-9_]*)/;
 
 function builtInNoteOf(container: HTMLElement, labelText: string): string | null {
   return notesUnderToggle(container, labelText).find(note => !ENV_PIN_NOTE.test(note)) ?? null;
@@ -1819,6 +1819,75 @@ test('without a reported pin the settings a save writes show no pin note', async
 
   const notes = Array.from(container.querySelectorAll('.env-pin-note')).map(note => note.textContent?.trim() ?? '');
   assert.deepEqual(notes, []);
+});
+
+// The three *_BUILTIN flags pinned true, after the page switched every service to an external server and the restart
+// applied it: GET /config reads the saved external choice (the host decides), the containers run because the pinned
+// flags start them at every boot. The note under each toggle says so, and an unrelated save keeps the switch.
+const FLAG_PIN_NOTE = (name: string) =>
+  `Pinned by the environment variable ${name}: the built-in container still starts at every boot while it is set to true, even with this toggle off.`;
+const RUNNING_EXTERNAL_FLAGS_PINNED: InfraStatus = {
+  ...RUNNING_EXTERNAL_ALL,
+  database: { ...RUNNING_EXTERNAL_ALL.database, running: true },
+  redis: { ...RUNNING_EXTERNAL_ALL.redis, running: true },
+  storage: { ...RUNNING_EXTERNAL_ALL.storage, running: true },
+  envPinned: ['POSTGRES_BUILTIN', 'REDIS_BUILTIN', 'MINIO_BUILTIN'],
+};
+const SAVED_EXTERNAL_SET: SavedConfig = {
+  ...SAVED_EXTERNAL_ALL,
+  database: { ...SAVED_EXTERNAL_ALL.database, builtIn: false, builtInSet: true },
+  storage: { ...SAVED_EXTERNAL_ALL.storage, builtIn: false, builtInSet: true },
+};
+
+test('a flag the environment pins says the bundled container still starts at every boot', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = { status: RUNNING_EXTERNAL_FLAGS_PINNED, saved: SAVED_EXTERNAL_SET };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  const toggles = [
+    ['Use Built-in PostgreSQL Container', 'POSTGRES_BUILTIN'],
+    ['Use Built-in Redis Container', 'REDIS_BUILTIN'],
+    ['Use Built-in MinIO Container', 'MINIO_BUILTIN'],
+  ];
+  assert.deepEqual(
+    toggles.map(([label]) => [toggleInput(container, label).checked, notesUnderToggle(container, label)]),
+    toggles.map(([, flag]) => [false, [FLAG_PIN_NOTE(flag)]]),
+  );
+
+  fireEvent.click(toggleInput(container, 'Headless Mode'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+  const dialog = await screen.findByRole('dialog');
+  const body = findFetchCall('PUT', '/api/infra/config')!.body as Record<string, { builtIn?: boolean; host?: string }>;
+  assert.deepEqual(
+    [body.database.builtIn, body.database.host, body.redis.builtIn, body.redis.host, body.storage.builtIn],
+    [false, 'db.ext.example', false, 'cache.ext.example', false],
+  );
+  assert.doesNotMatch(dialog.textContent ?? '', /The new database starts empty|not moved to the new storage/);
+});
+
+// A host pinned elsewhere starts nothing whatever the flag says, so the flag is one more pinned value there.
+test('beside a host pinned elsewhere a pinned flag gets the plain pin note', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_EXTERNAL_FLAGS_PINNED, envPinned: ['DATABASE_HOST', 'POSTGRES_BUILTIN'] },
+    saved: { ...SAVED_EXTERNAL_SET, database: { ...SAVED_EXTERNAL_SET.database, builtInSet: false } },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  const notes = notesUnderToggle(container, 'Use Built-in PostgreSQL Container');
+  assert.deepEqual(
+    notes.map(note => [ENV_PIN_NOTE.exec(note)?.[1], /this is the running value/.test(note)]),
+    [
+      ['DATABASE_HOST', true],
+      ['POSTGRES_BUILTIN', true],
+    ],
+  );
 });
 
 // The next boot reads a pinned bucket, port or database name whatever the form holds, so an edit there moves nothing;

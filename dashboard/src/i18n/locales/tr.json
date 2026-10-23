@@ -1205,6 +1205,7 @@
       "disabled": "Devre Dışı"
     },
     "envPinNote": "{{name}} ortam değişkeni tarafından sabitlendi — bu çalışan değerdir; ortam değişkeni kaldırılana kadar kontrol panelindeki değişiklikler uygulanmayacaktır.",
+    "envPinFlagNote": "{{name}} ortam değişkeni tarafından sabitlendi: değeri true olduğu sürece, bu anahtar kapalı olsa bile dahili konteyner sunucunun her başlatılışında başlatılır.",
     "pendingRestartNote": "Kaydedildi, ancak henüz uygulanmadı — bu değişikliğin yürürlüğe girmesi için sunucuyu yeniden başlatın.",
     "pendingBuiltInNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda harici bir hizmetle çalışıyor, yeniden başlatma onu dahili konteynere geçirir.",
     "pendingExternalNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda dahili konteynerle çalışıyor, yeniden başlatma onu harici bir hizmete geçirir.",
