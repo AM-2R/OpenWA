@@ -593,9 +593,9 @@ export class MessageProjector {
         // A reused id from another identity keeps its own scalar changes, never the first delivery's.
         delivery.entry = pending && !needsRow ? pending : { ref: refOf(data) };
         this.arrive(delivery.entry, delivery);
+        const skipHooks = turn && delivery.entry.revoked && messageData.type !== 'revoked';
+        if (data.type === 'revoked') this.holdRevoked(id, delivery.entry);
         if (pending && !needsRow) {
-          const skipHooks = turn && pending.revoked && messageData.type !== 'revoked';
-          if (data.type === 'revoked') this.holdRevoked(id, pending);
           if (pending.revoked) data = deletedPlaceholder(data);
           else if (pending.editedBody !== undefined) data.body = pending.editedBody;
           if (skipHooks) {

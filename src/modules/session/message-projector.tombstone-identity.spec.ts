@@ -939,6 +939,76 @@ describe('reported identities before a tombstone delivery reaches its hooks', ()
     expect(row.body).toBe(kind === 'edit' ? 'corrected' : 'stored content');
     if (kind === 'reaction') expect(row.metadata).toMatchObject({ reactions: { [PHONE]: 'x' } });
   });
+  it.each([false, true].flatMap(own => [false, true].map(admitted => [own, admitted] as const)))(
+    'keeps an isolated tombstone cleared after a hook rewrite, own=%s admitted=%s',
+    async (own, admitted) => {
+      const first = deferred<void>();
+      hookAction = async data => {
+        if (data.chatId === PHONE) {
+          await first.promise;
+          return data;
+        }
+        return { ...data, type: 'text', body: 'rewritten content' };
+      };
+      const send = (message: IncomingMessage): void => {
+        const ticket = admitted
+          ? projector.admitInbound('s1', engine, {
+              id: message.id,
+              chatId: message.chatId,
+              fromMe: own,
+              needsRoom: false,
+              status: false,
+            })
+          : undefined;
+        if (own) projector.handleOwnSendEcho('s1', engine, message, ticket);
+        else projector.handleInboundMessage('s1', engine, message, ticket);
+      };
+      send(incoming('A', PHONE, own));
+      await flush();
+      send({ ...incoming('A', LID, own), type: 'revoked', body: 'stale content' });
+      await flush();
+      const row = await repository.findOneByOrFail({ waMessageId: 'A' });
+      const held = projector.inFlightInbound('s1', 'A');
+      first.resolve();
+      await flush();
+      expect(held).toMatchObject({ chatId: PHONE, body: 'content' });
+      expect(row).toMatchObject({ chatId: LID, type: 'revoked', body: '', metadata: null });
+      expect(persisted.filter(message => message.chatId === LID)).toEqual([
+        expect.objectContaining({ type: 'revoked', body: '', metadata: null }),
+      ]);
+      expect(dispatched.filter(message => message.chatId === LID)).toEqual([
+        expect.objectContaining({ type: 'revoked', body: '' }),
+      ]);
+    },
+  );
+
+  it.each([false, true].flatMap(own => [false, true].map(admitted => [own, admitted] as const)))(
+    'keeps a matching tombstone cleared after a hook rewrite, own=%s admitted=%s',
+    async (own, admitted) => {
+      hookAction = data => Promise.resolve({ ...data, type: 'text', body: 'rewritten content' });
+      const message: IncomingMessage = { ...incoming('A', PHONE, own), type: 'revoked', body: 'stale content' };
+      const ticket = admitted
+        ? projector.admitInbound('s1', engine, {
+            id: 'A',
+            chatId: PHONE,
+            fromMe: own,
+            needsRoom: false,
+            status: false,
+          })
+        : undefined;
+      if (own) projector.handleOwnSendEcho('s1', engine, message, ticket);
+      else await projector.handleInboundMessage('s1', engine, message, ticket)?.settled;
+      await flush();
+      expect(await repository.findOneByOrFail({ waMessageId: 'A' })).toMatchObject({
+        chatId: PHONE,
+        type: 'revoked',
+        body: '',
+        metadata: null,
+      });
+      expect(dispatched).toEqual([expect.objectContaining({ type: 'revoked', body: '' })]);
+    },
+  );
+
   it.each(['reported', 'unreported', 'unknown'])(
     'inherits a stored edited mark only from its identity, origin=%s',
     async origin => {
@@ -971,4 +1041,20 @@ describe('reported identities before a tombstone delivery reaches its hooks', ()
       });
     },
   );
+
+  it.each([false, true])('runs admitted hooks with a stored tombstone cleared, own=%s', async own => {
+    await tombstone(PHONE, own);
+    const ticket = projector.admitInbound('s1', engine, {
+      id: 'A',
+      chatId: PHONE,
+      fromMe: own,
+      needsRoom: true,
+      status: false,
+    })!;
+    if (own) projector.handleOwnSendEcho('s1', engine, incoming('A', PHONE, own), ticket);
+    else await projector.handleInboundMessage('s1', engine, incoming('A', PHONE, own), ticket)?.settled;
+    await flush();
+    expect(hooked).toEqual([expect.objectContaining({ type: 'revoked', body: '' })]);
+    expect(dispatched).toEqual(own ? [expect.objectContaining({ type: 'revoked', body: '' })] : []);
+  });
 });
