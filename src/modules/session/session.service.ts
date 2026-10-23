@@ -653,15 +653,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // before the claim is handed back.
     const endDelete = this.engineLifecycle.holdDelete(id);
     let claimed = false;
+    let ownsClaim: (() => boolean) | undefined;
     try {
       try {
         if (this.ownership) {
           await this.assertNotHeldElsewhere(id, request);
-          await this.claimForDelete(id, this.ownership, request);
+          await this.claimForDelete(id, this.ownership, request, captured => {
+            claimed = true;
+            ownsClaim = captured;
+          });
           claimed = true;
+          ownsClaim ??= this.ownership.captureClaim?.(id);
         }
         // A failed write took nothing down, so the mark is dropped and the request withdrawn as for a failed claim.
-        await this.keepDownForDelete(id, stops).catch((error: unknown) => {
+        await this.keepDownForDelete(id, stops, ownsClaim).catch((error: unknown) => {
           this.engineLifecycle.clearStopping(id);
           this.withdrawStop(request);
           throw error;
@@ -670,6 +675,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // it found it and withdraws its request, so a start it overlapped does not take it for a stop.
         await this.engineLifecycle
           .delete(id, {
+            ownsClaim,
             onRemoving: () => {
               this.takeStop(request);
               stops.removing = true;
@@ -682,33 +688,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       } finally {
         endDelete();
       }
-      await this.releaseClaimBestEffort(id);
+      await this.releaseAfterTeardown(id, ownsClaim);
     } catch (error) {
       // A delete that removed nothing leaves the session as it found it. One that began to remove it leaves
       // it stopped, as a process that dies part-way does.
-      await this.leaveDelete(id, request);
+      await this.leaveDelete(id, request, ownsClaim);
       // The row survived. A claim left on it lapses with nothing to renew it, and a peer would then
       // adopt and restart the session the operator was deleting.
-      if (claimed) await this.releaseAfterTeardown(id);
+      if (claimed) await this.releaseAfterTeardown(id, ownsClaim);
       this.discardStopMarkForMissingSession(id, error);
       throw error;
     }
-    await this.leaveDelete(id, request);
+    await this.leaveDelete(id, request, ownsClaim);
   }
 
   /**
    * End a delete's share of the stop record. Another delete of the session still running here relies on it, so
    * only the last one out takes it back, and only when they wrote it and none began removing the session. A stop
-   * written over it, here or on another node, is not 'deleting' and stays.
+   * recorded alongside it, here or on another node, stays as a normal stop afterward.
    */
-  private async leaveDelete(id: string, request: StopRequest): Promise<void> {
+  private async leaveDelete(id: string, request: StopRequest, ownsClaim?: () => boolean): Promise<void> {
     const stops = this.stopRequests.get(id)!;
     request.ended = true;
     const deleting = (): boolean => [...stops.requests].some(other => other.kind === 'delete' && !other.ended);
-    if (!deleting() && stops.recorded && !stops.removing) {
+    if (!deleting() && !stops.givingBack && (ownsClaim?.() ?? true)) {
+      const clear = stops.recorded && !stops.removing;
       // Not theirs while it is cleared, so a delete that begins and ends meanwhile leaves it alone.
       stops.recorded = false;
-      stops.givingBack = this.clearDeleteStop(id).then(cleared => {
+      stops.givingBack = this.clearDeleteStop(id, clear).then(cleared => {
         // Still on the row: a delete that began meanwhile shares it.
         if (!cleared) stops.recorded = true;
         stops.givingBack = undefined;
@@ -730,10 +737,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Nothing has been removed when this refuses: a peer that claimed first answers the same 409 as
    * assertNotHeldElsewhere, and a failed write is undone like a failed ownership read.
    */
-  private async claimForDelete(id: string, ownership: SessionOwnershipService, request: StopRequest): Promise<void> {
+  private async claimForDelete(
+    id: string,
+    ownership: SessionOwnershipService,
+    request: StopRequest,
+    onClaimed: (ownsClaim: () => boolean) => void,
+  ): Promise<void> {
     let claimed: boolean;
     try {
-      claimed = await ownership.claim(id);
+      claimed = await ownership.claim(id, onClaimed);
     } catch (error) {
       this.engineLifecycle.clearStopping(id);
       this.withdrawStop(request);
@@ -757,22 +769,52 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * progress, which would otherwise clear it. 'deleting' rather than 'stopped', so the take-back can tell it
    * from a stop that replaced it, also one another node recorded.
    */
-  private async keepDownForDelete(id: string, stops: SessionStops): Promise<void> {
+  private async keepDownForDelete(id: string, stops: SessionStops, ownsClaim?: () => boolean): Promise<void> {
     if (stops.givingBack) await stops.givingBack;
-    const { affected } = await this.sessionRepository.update(
-      { id, desiredState: IsNull() },
-      { desiredState: 'deleting' },
-    );
-    if (affected === 1) stops.recorded = true;
+    const record = async (sessions: Repository<Session>): Promise<void> => {
+      const { affected } = await sessions.update({ id, desiredState: IsNull() }, { desiredState: 'deleting' });
+      if (affected === 1) stops.recorded = true;
+      await sessions.update({ id, desiredState: 'stopped' }, { desiredState: 'deleting-stopped' });
+    };
+    if (!this.ownership) return record(this.sessionRepository);
+    if (!(await awaitNoOpenTransaction(this.dataSource))) {
+      throw new ServiceUnavailableException(
+        `Session ${id} could not record its delete: another transaction stayed open`,
+      );
+    }
+    await this.dataSource.transaction(async manager => {
+      const { affected } = await manager
+        .createQueryBuilder()
+        .update(Session)
+        .set({ nodeId: this.ownership!.nodeId, updatedAt: () => '"updatedAt"' })
+        .where({ id, nodeId: this.ownership!.nodeId })
+        .execute();
+      if (affected !== 1 || ownsClaim?.() === false) {
+        throw new ConflictException(`Session ${id} is no longer owned by this delete`);
+      }
+      await record(manager.getRepository(Session));
+    });
   }
 
   /**
    * Undo keepDownForDelete; answers whether the record is off the row. Best effort: the delete's own error is
    * the answer, and a stop left on is safe. A stop recorded over it since is left alone.
    */
-  private async clearDeleteStop(id: string): Promise<boolean> {
+  private async clearDeleteStop(id: string, clear: boolean): Promise<boolean> {
     try {
-      await this.sessionRepository.update({ id, desiredState: 'deleting' }, { desiredState: null });
+      const owners: FindOptionsWhere<Session>[] = this.ownership
+        ? [{ nodeId: this.ownership.nodeId }, { nodeId: IsNull() }]
+        : [{}];
+      if (clear) {
+        await this.sessionRepository.update(
+          owners.map(owner => ({ id, ...owner, desiredState: 'deleting' as const })),
+          { desiredState: null },
+        );
+      }
+      await this.sessionRepository.update(
+        owners.map(owner => ({ id, ...owner, desiredState: 'deleting-stopped' as const })),
+        { desiredState: 'stopped' },
+      );
       return true;
     } catch (error) {
       this.logger.warn(`Could not clear the stop a failed delete recorded for session ${id}`, {
@@ -1075,18 +1117,30 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Persist a stop only while no live peer owns the engine. The initial ownership read may predate a peer's
    * claim; deciding in this write also fences a stop delayed until after that peer's start returned. A delete's
-   * record still accepts a stop: replacing 'deleting' cannot be mistaken for that record by a start or take-back.
+   * record still accepts a stop, while remaining distinguishable until its delete finishes.
    */
   private async keepDown(id: string): Promise<void> {
-    const where: string | FindOptionsWhere<Session>[] = this.ownership
+    const claims: FindOptionsWhere<Session>[] = this.ownership
       ? [
           { id, nodeId: IsNull() },
           { id, nodeId: this.ownership.nodeId },
-          { id, desiredState: 'deleting' },
         ]
+      : [{ id }];
+    const where = this.ownership
+      ? claims.flatMap(claim => [
+          { ...claim, desiredState: IsNull() },
+          { ...claim, desiredState: 'stopped' as const },
+        ])
       : id;
     const { affected } = await this.sessionRepository.update(where, { desiredState: 'stopped' });
     if (affected === 0) {
+      const deleting = await this.sessionRepository.update(
+        { id, desiredState: In(['deleting', 'deleting-stopped']) },
+        { desiredState: 'deleting-stopped' },
+      );
+      if (deleting.affected === 1) return;
+      // The delete may have finished between the two writes, leaving a normal stopped or free row.
+      if ((await this.sessionRepository.update(where, { desiredState: 'stopped' })).affected === 1) return;
       // Clear an abandoned foreign claim with the record, before its heartbeat can revive it. A
       // pending delete took the branch above and keeps its claim throughout removal.
       if (this.ownership && (await this.ownership.stopExpiredForeignClaim(id))) return;
@@ -1186,16 +1240,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * see: releasing would leave the engine it is about to launch on a row no node holds. That start
    * hands the claim back itself if it yields or fails.
    */
-  private async releaseAfterTeardown(id: string): Promise<void> {
+  private async releaseAfterTeardown(id: string, ownsClaim?: () => boolean): Promise<void> {
     if (this.startReservations.has(id)) return;
-    await this.releaseUnlessEngineActive(id);
+    await this.releaseUnlessEngineActive(
+      id,
+      ownsClaim
+        ? () => ownsClaim() && !this.startReservations.has(id) && !this.engineLifecycle.isEngineActive(id)
+        : undefined,
+    );
   }
 
   /**
    * Hand the claim back unless something still runs here (engine, in-flight start, pending reconnect,
    * delete in flight).
    */
-  private async releaseUnlessEngineActive(id: string): Promise<void> {
+  private async releaseUnlessEngineActive(id: string, ownsClaim?: () => boolean): Promise<void> {
     if (!this.ownership || this.engineLifecycle.isEngineActive(id)) {
       return;
     }
@@ -1206,7 +1265,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
     this.releaseOwed.delete(id);
-    await this.releaseClaimBestEffort(id);
+    await this.releaseClaimBestEffort(id, ownsClaim);
   }
 
   /**
@@ -1215,10 +1274,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * replace that outcome (a started session reported as failed, a stopped one as an error, a committed
    * delete as a 500 whose retry answers 404 and writes no audit row).
    */
-  private async releaseClaimBestEffort(id: string): Promise<void> {
+  private async releaseClaimBestEffort(id: string, ownsClaim?: () => boolean): Promise<void> {
     if (!this.ownership) return;
     try {
-      await this.ownership.release(id);
+      if (ownsClaim) await this.ownership.release(id, ownsClaim);
+      else await this.ownership.release(id);
     } catch (error) {
       this.logger.warn(`Could not hand back the claim of session ${id}; it lapses with its lease`, {
         sessionId: id,

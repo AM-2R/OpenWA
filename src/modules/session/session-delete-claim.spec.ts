@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { DataSource, DataSourceOptions } from 'typeorm';
+import { DataSource, DataSourceOptions, EntityManager, Repository } from 'typeorm';
 import { postgresUtcExtra } from '../../database/postgres-utc';
 import { SessionService } from './session.service';
 import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
@@ -18,8 +18,10 @@ import { SessionLifecycleFences } from './session-lifecycle-fences';
 import { SessionStoppedException } from './session-engine-controls';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
-import { MessageBatch } from '../message/entities/message-batch.entity';
+import { BulkMessageService } from '../message/bulk-message.service';
+import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
+import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
@@ -418,7 +420,10 @@ describe('A session deleted on one node while a peer shares the database', () =>
         await clearing.promise;
         stopGo.resolve();
         await stopping;
-        expect(await sessions.findOneByOrFail({ id })).toMatchObject({ nodeId: 'node-a', desiredState: 'stopped' });
+        expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+          nodeId: 'node-a',
+          desiredState: 'deleting-stopped',
+        });
         clearGo.resolve();
 
         expect(await starting).toBeInstanceOf(SessionStoppedException);
@@ -1167,7 +1172,11 @@ describe('A session deleted on one node while a peer shares the database', () =>
   it('refuses the delete and takes nothing down when it cannot record the stop', async () => {
     const id = await seed({ status: SessionStatus.DISCONNECTED });
     await a.service.start(id, { explicit: true });
-    jest.spyOn(a.db.getRepository(Session), 'update').mockRejectedValueOnce(new Error('connection reset'));
+    const update = Reflect.get(Repository.prototype, 'update') as Repository<Session>['update'];
+    jest.spyOn(Repository.prototype, 'update').mockImplementation(function (this: Repository<Session>, where, patch) {
+      if ((patch as { desiredState?: unknown }).desiredState) return Promise.reject(new Error('connection reset'));
+      return update.call(this, where, patch);
+    });
 
     await expect(a.service.delete(id)).rejects.toThrow('connection reset');
 
@@ -1188,7 +1197,10 @@ describe('A session deleted on one node while a peer shares the database', () =>
     const sessions = a.db.getRepository(Session);
     const update = sessions.update.bind(sessions);
     // The stop is recorded; taking it back fails.
-    jest.spyOn(sessions, 'update').mockImplementationOnce(update).mockRejectedValueOnce(new Error('connection reset'));
+    jest.spyOn(sessions, 'update').mockImplementation((where, patch) => {
+      if (patch.desiredState === null) return Promise.reject(new Error('connection reset'));
+      return update(where, patch);
+    });
 
     await expect(a.service.delete(id)).rejects.toBeInstanceOf(ConflictException);
 
@@ -1801,7 +1813,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
     const starting = a.service.start(id, { explicit: true });
     await failed.promise;
     // The batches run, then the closing transaction fails: the session stays, with fewer rows.
-    jest.spyOn(a.db, 'transaction').mockRejectedValueOnce(new Error('transaction timed out'));
+    jest.spyOn(EntityManager.prototype, 'remove').mockRejectedValueOnce(new Error('transaction timed out'));
     await expect(a.service.delete(id)).rejects.toThrow('transaction timed out');
 
     await expect(starting).rejects.toBeInstanceOf(SessionStoppedException);
@@ -1822,7 +1834,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
     });
     const starting = a.service.start(id, { explicit: true });
     await fenced.promise;
-    jest.spyOn(a.db, 'transaction').mockRejectedValueOnce(new Error('transaction timed out'));
+    jest.spyOn(EntityManager.prototype, 'remove').mockRejectedValueOnce(new Error('transaction timed out'));
     await expect(a.service.delete(id)).rejects.toThrow('transaction timed out');
     go.resolve();
 
@@ -1868,7 +1880,7 @@ describe('A session deleted on one node while a peer shares the database', () =>
   // and starts the session the operator was deleting.
   it('hands the claim back when the delete fails after claiming', async () => {
     const id = await seed({ status: SessionStatus.READY, phone: '628111111111' });
-    jest.spyOn(a.db, 'transaction').mockRejectedValueOnce(new Error('transaction timed out'));
+    jest.spyOn(EntityManager.prototype, 'remove').mockRejectedValueOnce(new Error('transaction timed out'));
 
     await expect(a.service.delete(id)).rejects.toThrow('transaction timed out');
 
@@ -1888,4 +1900,1774 @@ describe('A session deleted on one node while a peer shares the database', () =>
     expect(leftovers(id)).toEqual({ stopMark: false, stopCount: false });
     expect(a.ownership.ownedIds()).toEqual([]);
   });
+
+  it.each([
+    [null, false],
+    ['stopped', false],
+    [null, true],
+    ['stopped', true],
+  ] as const)(
+    'keeps a delete claim after repeated stops with a missing lease, state %s and local first stop %s',
+    async (desiredState, localFirst) => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED, desiredState });
+      await startHeldDelete(id);
+      const sessions = a.db.getRepository(Session);
+      await sessions.update(id, { leaseExpiresAt: null, nodeUrl: 'http://127.0.0.1:59651' });
+      const before = await sessions.findOneByOrFail({ id });
+      for (let i = 0; i < 2; i++) {
+        await (localFirst && i === 0 ? a : b).service.stop(id);
+        expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+          nodeId: before.nodeId,
+          claimedAt: before.claimedAt,
+          leaseExpiresAt: null,
+          nodeUrl: before.nodeUrl,
+        });
+      }
+      await a.ownership.renew();
+      const renewed = await sessions.findOneByOrFail({ id });
+      expect(renewed.nodeId).toBe('node-a');
+      expect(renewed.leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+      await expect(b.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+      expect(b.service.getEngine(id)).toBeUndefined();
+      finish!();
+      await deletion;
+      expect(await rowsOf(id)).toEqual(gone);
+    },
+  );
+
+  it('keeps every delete claim field when a delayed peer stop resumes after expiry', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const checked = deferred();
+    const go = deferred();
+    const held = b.ownership.isHeldByOtherNode.bind(b.ownership);
+    jest.spyOn(b.ownership, 'isHeldByOtherNode').mockImplementationOnce(async next => {
+      const answer = await held(next);
+      checked.resolve();
+      await go.promise;
+      return answer;
+    });
+    const stopping = b.service.stop(id);
+    await checked.promise;
+    await startHeldDelete(id);
+    const sessions = a.db.getRepository(Session);
+    await sessions.update(id, { leaseExpiresAt: lapsed(), nodeUrl: 'http://127.0.0.1:59651' });
+    const before = await sessions.findOneByOrFail({ id });
+    try {
+      go.resolve();
+      await stopping;
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+        nodeId: before.nodeId,
+        claimedAt: before.claimedAt,
+        leaseExpiresAt: before.leaseExpiresAt,
+        nodeUrl: before.nodeUrl,
+      });
+      await a.ownership.renew();
+      await expect(b.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+      expect(b.service.getEngine(id)).toBeUndefined();
+    } finally {
+      go.resolve();
+      await stopping;
+    }
+  });
+
+  it.each([
+    ['hook', false],
+    ['batch', false],
+    ['final transaction', false],
+    ['hook', true],
+  ] as const)('stops deleting after ownership changes at the %s with expired peer %s', async (phase, expiredPeer) => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const messages = a.db.getRepository(Message);
+    const batch = await a.db.getRepository(MessageBatch).save({
+      sessionId: id,
+      batchId: randomUUID(),
+      status: BatchStatus.PROCESSING,
+      messages: [{ chatId: '10000000001@c.us', type: 'text', content: { text: 'kept' } }],
+    });
+    if (phase === 'batch') {
+      await messages.insert(
+        Array.from({ length: 500 }, () => ({
+          sessionId: id,
+          chatId: '10000000001@c.us',
+          from: 'me',
+          to: '10000000001@c.us',
+          body: 'kept',
+        })),
+      );
+    }
+    if (phase === 'final transaction') await messages.delete({ sessionId: id });
+    const transaction = a.db.transaction.bind(a.db);
+    let transactions = 0;
+    let remaining = 0;
+    const adopt = async (): Promise<void> => {
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      await b.service.start(id, { explicit: true });
+      remaining = await messages.countBy({ sessionId: id });
+    };
+    const reached = deferred();
+    const release = deferred();
+    a.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        reached.resolve();
+        await release.promise;
+      }
+      return { continue: true, data };
+    });
+    finish = release.resolve;
+    const outcome = a.service.delete(id).catch((error: unknown) => error);
+    deletion = outcome.then(() => undefined);
+    await reached.promise;
+    if (phase !== 'hook') {
+      jest.spyOn(a.db, 'transaction').mockImplementation(async (...args: Parameters<typeof transaction>) => {
+        transactions++;
+        if ((phase === 'batch' && transactions === 2) || (phase === 'final transaction' && transactions === 1)) {
+          await adopt();
+        }
+        return transaction(...args);
+      });
+    }
+    if (phase === 'hook') await adopt();
+    if (expiredPeer) await sessions.update(id, { leaseExpiresAt: lapsed() });
+    release.resolve();
+    expect(await outcome).toBeInstanceOf(ConflictException);
+    expect(await messages.countBy({ sessionId: id })).toBe(remaining);
+    expect(await a.db.getRepository(MessageBatch).findOneByOrFail({ id: batch.id })).toMatchObject({
+      status: BatchStatus.PROCESSING,
+      messages: batch.messages,
+    });
+    expect(await sessions.findOneByOrFail({ id })).toMatchObject({ nodeId: 'node-b', desiredState: null });
+    expect(b.service.getEngine(id)).toBe(b.engines[0]);
+    expect(a.purge).not.toHaveBeenCalled();
+  });
+
+  it.each(['retirement read', 'final read'] as const)(
+    'keeps a healthy reconnect when the top-level start %s returns a stale snapshot',
+    async phase => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED, config: { reconnectBaseDelay: 1000 } });
+      const sessions = a.db.getRepository(Session);
+      const findOne = sessions.findOne.bind(sessions);
+      const reached = deferred();
+      const go = deferred();
+      let reads = 0;
+      jest.spyOn(sessions, 'findOne').mockImplementation(async options => {
+        reads += 1;
+        if (phase === 'final read' && reads === 3) throw new Error('connection reset');
+        if (reads !== (phase === 'retirement read' ? 3 : 4)) return findOne(options);
+        await sessions.update(id, { leaseExpiresAt: lapsed() });
+        const snapshot = phase === 'retirement read' ? await findOne(options) : null;
+        reached.resolve();
+        await go.promise;
+        return snapshot;
+      });
+      type Reconnector = { executeReconnect(id: string, session: Session, state: unknown): Promise<void> };
+      const reconnect = (a.lifecycle as unknown as Reconnector).executeReconnect.bind(a.lifecycle);
+      let reconnected: Promise<void> | undefined;
+      const launched = deferred();
+      jest.spyOn(a.lifecycle as unknown as Reconnector, 'executeReconnect').mockImplementation((...args) => {
+        reconnected = reconnect(...args);
+        launched.resolve();
+        return reconnected;
+      });
+      const starting = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+      try {
+        await reached.promise;
+        await a.ownership.renew();
+        await a.lifecycle.handleEngineDisconnected(id, a.engines[0] as never, 'NETWORK');
+        await launched.promise;
+        await reconnected;
+        const replacement = a.engines[1];
+        expect(a.service.getEngine(id)).toBe(replacement);
+        go.resolve();
+        const result = await starting;
+        if (phase === 'final read') expect(result).toBeInstanceOf(NotFoundException);
+        else expect(result).not.toBeInstanceOf(Error);
+        expect(a.service.getEngine(id)).toBe(replacement);
+        expect(replacement.destroy).not.toHaveBeenCalled();
+        expect(replacement.forceDestroy).not.toHaveBeenCalled();
+        expect(a.engines[0].destroy).toHaveBeenCalledTimes(1);
+      } finally {
+        go.resolve();
+        await starting;
+      }
+    },
+  );
+
+  it.each(
+    (pg
+      ? [
+          ['before release', false],
+          ['before release', true],
+          ['owner row', false],
+          ['owner row', true],
+        ]
+      : [
+          ['before release', false],
+          ['before release', true],
+        ]) as Array<[string, boolean]>,
+  )('keeps a later local start when delete cleanup waits at %s with pending claim %s', async (phase, pending) => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const reached = deferred();
+    const go = deferred();
+    const claimed = deferred();
+    const answer = deferred();
+    const release = a.ownership.release.bind(a.ownership);
+    const transaction = a.db.transaction.bind(a.db);
+    a.hooks.execute.mockRejectedValueOnce(new Error('hook unavailable'));
+    jest.spyOn(a.ownership, 'release').mockImplementationOnce(async (...args) => {
+      if (phase === 'before release') {
+        reached.resolve();
+        await go.promise;
+      } else {
+        jest.spyOn(a.db, 'transaction').mockImplementationOnce((async (
+          run: (manager: import('typeorm').EntityManager) => Promise<void>,
+        ) =>
+          transaction(async manager => {
+            const builder = manager.createQueryBuilder.bind(manager);
+            jest.spyOn(manager, 'createQueryBuilder').mockImplementation((() => {
+              const query = builder();
+              const update = query.update.bind(query);
+              jest.spyOn(query, 'update').mockImplementation((() => {
+                const updated = update(Session);
+                const execute = updated.execute.bind(updated);
+                jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+                  reached.resolve();
+                  await go.promise;
+                  return execute();
+                });
+                return updated;
+              }) as typeof query.update);
+              return query;
+            }) as typeof manager.createQueryBuilder);
+            return run(manager);
+          })) as typeof transaction);
+      }
+      return release(...args);
+    });
+    const outcome = a.service.delete(id).catch((error: unknown) => error);
+    deletion = outcome.then(() => undefined);
+    await reached.promise;
+    const original = await sessions.findOneByOrFail({ id });
+    if (pending) {
+      const claim = a.ownership.claim.bind(a.ownership);
+      jest.spyOn(a.ownership, 'claim').mockImplementationOnce(async next => {
+        const result = await claim(next);
+        claimed.resolve();
+        await answer.promise;
+        return result;
+      });
+    }
+    const starting = a.service.start(id, { explicit: true });
+    try {
+      if (pending) await claimed.promise;
+      else await starting;
+      go.resolve();
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+        nodeId: 'node-a',
+        claimedAt: original.claimedAt,
+      });
+      answer.resolve();
+      await starting;
+      expect(a.service.getEngine(id)).toBe(a.engines[0]);
+      expect((await sessions.findOneByOrFail({ id })).desiredState).toBeNull();
+      await a.ownership.renew();
+      expect((await sessions.findOneByOrFail({ id })).nodeId).toBe('node-a');
+    } finally {
+      go.resolve();
+      answer.resolve();
+      await starting;
+    }
+  });
+
+  (pg ? it : it.skip)('holds the owner row for each delete batch while other sessions can start', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const otherId = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const messages = a.db.getRepository(Message);
+    await messages.insert(
+      Array.from({ length: 500 }, () => ({
+        sessionId: id,
+        chatId: '10000000001@c.us',
+        from: 'me',
+        to: '10000000001@c.us',
+        body: 'kept',
+      })),
+    );
+    await startHeldDelete(id);
+    await sessions.update(id, { leaseExpiresAt: lapsed() });
+    const reached = deferred();
+    const go = deferred();
+    const transaction = a.db.transaction.bind(a.db);
+    let first = true;
+    jest.spyOn(a.db, 'transaction').mockImplementation((async (
+      run: (manager: import('typeorm').EntityManager) => Promise<void>,
+    ) => {
+      const hold = first;
+      first = false;
+      const result = await transaction(async manager => {
+        if (hold) {
+          const getRepository = manager.getRepository.bind(manager);
+          jest.spyOn(manager, 'getRepository').mockImplementation(target => {
+            const repository = getRepository(target);
+            if (target === Message) {
+              const remove = repository.delete.bind(repository);
+              jest.spyOn(repository, 'delete').mockImplementationOnce(async where => {
+                reached.resolve();
+                await go.promise;
+                return remove(where);
+              });
+            }
+            return repository;
+          });
+        }
+        return run(manager);
+      });
+      if (hold) await claiming;
+      return result;
+    }) as typeof transaction);
+    const outcome = deletion!.catch((error: unknown) => error);
+    finish!();
+    await reached.promise;
+    let claimed = false;
+    const claiming = b.ownership.claim(id).then(result => {
+      claimed = result;
+      return result;
+    });
+    try {
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const rows = await b.db.query<Array<{ waiting: boolean }>>(
+          'SELECT true AS waiting FROM pg_stat_activity WHERE wait_event_type = $1 AND query LIKE $2',
+          ['Lock', `%${(options as { schema: string }).schema}%`],
+        );
+        if (rows.length) {
+          waiting = true;
+          break;
+        }
+        if (claimed) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect(claimed).toBe(false);
+      await b.service.start(otherId, { explicit: true });
+      expect(b.service.getEngine(otherId)).toBe(b.engines[0]);
+      go.resolve();
+      expect(await claiming).toBe(true);
+      expect(await outcome).toBeInstanceOf(ConflictException);
+      expect(await messages.countBy({ sessionId: id })).toBe(1);
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({ nodeId: 'node-b' });
+    } finally {
+      go.resolve();
+      await claiming;
+      await outcome;
+    }
+  });
+
+  it.each(['deleting', 'deleting-stopped'] as const)(
+    'does not clear an expired foreign %s claim through the stop helper',
+    async desiredState => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED, desiredState });
+      await a.ownership.claim(id);
+      const sessions = a.db.getRepository(Session);
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      const before = await sessions.findOneByOrFail({ id });
+      expect(await b.ownership.stopExpiredForeignClaim(id)).toBe(false);
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+        nodeId: before.nodeId,
+        claimedAt: before.claimedAt,
+        leaseExpiresAt: before.leaseExpiresAt,
+        nodeUrl: before.nodeUrl,
+        desiredState,
+      });
+    },
+  );
+
+  it('leaves a later owner delete hold untouched when an older delete returns', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await startHeldDelete(id);
+    const first = deletion!.catch((error: unknown) => error);
+    const sessions = a.db.getRepository(Session);
+    await sessions.update(id, { leaseExpiresAt: lapsed() });
+    const reached = deferred();
+    const go = deferred();
+    b.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        reached.resolve();
+        await go.promise;
+      }
+      return { continue: true, data };
+    });
+    const second = b.service.delete(id);
+    try {
+      await reached.promise;
+      await b.service.stop(id);
+      finish!();
+      expect(await first).toBeInstanceOf(ConflictException);
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+        nodeId: 'node-b',
+        desiredState: 'deleting-stopped',
+      });
+      await b.ownership.renew();
+      expect((await sessions.findOneByOrFail({ id })).leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+    } finally {
+      go.resolve();
+      await second;
+    }
+  });
+
+  it.each(['retirement read', 'initialization failure'] as const)(
+    'keeps a reconnect awaiting teardown when the old start returns from its %s',
+    async phase => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED, config: { reconnectBaseDelay: 1000 } });
+      const reached = deferred();
+      const go = deferred();
+      let failInit!: (error: Error) => void;
+      const initialization = new Promise<void>((_resolve, reject) => {
+        failInit = reject;
+      });
+      if (phase === 'retirement read') {
+        const sessions = a.db.getRepository(Session);
+        const findOne = sessions.findOne.bind(sessions);
+        let reads = 0;
+        jest.spyOn(sessions, 'findOne').mockImplementation(async options => {
+          if (++reads !== 3) return findOne(options);
+          await sessions.update(id, { leaseExpiresAt: lapsed() });
+          const snapshot = await findOne(options);
+          reached.resolve();
+          await go.promise;
+          return snapshot;
+        });
+      } else {
+        const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+        const register = registry.set.bind(registry);
+        jest.spyOn(registry, 'set').mockImplementationOnce((next, engine) => {
+          (engine as unknown as FakeEngine).initialize.mockImplementation(() => {
+            reached.resolve();
+            return initialization;
+          });
+          return register(next, engine);
+        });
+      }
+      type Reconnector = { executeReconnect(id: string, session: Session, state: unknown): Promise<void> };
+      const reconnect = (a.lifecycle as unknown as Reconnector).executeReconnect.bind(a.lifecycle);
+      let reconnected: Promise<void> | undefined;
+      jest.spyOn(a.lifecycle as unknown as Reconnector, 'executeReconnect').mockImplementation((...args) => {
+        reconnected = reconnect(...args);
+        return reconnected;
+      });
+      const starting = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+      await reached.promise;
+      await a.ownership.renew();
+      const fenced = deferred();
+      const resume = deferred();
+      jest.spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown').mockImplementationOnce(async () => {
+        fenced.resolve();
+        await resume.promise;
+      });
+      await a.lifecycle.handleEngineDisconnected(id, a.engines[0] as never, 'NETWORK');
+      await fenced.promise;
+      try {
+        go.resolve();
+        if (phase === 'initialization failure') failInit(new Error('invalid auth'));
+        await starting;
+        expect(a.service.getEngine(id)).toBeUndefined();
+        expect(a.lifecycle.isEngineActive(id)).toBe(true);
+        resume.resolve();
+        await reconnected;
+        expect(a.service.getEngine(id)).toBe(a.engines[1]);
+        expect(a.engines).toHaveLength(2);
+        expect((await a.db.getRepository(Session).findOneByOrFail({ id })).nodeId).toBe('node-a');
+        await expect(b.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+      } finally {
+        go.resolve();
+        resume.resolve();
+        if (phase === 'initialization failure') failInit(new Error('invalid auth'));
+        await starting;
+        await reconnected;
+      }
+    },
+  );
+
+  it.each([
+    ['delete', false, false, true],
+    ['delete', true, false, true],
+    ['start', false, false, true],
+    ['start', true, false, true],
+    ['delete', false, true, true],
+    ['start', false, true, true],
+    ['delete', false, false, false],
+  ] as const)(
+    'handles an older %s claim SQL reply with frozen clock %s, failed reply %s and ownership loss %s',
+    async (operation, frozen, failedReply, loss) => {
+      if (frozen) {
+        jest.useFakeTimers({
+          doNotFake: [
+            'nextTick',
+            'setImmediate',
+            'queueMicrotask',
+            'setTimeout',
+            'clearTimeout',
+            'setInterval',
+            'clearInterval',
+            'performance',
+          ],
+        });
+        jest.setSystemTime(new Date('2026-06-01T12:00:00Z'));
+      }
+      const written = deferred();
+      const answer = deferred();
+      try {
+        const id = await seed({ status: SessionStatus.DISCONNECTED });
+        const sessions = a.db.getRepository(Session);
+        const builder = sessions.createQueryBuilder.bind(sessions);
+        let holdClaim = true;
+        jest.spyOn(sessions, 'createQueryBuilder').mockImplementation(() => {
+          const query = builder();
+          if (!holdClaim) return query;
+          const update = query.update.bind(query);
+          jest.spyOn(query, 'update').mockImplementation(() => {
+            holdClaim = false;
+            const updated = update(Session);
+            const execute = updated.execute.bind(updated);
+            jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+              const result = await execute();
+              written.resolve();
+              await answer.promise;
+              if (failedReply) throw new Error('claim reply unavailable');
+              return result;
+            });
+            return updated;
+          });
+          return query;
+        });
+        const outcome = (operation === 'delete' ? a.service.delete(id) : a.service.start(id, { explicit: true })).catch(
+          (error: unknown) => error,
+        );
+        deletion = outcome.then(() => undefined);
+        await written.promise;
+        if (loss) {
+          await sessions.update(id, { leaseExpiresAt: lapsed() });
+          expect(await b.ownership.claim(id)).toBe(true);
+          await sessions.update(id, { leaseExpiresAt: lapsed() });
+        }
+        if (operation === 'delete') {
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+        } else {
+          await a.service.start(id, { explicit: true });
+        }
+        const before = await sessions.findOneByOrFail({ id });
+        const ownsNewClaim = a.ownership.captureClaim(id);
+        answer.resolve();
+        if (!loss) {
+          expect(await outcome).toBeUndefined();
+          expect(await rowsOf(id)).toEqual(gone);
+          return;
+        }
+        expect(await outcome).toBeInstanceOf(failedReply ? Error : ConflictException);
+        expect(ownsNewClaim()).toBe(true);
+        expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+          nodeId: before.nodeId,
+          claimedAt: before.claimedAt,
+          leaseExpiresAt: before.leaseExpiresAt,
+          nodeUrl: before.nodeUrl,
+          desiredState: before.desiredState,
+        });
+        expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+        if (operation === 'start') expect(a.service.getEngine(id)).toBe(a.engines[0]);
+        expect(a.purge).not.toHaveBeenCalled();
+      } finally {
+        answer.resolve();
+        await deletion;
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'does not resume an older delete after this node reclaims a peer claim with frozen clock %s',
+    async frozen => {
+      if (frozen) {
+        jest.useFakeTimers({
+          doNotFake: [
+            'nextTick',
+            'setImmediate',
+            'queueMicrotask',
+            'setTimeout',
+            'clearTimeout',
+            'setInterval',
+            'clearInterval',
+            'performance',
+          ],
+        });
+        jest.setSystemTime(new Date('2026-06-01T12:00:00Z'));
+      }
+      try {
+        const id = await seed({ status: SessionStatus.DISCONNECTED });
+        await startHeldDelete(id);
+        const outcome = deletion!.catch((error: unknown) => error);
+        const sessions = a.db.getRepository(Session);
+        const original = await sessions.findOneByOrFail({ id });
+        await sessions.update(id, { leaseExpiresAt: lapsed() });
+        expect(await b.ownership.claim(id)).toBe(true);
+        await sessions.update(id, { leaseExpiresAt: lapsed() });
+        await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+        const reclaimed = await sessions.findOneByOrFail({ id });
+        expect(reclaimed.nodeId).toBe('node-a');
+        if (frozen) expect(reclaimed.claimedAt).toEqual(original.claimedAt);
+        finish!();
+        expect(await outcome).toBeInstanceOf(ConflictException);
+        expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+          nodeId: 'node-a',
+          claimedAt: reclaimed.claimedAt,
+        });
+        expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+        expect(a.purge).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const)(
+    'keeps a newer owner after a delayed delete claim with local reacquisition %s and existing claim %s',
+    async (local, owned) => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      if (owned) await a.ownership.claim(id);
+      const sessions = a.db.getRepository(Session);
+      const reached = deferred();
+      const go = deferred();
+      const claim = a.ownership.claim.bind(a.ownership);
+      jest.spyOn(a.ownership, 'claim').mockImplementationOnce(async (...args) => {
+        const result = await claim(...args);
+        reached.resolve();
+        await go.promise;
+        return result;
+      });
+      const outcome = a.service.delete(id).catch((error: unknown) => error);
+      deletion = outcome.then(() => undefined);
+      try {
+        await reached.promise;
+        await sessions.update(id, { leaseExpiresAt: lapsed() });
+        await b.service.start(id, { explicit: true });
+        if (local) {
+          await sessions.update(id, { leaseExpiresAt: lapsed() });
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+        }
+        const before = await sessions.findOneByOrFail({ id });
+        go.resolve();
+        expect(await outcome).toBeInstanceOf(ConflictException);
+        expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+          nodeId: before.nodeId,
+          claimedAt: before.claimedAt,
+          leaseExpiresAt: before.leaseExpiresAt,
+          nodeUrl: before.nodeUrl,
+          desiredState: before.desiredState,
+        });
+        expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+        expect(b.service.getEngine(id)).toBe(b.engines[0]);
+        expect(a.purge).not.toHaveBeenCalled();
+      } finally {
+        go.resolve();
+        await outcome;
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'retries a delete after its initial intent transaction fails with a local engine %s',
+    async active => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      if (active) await a.service.start(id, { explicit: true });
+      a.hooks.execute.mockClear();
+      const sessions = a.db.getRepository(Session);
+      const before = await sessions.findOneByOrFail({ id });
+      jest.spyOn(a.db, 'transaction').mockRejectedValueOnce(new Error('intent transaction unavailable'));
+      await expect(a.service.delete(id)).rejects.toThrow('intent transaction unavailable');
+      const after = await sessions.findOneByOrFail({ id });
+      expect(after.status).toBe(before.status);
+      expect(after.desiredState).toBeNull();
+      expect(after.nodeId).toBe(active ? 'node-a' : null);
+      if (active) {
+        expect(after.claimedAt).toEqual(before.claimedAt);
+        expect(after.nodeUrl).toEqual(before.nodeUrl);
+        expect(a.service.getEngine(id)).toBe(a.engines[0]);
+      }
+      expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+      expect(a.hooks.execute).not.toHaveBeenCalled();
+      expect(a.purge).not.toHaveBeenCalled();
+      await a.service.delete(id);
+      expect(await rowsOf(id)).toEqual(gone);
+    },
+  );
+
+  it('keeps the same claim when a local start is refused during its delete', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await startHeldDelete(id);
+    const sessions = a.db.getRepository(Session);
+    const before = await sessions.findOneByOrFail({ id });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+    expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+      nodeId: before.nodeId,
+      claimedAt: before.claimedAt,
+      nodeUrl: before.nodeUrl,
+    });
+    finish!();
+    await deletion;
+    expect(await rowsOf(id)).toEqual(gone);
+  });
+
+  (pg ? it : it.skip)('rechecks its captured ownership after the row fence returns', async () => {
+    jest.useFakeTimers({
+      doNotFake: [
+        'nextTick',
+        'setImmediate',
+        'queueMicrotask',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'performance',
+      ],
+    });
+    jest.setSystemTime(new Date('2026-06-01T12:00:00Z'));
+    const reached = deferred();
+    const go = deferred();
+    try {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      await startHeldDelete(id);
+      const outcome = deletion!.catch((error: unknown) => error);
+      const sessions = a.db.getRepository(Session);
+      const original = await sessions.findOneByOrFail({ id });
+      const transaction = a.db.transaction.bind(a.db);
+      jest.spyOn(a.db, 'transaction').mockImplementationOnce((async (
+        run: (manager: import('typeorm').EntityManager) => Promise<void>,
+      ) =>
+        transaction(async manager => {
+          const builder = manager.createQueryBuilder.bind(manager);
+          jest.spyOn(manager, 'createQueryBuilder').mockImplementation((() => {
+            const query = builder();
+            const update = query.update.bind(query);
+            jest.spyOn(query, 'update').mockImplementation((() => {
+              const updated = update(Session);
+              const execute = updated.execute.bind(updated);
+              jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+                reached.resolve();
+                await go.promise;
+                return execute();
+              });
+              return updated;
+            }) as typeof query.update);
+            return query;
+          }) as typeof manager.createQueryBuilder);
+          return run(manager);
+        })) as typeof transaction);
+      finish!();
+      await reached.promise;
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      expect(await b.ownership.claim(id)).toBe(true);
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      expect(await a.ownership.claim(id)).toBe(true);
+      expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
+      go.resolve();
+      expect(await outcome).toBeInstanceOf(ConflictException);
+      expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+    } finally {
+      go.resolve();
+      jest.useRealTimers();
+    }
+  });
+
+  it('retires old deletion work before a fresh claim write returns', async () => {
+    jest.useFakeTimers({
+      doNotFake: [
+        'nextTick',
+        'setImmediate',
+        'queueMicrotask',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'performance',
+      ],
+    });
+    jest.setSystemTime(new Date('2026-06-01T12:00:00Z'));
+    const written = deferred();
+    const answer = deferred();
+    let claiming: Promise<boolean> | undefined;
+    try {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      await startHeldDelete(id);
+      const outcome = deletion!.catch((error: unknown) => error);
+      const sessions = a.db.getRepository(Session);
+      const original = await sessions.findOneByOrFail({ id });
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      expect(await b.ownership.claim(id)).toBe(true);
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      const builder = sessions.createQueryBuilder.bind(sessions);
+      jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+        const query = builder();
+        const update = query.update.bind(query);
+        jest.spyOn(query, 'update').mockImplementation(() => {
+          const updated = update(Session);
+          const execute = updated.execute.bind(updated);
+          jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+            const result = await execute();
+            written.resolve();
+            await answer.promise;
+            return result;
+          });
+          return updated;
+        });
+        return query;
+      });
+      claiming = a.ownership.claim(id);
+      await written.promise;
+      expect((await sessions.findOneByOrFail({ id })).claimedAt).toEqual(original.claimedAt);
+      finish!();
+      expect(await outcome).toBeInstanceOf(ConflictException);
+      expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, outbox: 0, deliveryFailures: 0 });
+    } finally {
+      answer.resolve();
+      await claiming;
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps an earlier take-back as the fence for a third delete after a second delete is refused', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const update = sessions.update.bind(sessions);
+    const clearing = deferred();
+    const clear = deferred();
+    jest.spyOn(sessions, 'update').mockImplementation(async (where, patch) => {
+      if (patch.desiredState === null) {
+        clearing.resolve();
+        await clear.promise;
+      }
+      return update(where, patch);
+    });
+    jest
+      .spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown')
+      .mockRejectedValueOnce(new ConflictException('credential teardown pending'));
+    const first = a.service.delete(id).catch((error: unknown) => error);
+    await clearing.promise;
+    jest.spyOn(a.ownership, 'claim').mockRejectedValueOnce(new Error('connection reset'));
+    await expect(a.service.delete(id)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    const reached = deferred();
+    const done = deferred();
+    let removing = false;
+    a.hooks.execute.mockImplementation(async (event: string, data: unknown) => {
+      if (event === 'session:deleted') {
+        removing = true;
+        reached.resolve();
+        await done.promise;
+      }
+      return { continue: true, data };
+    });
+    finish = done.resolve;
+    deletion = a.service.delete(id);
+    try {
+      for (let waited = 0; waited < 200 && !removing; waited += 5) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      clear.resolve();
+      expect(await first).toBeInstanceOf(ConflictException);
+      await reached.promise;
+      expect((await sessions.findOneByOrFail({ id })).desiredState).toBe('deleting');
+    } finally {
+      clear.resolve();
+      done.resolve();
+      await deletion;
+    }
+  });
+  (pg ? it : it.skip).each([false, true])(
+    'rechecks initial intent after the real row lock with takeover=%s',
+    async takeover => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      const reached = deferred(),
+        go = deferred();
+      const transact = a.db.transaction.bind(a.db);
+      jest.spyOn(a.db, 'transaction').mockImplementationOnce((async (
+        run: (manager: import('typeorm').EntityManager) => Promise<void>,
+      ) => {
+        reached.resolve();
+        await go.promise;
+        return transact(run);
+      }) as typeof transact);
+      const deleting = a.service.delete(id).catch((error: unknown) => error);
+      await reached.promise;
+      const lock = b.db.createQueryRunner();
+      const peerRepo = b.db.getRepository(Session);
+      const oldManager = peerRepo.manager;
+      await lock.connect();
+      await lock.startTransaction();
+      await lock.manager.getRepository(Session).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } });
+      try {
+        go.resolve();
+        let waiting = false;
+        for (let i = 0; i < 100; i++) {
+          const rows = await b.db.query<Array<{ waiting: boolean }>>(
+            'SELECT true AS waiting FROM pg_stat_activity WHERE wait_event_type = $1 AND query LIKE $2',
+            ['Lock', `%${(options as { schema: string }).schema}%`],
+          );
+          if (rows.length) {
+            waiting = true;
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        expect(waiting).toBe(true);
+        if (takeover) {
+          await lock.manager.update(Session, id, { leaseExpiresAt: lapsed() });
+          Object.assign(peerRepo, { manager: lock.manager });
+          await b.service.start(id, { explicit: true });
+          expect(b.service.getEngine(id)).toBe(b.engines[0]);
+          Object.assign(peerRepo, { manager: oldManager });
+        }
+        await lock.commitTransaction();
+        const result = await deleting;
+        if (takeover) {
+          expect(result).toBeInstanceOf(ConflictException);
+          expect(await rowsOf(id)).toMatchObject({ sessions: 1, messages: 1 });
+          expect(await b.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+            nodeId: 'node-b',
+            desiredState: null,
+          });
+          expect(a.hooks.execute.mock.calls.some(([event]) => event === 'session:deleted')).toBe(false);
+        } else {
+          expect(result).toBeUndefined();
+          expect(await rowsOf(id)).toMatchObject({ sessions: 0, messages: 0 });
+        }
+      } finally {
+        Object.assign(peerRepo, { manager: oldManager });
+        go.resolve();
+        if (lock.isTransactionActive) await lock.rollbackTransaction();
+        await lock.release();
+        await deleting;
+      }
+    },
+  );
+
+  it('does not replace newer local ownership when an older failed own renewal returns', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await a.ownership.claim(id);
+    const checked = deferred(),
+      checkGo = deferred(),
+      renewed = deferred(),
+      renewGo = deferred();
+    const held = a.ownership.isHeldByOtherNode.bind(a.ownership);
+    jest.spyOn(a.ownership, 'isHeldByOtherNode').mockImplementationOnce(async next => {
+      const result = await held(next);
+      checked.resolve();
+      await checkGo.promise;
+      return result;
+    });
+    const repo = a.db.getRepository(Session),
+      update = repo.update.bind(repo);
+    jest.spyOn(repo, 'update').mockImplementationOnce(async (...args) => {
+      const result = await update(...args);
+      renewed.resolve();
+      await renewGo.promise;
+      return result;
+    });
+    const deleting = a.service.delete(id).catch((error: unknown) => error);
+    try {
+      await checked.promise;
+      await b.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+      expect(await b.ownership.claim(id)).toBe(true);
+      checkGo.resolve();
+      await renewed.promise;
+      await b.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+      await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(SessionStoppedException);
+      const valid = a.ownership.captureClaim(id);
+      expect(valid()).toBe(true);
+      renewGo.resolve();
+      expect(await deleting).toBeInstanceOf(ConflictException);
+      expect(await rowsOf(id)).toMatchObject({ sessions: 1, messages: 1 });
+      expect(valid()).toBe(true);
+    } finally {
+      checkGo.resolve();
+      renewGo.resolve();
+      await deleting;
+    }
+  });
+
+  it.each([false, true])('leaves a newer peer claim in delete cleanup even if expired=%s', async expired => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    await startHeldDelete(id);
+    const outcome = deletion!.catch((error: unknown) => error);
+    await a.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+    await b.service.start(id, { explicit: true });
+    if (expired) await b.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+    const before = await b.db.getRepository(Session).findOneByOrFail({ id });
+    finish!();
+    expect(await outcome).toBeInstanceOf(ConflictException);
+    const after = await b.db.getRepository(Session).findOneByOrFail({ id });
+    expect(after).toMatchObject({
+      nodeId: before.nodeId,
+      claimedAt: before.claimedAt,
+      leaseExpiresAt: before.leaseExpiresAt,
+      nodeUrl: before.nodeUrl,
+      desiredState: null,
+    });
+    expect(b.service.getEngine(id)).toBe(b.engines[0]);
+    expect(await rowsOf(id)).toMatchObject({ sessions: 1, messages: 1 });
+    expect(a.purge).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'settles abandoned batches when local starts overlap with a delayed claim reply %s',
+    async overlap => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const batches = a.db.getRepository(MessageBatch);
+      const batch = await batches.save({
+        sessionId: id,
+        batchId: randomUUID(),
+        status: BatchStatus.PROCESSING,
+        messages: [
+          {
+            chatId: '10000000001@c.us',
+            type: 'image',
+            content: { image: { base64: 'PRIVATE-MEDIA', mimetype: 'image/png' } },
+          },
+        ],
+      });
+      const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+      const bulk = new BulkMessageService(batches, registry, {} as never, a.hooks as never, {} as never, a.ownership);
+      bulk.onModuleInit();
+      const reaping: Promise<number>[] = [];
+      const reap = bulk.reapProcessingBatches.bind(bulk);
+      jest.spyOn(bulk, 'reapProcessingBatches').mockImplementation((...args) => {
+        const promise = reap(...args);
+        reaping.push(promise);
+        return promise;
+      });
+      const reached = deferred(),
+        go = deferred();
+      if (overlap) {
+        const claim = a.ownership.claim.bind(a.ownership);
+        jest.spyOn(a.ownership, 'claim').mockImplementationOnce(async (...args) => {
+          const result = await claim(...args);
+          reached.resolve();
+          await go.promise;
+          return result;
+        });
+      }
+      const first = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+      try {
+        if (overlap) {
+          await reached.promise;
+          await a.service.start(id, { explicit: true });
+          go.resolve();
+          expect(await first).toBeInstanceOf(Error);
+        } else expect(await first).not.toBeInstanceOf(Error);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await Promise.all(reaping);
+        expect(a.service.getEngine(id)).toBe(a.engines[0]);
+        expect(await batches.findOneByOrFail({ id: batch.id })).toMatchObject({ status: BatchStatus.FAILED });
+        expect(JSON.stringify((await batches.findOneByOrFail({ id: batch.id })).messages)).not.toContain(
+          'PRIVATE-MEDIA',
+        );
+      } finally {
+        go.resolve();
+        await first;
+        await Promise.all(reaping);
+      }
+    },
+  );
+  it.each(['claim', 'stop', 'release'] as const)(
+    'settles abandoned work in the ownership transaction before a peer starts after %s',
+    async operation => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const batches = a.db.getRepository(MessageBatch);
+      const old = await batches.save({
+        sessionId: id,
+        batchId: randomUUID(),
+        status: BatchStatus.PROCESSING,
+        messages: [
+          { chatId: '10000000001@c.us', type: 'image', content: { image: { base64: 'T0xE', mimetype: 'image/png' } } },
+        ],
+      });
+      const reached = deferred(),
+        go = deferred(),
+        sending = deferred(),
+        sendGo = deferred();
+      const processing: Promise<void>[] = [];
+      const bulkFor = (node: Node): BulkMessageService => {
+        const registry = (node.lifecycle as unknown as { engines: EngineRegistry }).engines;
+        const bulk = new BulkMessageService(
+          node.db.getRepository(MessageBatch),
+          registry,
+          {} as never,
+          node.hooks as never,
+          {
+            assertSendAllowed: async () => {
+              sending.resolve();
+              await sendGo.promise;
+              throw new Error('fixture finished');
+            },
+          } as never,
+          node.ownership,
+        );
+        bulk.onModuleInit();
+        type Runner = { processBatch(id: string, reserved: boolean, lifetime: unknown): Promise<void> };
+        const runner = bulk as unknown as Runner,
+          process = runner.processBatch.bind(bulk);
+        jest.spyOn(runner, 'processBatch').mockImplementation((...args) => {
+          const work = process(...args);
+          processing.push(work);
+          return work;
+        });
+        return bulk;
+      };
+      const bulkA = bulkFor(a),
+        bulkB = bulkFor(b);
+      const reap = bulkA.reapProcessingBatches.bind(bulkA);
+      jest.spyOn(bulkA, 'reapProcessingBatches').mockImplementationOnce(async (...args) => {
+        reached.resolve();
+        await go.promise;
+        return reap(...args);
+      });
+      const pending = (
+        operation === 'claim'
+          ? a.service.start(id, { explicit: true })
+          : operation === 'stop'
+            ? a.service.stop(id)
+            : a.ownership.release(id)
+      ).catch((error: unknown) => error);
+      let peerClaim: Promise<boolean> | undefined;
+      try {
+        await reached.promise;
+        if (pg) {
+          peerClaim = b.ownership.claim(id);
+          let waiting = false;
+          for (let i = 0; i < 100; i++) {
+            const rows = await b.db.query<Array<{ waiting: boolean }>>(
+              'SELECT true AS waiting FROM pg_stat_activity WHERE wait_event_type = $1 AND query LIKE $2',
+              ['Lock', `%${(options as { schema: string }).schema}%`],
+            );
+            if (rows.length) {
+              waiting = true;
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          expect(waiting).toBe(true);
+        } else {
+          expect(
+            (a.db.driver as unknown as { databaseConnection: { inTransaction: boolean } }).databaseConnection
+              .inTransaction,
+          ).toBe(true);
+        }
+        go.resolve();
+        expect(await pending).not.toBeInstanceOf(Error);
+        if (peerClaim) expect(await peerClaim).toBe(operation !== 'claim');
+        const retired = await batches.findOneByOrFail({ id: old.id });
+        expect(retired.status).toBe(BatchStatus.FAILED);
+        expect(JSON.stringify(retired.messages)).not.toContain('T0xE');
+        if (operation === 'claim') await b.db.getRepository(Session).update(id, { leaseExpiresAt: lapsed() });
+        await b.service.start(id, { explicit: true });
+        const callbacks = (
+          b.engines[0].initialize.mock.calls as Array<[{ onReady?: (phone: string, name: string) => void }]>
+        )[0][0];
+        callbacks.onReady?.('628111111111', 'Fixture');
+        for (let i = 0; i < 100; i++) {
+          if ((await b.db.getRepository(Session).findOneByOrFail({ id })).status === SessionStatus.READY) break;
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        expect((await b.db.getRepository(Session).findOneByOrFail({ id })).status).toBe(SessionStatus.READY);
+        const fresh = await bulkB.createBatch(id, {
+          batchId: randomUUID(),
+          messages: [
+            {
+              chatId: '10000000001@c.us',
+              type: 'image',
+              content: { image: { base64: 'TkVX', mimetype: 'image/png' } },
+            },
+          ],
+          options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+        });
+        await sending.promise;
+        const active = await batches.findOneByOrFail({ id: fresh.id });
+        expect(active.status).toBe(BatchStatus.PROCESSING);
+        expect(JSON.stringify(active.messages)).toContain('TkVX');
+        expect(b.service.getEngine(id)).toBe(b.engines[0]);
+      } finally {
+        go.resolve();
+        sendGo.resolve();
+        await pending;
+        await peerClaim;
+        await Promise.all(processing);
+      }
+    },
+  );
+  it.each(['claim', 'stop', 'release'] as const)(
+    'keeps the ownership transition when SQL adoption cleanup fails during %s',
+    async operation => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const batches = a.db.getRepository(MessageBatch);
+      const old = await batches.save({
+        sessionId: id,
+        batchId: randomUUID(),
+        status: BatchStatus.PROCESSING,
+        messages: [
+          { chatId: '10000000001@c.us', type: 'image', content: { image: { base64: 'T0xE', mimetype: 'image/png' } } },
+        ],
+      });
+      const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+      const bulk = new BulkMessageService(batches, registry, {} as never, a.hooks as never, {} as never, a.ownership);
+      bulk.onModuleInit();
+      const reap = bulk.reapProcessingBatches.bind(bulk);
+      jest.spyOn(bulk, 'reapProcessingBatches').mockImplementationOnce(async (...args) => {
+        await reap(...args);
+        await args[2]!.query('SELECT * FROM adoption_cleanup_missing_table');
+        return 0;
+      });
+      if (operation === 'claim') await a.service.start(id, { explicit: true });
+      else if (operation === 'stop') await a.service.stop(id);
+      else await a.ownership.release(id);
+      expect(await a.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+        nodeId: operation === 'claim' ? 'node-a' : null,
+        desiredState: operation === 'stop' ? 'stopped' : null,
+      });
+      const retained = await batches.findOneByOrFail({ id: old.id });
+      expect(retained.status).toBe(pg ? BatchStatus.PROCESSING : BatchStatus.FAILED);
+      if (pg) expect(JSON.stringify(retained.messages)).toContain('T0xE');
+      else expect(JSON.stringify(retained.messages)).not.toContain('T0xE');
+    },
+  );
+  (pg ? it.skip : it).each(['start', 'prepare', 'claim'] as const)(
+    'keeps acknowledged local %s writes when adoption SQL cleanup fails',
+    async admission => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        desiredState: 'stopped',
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+      const bulk = new BulkMessageService(
+        a.db.getRepository(MessageBatch),
+        registry,
+        {} as never,
+        a.hooks as never,
+        {} as never,
+        a.ownership,
+      );
+      bulk.onModuleInit();
+      const reached = deferred(),
+        go = deferred();
+      jest.spyOn(bulk, 'reapProcessingBatches').mockImplementationOnce(async (_id, _reason, manager) => {
+        reached.resolve();
+        await go.promise;
+        await manager!.query('SELECT adoption_admission_missing_column');
+        return 0;
+      });
+      const first = a.ownership.claim(id);
+      let second: Promise<unknown> | undefined;
+      try {
+        await reached.promise;
+        second =
+          admission === 'start'
+            ? a.service.start(id, { explicit: true })
+            : admission === 'prepare'
+              ? a.ownership.prepareStart(id, 'stopped')
+              : a.ownership.claim(id);
+        expect(await second).not.toBeInstanceOf(Error);
+        if (admission === 'start') {
+          const callbacks = (
+            a.engines[0].initialize.mock.calls as Array<[{ onReady?: (phone: string, name: string) => void }]>
+          )[0][0];
+          callbacks.onReady?.('628111111111', 'Fixture');
+          for (let i = 0; i < 100; i++) {
+            if ((await a.db.getRepository(Session).findOneByOrFail({ id })).status === SessionStatus.READY) break;
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
+          expect(a.service.getEngine(id)).toBe(a.engines[0]);
+          expect((await a.db.getRepository(Session).findOneByOrFail({ id })).status).toBe(SessionStatus.READY);
+        }
+        go.resolve();
+        expect(await first).toBe(true);
+        expect(await a.db.getRepository(Session).findOneByOrFail({ id })).toMatchObject({
+          nodeId: 'node-a',
+          desiredState: admission === 'claim' ? 'stopped' : null,
+        });
+      } finally {
+        go.resolve();
+        await first;
+        await second;
+      }
+    },
+  );
+  (pg ? it : it.skip)('locks the session before reading its previous owner for SQL adoption', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const otherId = await seed({ status: SessionStatus.DISCONNECTED });
+    const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+    new BulkMessageService(
+      a.db.getRepository(MessageBatch),
+      registry,
+      {} as never,
+      a.hooks as never,
+      {} as never,
+      a.ownership,
+    ).onModuleInit();
+    const reached = deferred(),
+      go = deferred();
+    const transaction = a.db.transaction.bind(a.db);
+    jest.spyOn(a.db, 'transaction').mockImplementationOnce((async (run: (manager: EntityManager) => Promise<boolean>) =>
+      transaction(async manager => {
+        const sessions = manager.getRepository(Session),
+          find = sessions.findOne.bind(sessions);
+        jest.spyOn(sessions, 'findOne').mockImplementationOnce(async options => {
+          const row = await find(options);
+          reached.resolve();
+          await go.promise;
+          return row;
+        });
+        return run(manager);
+      })) as typeof transaction);
+    const first = a.ownership.claim(id);
+    await reached.promise;
+    const peer = b.ownership.claim(id);
+    try {
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const rows = await b.db.query<Array<{ waiting: boolean }>>(
+          'SELECT true AS waiting FROM pg_stat_activity WHERE wait_event_type = $1 AND query LIKE $2',
+          ['Lock', `%${(options as { schema: string }).schema}%`],
+        );
+        if (rows.length) {
+          waiting = true;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      await b.service.start(otherId, { explicit: true });
+      expect(b.service.getEngine(otherId)).toBe(b.engines[0]);
+      go.resolve();
+      expect(await first).toBe(true);
+      expect(await peer).toBe(false);
+      expect((await a.db.getRepository(Session).findOneByOrFail({ id })).nodeId).toBe('node-a');
+    } finally {
+      go.resolve();
+      await first;
+      await peer;
+    }
+  });
+  (pg ? it.skip : it).each([
+    ['stop', false],
+    ['logout', false],
+    ['kill', false],
+    ['release', false],
+    ['stop', true],
+    ['release', true],
+  ] as const)(
+    'keeps an independent %s durable when adoption SQL cleanup fails on same row %s',
+    async (operation, same) => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const other = same ? id : await seed({ status: SessionStatus.DISCONNECTED });
+      const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+      const bulk = new BulkMessageService(
+        a.db.getRepository(MessageBatch),
+        registry,
+        {} as never,
+        a.hooks as never,
+        {} as never,
+        a.ownership,
+      );
+      bulk.onModuleInit();
+      if (!same) {
+        if (operation === 'release') await a.ownership.claim(other);
+        else await a.service.start(other, { explicit: true });
+      }
+      const reached = deferred(),
+        go = deferred();
+      jest.spyOn(bulk, 'reapProcessingBatches').mockImplementationOnce(async (_id, _reason, manager) => {
+        reached.resolve();
+        await go.promise;
+        await (manager ?? a.db.manager).query('SELECT definitely_missing_local_fixture_column');
+        return 0;
+      });
+      const first = a.ownership.claim(id).catch((error: unknown) => error);
+      let second: Promise<unknown> | undefined;
+      try {
+        await reached.promise;
+        second = (
+          operation === 'stop'
+            ? a.service.stop(other)
+            : operation === 'logout'
+              ? a.service.logout(other)
+              : operation === 'kill'
+                ? a.service.forceKill(other)
+                : a.ownership.release(other)
+        ).catch((error: unknown) => error);
+        expect(await second).not.toBeInstanceOf(Error);
+        go.resolve();
+        expect(await first).toBe(!same);
+        expect(a.service.getEngine(other)).toBeUndefined();
+        expect(a.ownership.owns(other)).toBe(false);
+        expect(await a.db.getRepository(Session).findOneByOrFail({ id: other })).toMatchObject({
+          nodeId: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+          nodeUrl: null,
+          desiredState: operation === 'release' || operation === 'logout' ? null : 'stopped',
+        });
+      } finally {
+        go.resolve();
+        await first;
+        await second;
+      }
+    },
+  );
+
+  (pg ? it.skip : it).each(['batch', 'outbox'] as const)(
+    'keeps another session acknowledged %s row when adoption SQL cleanup fails',
+    async kind => {
+      const id = await seed({
+        status: SessionStatus.DISCONNECTED,
+        nodeId: 'departed',
+        claimedAt: lapsed(),
+        leaseExpiresAt: lapsed(),
+      });
+      const other = await seed({ status: SessionStatus.DISCONNECTED });
+      const registry = (a.lifecycle as unknown as { engines: EngineRegistry }).engines;
+      const reached = deferred(),
+        go = deferred(),
+        sending = deferred(),
+        sendGo = deferred();
+      const bulk = new BulkMessageService(
+        a.db.getRepository(MessageBatch),
+        registry,
+        {} as never,
+        a.hooks as never,
+        {
+          assertSendAllowed: async () => {
+            sending.resolve();
+            await sendGo.promise;
+            throw new Error('end local fixture hold');
+          },
+        } as never,
+        a.ownership,
+      );
+      bulk.onModuleInit();
+      await a.service.start(other, { explicit: true });
+      type Runner = { processBatch(id: string, reserved: boolean, lifetime: unknown): Promise<void> };
+      const runner = bulk as unknown as Runner,
+        process = runner.processBatch.bind(bulk),
+        processing: Promise<void>[] = [];
+      jest.spyOn(runner, 'processBatch').mockImplementation((...args) => {
+        const work = process(...args);
+        processing.push(work);
+        return work;
+      });
+      jest.spyOn(bulk, 'reapProcessingBatches').mockImplementationOnce(async (_id, _reason, manager) => {
+        reached.resolve();
+        await go.promise;
+        await (manager ?? a.db.manager).query('SELECT definitely_missing_local_fixture_column');
+        return 0;
+      });
+      const first = a.ownership.claim(id).catch((error: unknown) => error);
+      try {
+        await reached.promise;
+        if (kind === 'batch') {
+          const fresh = await bulk.createBatch(other, {
+            batchId: randomUUID(),
+            messages: [
+              {
+                chatId: '10000000001@c.us',
+                type: 'image',
+                content: { image: { base64: 'TkVX', mimetype: 'image/png' } },
+              },
+            ],
+            options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+          });
+          await sending.promise;
+          expect((await a.db.getRepository(MessageBatch).findOneByOrFail({ id: fresh.id })).status).toBe(
+            BatchStatus.PROCESSING,
+          );
+          go.resolve();
+          await first;
+          expect(await a.db.getRepository(MessageBatch).findOneBy({ id: fresh.id })).toMatchObject({
+            status: BatchStatus.PROCESSING,
+          });
+        } else {
+          const key = randomUUID();
+          const outbox = new WebhookOutboxService(a.db.getRepository(WebhookOutboxEvent));
+          await outbox.open({
+            webhookId: randomUUID(),
+            sessionId: other,
+            event: 'message',
+            idempotencyKey: key,
+            deliveryId: randomUUID(),
+            payload: { dummy: 'ordinary local write' },
+          });
+          expect(await a.db.getRepository(WebhookOutboxEvent).countBy({ idempotencyKey: key })).toBe(1);
+          go.resolve();
+          await first;
+          expect(await a.db.getRepository(WebhookOutboxEvent).countBy({ idempotencyKey: key })).toBe(1);
+        }
+      } finally {
+        go.resolve();
+        sendGo.resolve();
+        await first;
+        await Promise.all(processing);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'retires an old local engine after a peer takes over and a fresh claim fails with SQL error %s',
+    async sqlError => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      const sessions = a.db.getRepository(Session);
+      await a.service.start(id, { explicit: true });
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      await b.service.start(id, { explicit: true });
+      const before = await sessions.findOneByOrFail({ id });
+      const failFresh = jest.fn().mockRejectedValue(new Error('fresh claim SQL unavailable'));
+      if (sqlError) {
+        const builder = sessions.createQueryBuilder.bind(sessions);
+        jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+          const query = builder();
+          const update = query.update.bind(query);
+          jest.spyOn(query, 'update').mockImplementation(() => {
+            const updated = update(Session);
+            jest.spyOn(updated, 'execute').mockImplementationOnce(failFresh);
+            return updated;
+          });
+          return query;
+        });
+      }
+      if (sqlError) {
+        await expect(a.service.start(id, { explicit: true })).rejects.toThrow('fresh claim SQL unavailable');
+        expect(failFresh).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+      }
+      await a.ownership.renew();
+      expect(a.service.getEngine(id)).toBeUndefined();
+      expect(a.engines[0].destroy).toHaveBeenCalled();
+      expect(b.service.getEngine(id)).toBe(b.engines[0]);
+      expect(b.engines[0].destroy).not.toHaveBeenCalled();
+      expect(await sessions.findOneByOrFail({ id })).toMatchObject({
+        nodeId: before.nodeId,
+        claimedAt: before.claimedAt,
+        leaseExpiresAt: before.leaseExpiresAt,
+        nodeUrl: before.nodeUrl,
+        desiredState: before.desiredState,
+        status: before.status,
+      });
+    },
+  );
+
+  it('keeps an acknowledged local renewal when an older fresh SQL reply fails', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const written = deferred(),
+      answer = deferred();
+    const builder = sessions.createQueryBuilder.bind(sessions);
+    jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+      const query = builder(),
+        update = query.update.bind(query);
+      jest.spyOn(query, 'update').mockImplementation(() => {
+        const updated = update(Session),
+          execute = updated.execute.bind(updated);
+        jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+          await execute();
+          written.resolve();
+          await answer.promise;
+          throw new Error('old claim reply unavailable');
+        });
+        return updated;
+      });
+      return query;
+    });
+    const first = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+    try {
+      await written.promise;
+      await a.service.start(id, { explicit: true });
+      const current = a.ownership.captureClaim(id);
+      expect(current()).toBe(true);
+      answer.resolve();
+      expect(await first).toBeInstanceOf(Error);
+      expect(a.ownership.owns(id)).toBe(true);
+      expect(current()).toBe(true);
+      await a.ownership.renew();
+      expect(a.service.getEngine(id)).toBe(a.engines[0]);
+      expect(current()).toBe(true);
+      expect((await sessions.findOneByOrFail({ id })).nodeId).toBe('node-a');
+      await a.service.stop(id);
+      expect(current()).toBe(false);
+      expect((await sessions.findOneByOrFail({ id })).nodeId).toBeNull();
+    } finally {
+      answer.resolve();
+      await first;
+    }
+  });
+
+  it('keeps a pending newer claim when an older fresh SQL reply throws', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED });
+    const sessions = a.db.getRepository(Session);
+    const written = [deferred(), deferred()],
+      answer = [deferred(), deferred()];
+    const builder = sessions.createQueryBuilder.bind(sessions);
+    let attempt = 0;
+    jest.spyOn(sessions, 'createQueryBuilder').mockImplementation(() => {
+      const query = builder();
+      if (attempt >= 2) return query;
+      const update = query.update.bind(query);
+      jest.spyOn(query, 'update').mockImplementation(() => {
+        const index = attempt++;
+        const updated = update(Session),
+          execute = updated.execute.bind(updated);
+        jest.spyOn(updated, 'execute').mockImplementationOnce(async () => {
+          const result = await execute();
+          written[index].resolve();
+          await answer[index].promise;
+          if (index === 0) throw new Error('old claim reply unavailable');
+          return result;
+        });
+        return updated;
+      });
+      return query;
+    });
+    const first = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+    let second: Promise<unknown> | undefined;
+    try {
+      await written[0].promise;
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      expect(await b.ownership.claim(id)).toBe(true);
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      second = a.service.start(id, { explicit: true }).catch((error: unknown) => error);
+      await written[1].promise;
+      answer[0].resolve();
+      expect(await first).toBeInstanceOf(Error);
+      answer[1].resolve();
+      expect(await second).not.toBeInstanceOf(Error);
+      expect(a.ownership.captureClaim(id)()).toBe(true);
+      expect(a.service.getEngine(id)).toBe(a.engines[0]);
+      expect((await sessions.findOneByOrFail({ id })).nodeId).toBe('node-a');
+    } finally {
+      answer.forEach(hold => hold.resolve());
+      await Promise.all([first, second]);
+    }
+  });
+
+  it.each([false, true])(
+    'clears tracking after a completed delete overlaps a missing-row start with SQL error %s',
+    async sqlError => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      const sessions = a.db.getRepository(Session);
+      await a.service.start(id, { explicit: true });
+      const reached = deferred(),
+        go = deferred();
+      const release = a.ownership.release.bind(a.ownership);
+      jest.spyOn(a.ownership, 'release').mockImplementationOnce(async (...args) => {
+        reached.resolve();
+        await go.promise;
+        return release(...args);
+      });
+      const deleting = a.service.delete(id);
+      try {
+        await reached.promise;
+        expect((await rowsOf(id)).sessions).toBe(0);
+        if (sqlError) {
+          const builder = sessions.createQueryBuilder.bind(sessions);
+          jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+            const query = builder(),
+              update = query.update.bind(query);
+            jest.spyOn(query, 'update').mockImplementation(() => {
+              const updated = update(Session);
+              jest.spyOn(updated, 'execute').mockRejectedValueOnce(new Error('missing row claim SQL unavailable'));
+              return updated;
+            });
+            return query;
+          });
+          await expect(a.service.start(id, { explicit: true })).rejects.toThrow('missing row claim SQL unavailable');
+        } else {
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(NotFoundException);
+        }
+        expect(a.ownership.owns(id)).toBe(false);
+        go.resolve();
+        await deleting;
+        expect(a.ownership.owns(id)).toBe(false);
+        expect(a.service.getEngine(id)).toBeUndefined();
+        expect(a.lifecycle.isEngineActive(id)).toBe(false);
+      } finally {
+        go.resolve();
+        await deleting;
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'preserves suspended loss detection while reconciling a failed claim with SQL error %s',
+    async sqlError => {
+      const id = await seed({ status: SessionStatus.DISCONNECTED });
+      const sessions = a.db.getRepository(Session);
+      await a.service.start(id, { explicit: true });
+      await sessions.update(id, { leaseExpiresAt: lapsed() });
+      await b.service.start(id, { explicit: true });
+      const resume = a.ownership.suspendLossDetection();
+      try {
+        if (sqlError) {
+          const builder = sessions.createQueryBuilder.bind(sessions);
+          jest.spyOn(sessions, 'createQueryBuilder').mockImplementationOnce(() => {
+            const query = builder(),
+              update = query.update.bind(query);
+            jest.spyOn(query, 'update').mockImplementation(() => {
+              const updated = update(Session);
+              jest.spyOn(updated, 'execute').mockRejectedValueOnce(new Error('suspended claim SQL unavailable'));
+              return updated;
+            });
+            return query;
+          });
+          await expect(a.service.start(id, { explicit: true })).rejects.toThrow('suspended claim SQL unavailable');
+        } else {
+          await expect(a.service.start(id, { explicit: true })).rejects.toBeInstanceOf(ConflictException);
+        }
+        expect(a.ownership.owns(id)).toBe(true);
+        expect(a.service.getEngine(id)).toBe(a.engines[0]);
+        expect(a.engines[0].destroy).not.toHaveBeenCalled();
+      } finally {
+        resume();
+      }
+      await a.ownership.renew();
+      expect(a.ownership.owns(id)).toBe(false);
+      expect(a.service.getEngine(id)).toBeUndefined();
+      expect(b.service.getEngine(id)).toBe(b.engines[0]);
+      expect(b.engines[0].destroy).not.toHaveBeenCalled();
+      expect((await sessions.findOneByOrFail({ id })).nodeId).toBe('node-b');
+    },
+  );
 });

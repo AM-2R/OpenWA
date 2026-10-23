@@ -1,7 +1,7 @@
 import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import { DataSource, QueryRunner } from 'typeorm';
+import { DataSource, EntityManager, QueryRunner, Repository } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { BatchStatus, MessageBatch } from '../message/entities/message-batch.entity';
@@ -415,9 +415,7 @@ describe('Session content lifetime', () => {
     };
     await seed(doomed.id, count);
     await seed(kept.id, 3);
-    const deleteMessages = jest.spyOn(messages, 'delete');
-    const deleteOutbox = jest.spyOn(outbox, 'delete');
-    const deleteFailures = jest.spyOn(failures, 'delete');
+    const deletes = jest.spyOn(Repository.prototype, 'delete');
 
     await controls.delete(doomed.id);
 
@@ -431,9 +429,12 @@ describe('Session content lifetime', () => {
     // Three statements per table instead of one that holds the table for every row at once, each by
     // primary key alone: a sessionId condition beside the id list makes the database walk the session's
     // remaining rows on every batch.
-    for (const spy of [deleteMessages, deleteOutbox, deleteFailures]) {
-      expect(spy).toHaveBeenCalledTimes(3);
-      for (const [criteria] of spy.mock.calls) expect(Object.keys(criteria as object)).toEqual(['id']);
+    for (const target of [Message, WebhookOutboxEvent, WebhookDeliveryFailure]) {
+      const calls = deletes.mock.calls.filter(
+        (_, index) => (deletes.mock.contexts[index] as Repository<Session>).target === target,
+      );
+      expect(calls).toHaveLength(3);
+      for (const [criteria] of calls) expect(Object.keys(criteria as object)).toEqual(['id']);
     }
   }, 60000);
 
@@ -483,7 +484,7 @@ describe('Session content lifetime', () => {
     await seed(kept.id, 3);
     const outboxReads = jest.spyOn(outbox, 'find');
     const failureReads = jest.spyOn(failures, 'find');
-    jest.spyOn(db, 'transaction').mockRejectedValue(new Error('closing transaction not under test'));
+    jest.spyOn(EntityManager.prototype, 'remove').mockRejectedValue(new Error('closing transaction not under test'));
 
     await expect(controls.delete(doomed.id)).rejects.toThrow('closing transaction not under test');
 
@@ -538,12 +539,14 @@ describe('Session content lifetime', () => {
       ]),
     );
     const pages: string[][] = [];
-    jest.spyOn(messages, 'delete').mockImplementation(criteria => {
+    const remove = Reflect.get(Repository.prototype, 'delete') as Repository<Message>['delete'];
+    jest.spyOn(Repository.prototype, 'delete').mockImplementation(function (this: Repository<Message>, criteria) {
+      if (this.target !== Message) return remove.call(this, criteria);
       if (pages.length >= 20) throw new Error('the pages are not advancing');
       pages.push((criteria as unknown as { id: { value: string[] } }).id.value.slice());
       return Promise.resolve({ raw: [], affected: 0 });
     });
-    jest.spyOn(db, 'transaction').mockRejectedValue(new Error('closing transaction not under test'));
+    jest.spyOn(EntityManager.prototype, 'remove').mockRejectedValue(new Error('closing transaction not under test'));
 
     await expect(controls.delete(doomed.id)).rejects.toThrow('closing transaction not under test');
 
@@ -611,16 +614,17 @@ describe('Session content lifetime', () => {
         })),
       );
     }
-    const remove = messages.delete.bind(messages);
+    const remove = Reflect.get(Repository.prototype, 'delete') as Repository<Message>['delete'];
     let turnRan = true;
     const turnsBeforeStatement: boolean[] = [];
-    jest.spyOn(messages, 'delete').mockImplementation(criteria => {
+    jest.spyOn(Repository.prototype, 'delete').mockImplementation(function (this: Repository<Message>, criteria) {
+      if (this.target !== Message) return remove.call(this, criteria);
       turnsBeforeStatement.push(turnRan);
       turnRan = false;
       setImmediate(() => {
         turnRan = true;
       });
-      return remove(criteria);
+      return remove.call(this, criteria);
     });
 
     await controls.delete(doomed.id);
@@ -709,7 +713,11 @@ describe('Session content lifetime', () => {
       const session = await createSession();
       await seedBatch(session.id, BatchStatus.PROCESSING, 'b-processing');
       jest.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('canceling statement due to statement timeout'));
-      jest.spyOn(db.getRepository(MessageBatch), 'find').mockRejectedValue(new Error('connection lost'));
+      const find = Reflect.get(Repository.prototype, 'find') as Repository<MessageBatch>['find'];
+      jest.spyOn(Repository.prototype, 'find').mockImplementation(function (this: Repository<MessageBatch>, options) {
+        if (this.target === MessageBatch) return Promise.reject(new Error('connection lost'));
+        return find.call(this, options);
+      });
 
       await expect(controls.delete(session.id)).rejects.toThrow('statement timeout');
 
@@ -842,8 +850,11 @@ describe('Session content lifetime', () => {
 
         expect(await rowsOf(id)).toEqual({ sessions: 1, messages: 1, batches: 1 });
         expect(logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('inside another open transaction'),
-          expect.objectContaining({ action: 'session_delete_foreign_transaction_open' }),
+          expect.stringContaining('Could not fail the unfinished batches'),
+          expect.objectContaining({
+            action: 'session_delete_batch_fail_failed',
+            error: expect.stringContaining('another database transaction stayed open') as unknown,
+          }),
         );
       },
     );

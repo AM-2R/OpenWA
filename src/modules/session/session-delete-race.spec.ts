@@ -147,13 +147,16 @@ describe('A session being deleted', () => {
     // One stored message is enough: the delete removes it in a batch, and that batch is the one held.
     const messages = db.getRepository(Message);
     await messages.insert({ sessionId, chatId: '10000000001@c.us', from: 'me', to: '10000000001@c.us', body: 'm' });
-    const removeBatch = messages.delete.bind(messages);
+    const transaction = db.transaction.bind(db);
     reachedBatch = deferred();
     finishBatch = deferred();
-    jest.spyOn(messages, 'delete').mockImplementation(async criteria => {
-      reachedBatch.resolve();
-      await finishBatch.promise;
-      return removeBatch(criteria);
+    let transactions = 0;
+    jest.spyOn(db, 'transaction').mockImplementation(async (...args: Parameters<typeof transaction>) => {
+      if (++transactions === 2) {
+        reachedBatch.resolve();
+        await finishBatch.promise;
+      }
+      return transaction(...args);
     });
 
     deletion = service.delete(sessionId);

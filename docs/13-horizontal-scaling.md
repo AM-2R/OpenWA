@@ -52,7 +52,14 @@
 > died with its node, is never adopted, even when its claim did lapse, until an explicit `POST /start`.
 > While versions are mixed during an upgrade, a node still on 0.25.0 does not read a `DELETE`'s record:
 > it can adopt such a session, and a `POST /start` it serves leaves the record in place.
-> Older nodes also lack the final ownership check on a stop write, so they can still report a stop
+> A stop during a delete preserves its claim, including repeated stops after its lease expires or
+> becomes NULL. If another node takes over an expired claim, each later removal transaction checks
+> the new owner and refuses the old delete. No transaction remains open across a hook.
+> Adoption cleanup commits with its claim or expired-claim release, so delayed cleanup cannot fail
+> a later owner's new batches. Older nodes do not preserve these delete holds, fence each removal
+> transaction, or serialize adoption cleanup with ownership changes. Upgrade every
+> node before relying on them; older backup importers also treat the combined delete/stop record
+> as unknown. Older nodes also lack the final ownership check on a stop write, so they can still report a stop
 > as successful while a peer starts the session. Upgrade every node before relying on that fence.
 >
 > Known limitation: a holder that is alive but cannot reach the database for more than three lease

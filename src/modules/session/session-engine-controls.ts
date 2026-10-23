@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { isUUID } from 'class-validator';
-import { EntityTarget, In, Repository, DataSource } from 'typeorm';
+import { EntityTarget, EntityManager, In, IsNull, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -140,6 +140,8 @@ export class StopMarks extends Set<string> {
 
 /** Caller callbacks for stop()/delete(), run around the session read that opens each verb. */
 export interface StopHooks {
+  /** delete() only: the ownership captured by its caller still covers this operation. */
+  ownsClaim?: () => boolean;
   /** stop() only: runs once the session read succeeds and before any teardown; records the stop. */
   afterRead?: () => Promise<void>;
   /**
@@ -178,6 +180,7 @@ export interface SessionEngineControlsHost {
   presence: PresenceStore;
   hookManager: HookManager;
   configService?: ConfigService;
+  nodeId?: string;
   logger: ReturnType<typeof createLogger>;
   /** LIVE closure — read at call time, never captured (specs replace lifecycle.dataSource at runtime). */
   dataSource(): DataSource;
@@ -452,7 +455,8 @@ export class SessionEngineControls {
       // Initialize reconnect state from the (untrusted) opaque session.config — coerced + clamped
       // so a poisoned value can't drive a NaN/immediate-relaunch storm or an unbounded loop.
       const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
-      this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
+      const reconnectState: ReconnectState = { attempts: 0, timer: null, maxAttempts, baseDelay };
+      this.reconnectStates.set(id, reconnectState);
 
       // An accepted top-level start() re-arms the stuck-auth recovery budget: every fence above
       // (duplicate-start, cap, credential-teardown) passed, so this is a deliberate, operator-initiated
@@ -502,7 +506,7 @@ export class SessionEngineControls {
         // will ever fire it, and leaving it behind is dead state a later liveness check would have to
         // reason about. A retry builds its own. A reconnect that already registered a replacement
         // keeps its state.
-        if (!this.engines.has(id)) {
+        if (!this.engines.has(id) && this.reconnectStates.get(id) === reconnectState && !reconnectState.started) {
           this.host.cancelReconnect(id);
         }
         // Shutdown's destroy is the usual cause of an init rejecting now; the adapter's error would
@@ -529,7 +533,7 @@ export class SessionEngineControls {
         retired = false;
       }
       if (retired) {
-        await this.reapRetiredEngine(id);
+        await this.reapRetiredEngine(id, mine, reconnectState);
       } else if (this.host.isClosed()) {
         // Shutdown destroys every engine it finds, this one included, and skips initialize() for an
         // engine it caught mid-start. Either way the session is not kept, so this is no success. A
@@ -544,7 +548,7 @@ export class SessionEngineControls {
         // "already started". The row read on entry stands in for the one that failed.
         // A row found gone only now is the retirement the failed read above could not report: the engine
         // goes with it.
-        if (!retired && error instanceof NotFoundException) await this.reapRetiredEngine(id);
+        if (!retired && error instanceof NotFoundException) await this.reapRetiredEngine(id, mine, reconnectState);
         if (retired || error instanceof NotFoundException) throw error;
         return session;
       }
@@ -557,16 +561,19 @@ export class SessionEngineControls {
    * Tears down the engine a start registered for a session that was stopped or deleted meanwhile, and drops
    * the reconnect state it armed for it.
    */
-  private async reapRetiredEngine(id: string): Promise<void> {
-    const resurrected = this.engines.get(id);
-    if (resurrected) {
+  private async reapRetiredEngine(
+    id: string,
+    resurrected: IWhatsAppEngine | undefined,
+    reconnectState?: ReconnectState,
+  ): Promise<void> {
+    if (resurrected && this.engines.isLive(id, resurrected)) {
       await this.fences.destroyWithEscalation(id, resurrected);
       this.engines.deleteIfLive(id, resurrected);
     }
     // The reconnect state this start armed up front serves no engine now, and the stop or delete that retired it
     // may have run before the state was armed, so nothing else would drop it. A replacement engine that
     // registered meanwhile keeps its own.
-    if (!this.engines.has(id)) {
+    if (!this.engines.has(id) && this.reconnectStates.get(id) === reconnectState && !reconnectState?.started) {
       this.host.cancelReconnect(id);
     }
     // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created them, so
@@ -918,16 +925,9 @@ export class SessionEngineControls {
       // conversations, see ConversationMappingService.rebindSession), ingress_events (the
       // instance-keyed inbound dedup record, payload already dropped after dispatch, always pruned
       // after INGRESS_DEDUP_RETENTION_DAYS), lid_mappings (a global cache by design) and audit_logs (the audit trail).
-      await this.deleteTrafficRowsInBatches(id);
-      // On SQLite every caller shares one connection: opened inside another caller's transaction, this one
-      // would only be a savepoint in it, undone if that one rolls back after this delete has answered.
+      await this.deleteTrafficRowsInBatches(session, hooks.ownsClaim);
       const dataSource = this.host.dataSource();
-      if (!(await awaitNoOpenTransaction(dataSource))) {
-        throw new ServiceUnavailableException(
-          `Session ${id} was not deleted: another database transaction stayed open. Retry the delete.`,
-        );
-      }
-      await dataSource.transaction(async manager => {
+      await this.withDeleteClaim(session, hooks.ownsClaim, async manager => {
         await manager.delete(Message, { sessionId: id });
         await manager.delete(MessageBatch, { sessionId: id });
         await manager.delete(ChatState, { sessionId: id });
@@ -970,7 +970,7 @@ export class SessionEngineControls {
       // The session survives, but the write scopes closed above stay retired for good: a bulk batch
       // running for it stops at its next item without recording anything, and one not yet picked up
       // never starts. Nothing else moves a PENDING or PROCESSING row on while this process lives.
-      if (!parentDeleted) await this.failUnfinishedBatches(id);
+      if (!parentDeleted) await this.failUnfinishedBatches(session, hooks.ownsClaim);
       throw error;
     } finally {
       writes.release();
@@ -1009,17 +1009,10 @@ export class SessionEngineControls {
    * reach without a cycle. Best effort: the database that just failed the delete may fail this too, and the
    * boot reaper still gets the row on the next start.
    */
-  private async failUnfinishedBatches(sessionId: string): Promise<void> {
+  private async failUnfinishedBatches(session: Session, ownsClaim?: () => boolean): Promise<void> {
+    const sessionId = session.id;
     try {
-      const dataSource = this.host.dataSource();
-      // Not inside another caller's transaction on the shared connection, where the fail would roll back with it.
-      if (!(await awaitNoOpenTransaction(dataSource))) {
-        this.logger.warn(`Failing the unfinished batches of session ${sessionId} inside another open transaction`, {
-          sessionId,
-          action: 'session_delete_foreign_transaction_open',
-        });
-      }
-      await failUnfinishedSessionBatches(dataSource, sessionId);
+      await this.withDeleteClaim(session, ownsClaim, manager => failUnfinishedSessionBatches(manager, sessionId));
     } catch (error) {
       this.logger.warn(`Could not fail the unfinished batches of session ${sessionId} after a failed delete`, {
         sessionId,
@@ -1046,7 +1039,8 @@ export class SessionEngineControls {
    * over the session's remaining rows that filters on the list, once per batch (PostgreSQL does too while its
    * statistics are missing or stale), which made a long history take longer than linear.
    */
-  private async deleteTrafficRowsInBatches(sessionId: string): Promise<void> {
+  private async deleteTrafficRowsInBatches(session: Session, ownsClaim?: () => boolean): Promise<void> {
+    const sessionId = session.id;
     const dataSource = this.host.dataSource();
     const postgres = dataSource.options.type === 'postgres';
     let size = postgres ? SESSION_DELETE_BATCH_SIZE_POSTGRES : SESSION_DELETE_BATCH_MIN_SQLITE;
@@ -1082,7 +1076,9 @@ export class SessionEngineControls {
         const started = performance.now();
         const ids = await next(size);
         if (ids.length === 0) break;
-        await rows.delete({ id: In(ids) });
+        await this.withDeleteClaim(session, ownsClaim, async manager => {
+          await manager.getRepository(rows.target).delete({ id: In(ids) });
+        });
         if (ids.length < size) break;
         if (!postgres) size = nextSqliteDeleteBatchSize(ids.length, performance.now() - started);
         await new Promise<void>(resolve =>
@@ -1090,6 +1086,35 @@ export class SessionEngineControls {
         );
       }
     }
+  }
+
+  /** Lock the owner row with each destructive unit, never across a hook or between batches. */
+  private async withDeleteClaim(
+    session: Session,
+    ownsClaim: (() => boolean) | undefined,
+    remove: (manager: EntityManager) => Promise<void>,
+  ): Promise<void> {
+    const dataSource = this.host.dataSource();
+    // A savepoint on SQLite's shared connection could be rolled back by an unrelated caller.
+    if (!(await awaitNoOpenTransaction(dataSource))) {
+      throw new ServiceUnavailableException(
+        `Session ${session.id} was not deleted: another database transaction stayed open. Retry the delete.`,
+      );
+    }
+    await dataSource.transaction(async manager => {
+      if (this.host.nodeId !== undefined) {
+        const { affected } = await manager
+          .createQueryBuilder()
+          .update(Session)
+          .set({ nodeId: this.host.nodeId, updatedAt: () => '"updatedAt"' })
+          .where({ id: session.id, nodeId: this.host.nodeId, claimedAt: session.claimedAt ?? IsNull() })
+          .execute();
+        if (affected !== 1) throw new ConflictException(`Session ${session.id} is no longer owned by this node`);
+      }
+      if (ownsClaim?.() === false)
+        throw new ConflictException(`Session ${session.id} is no longer owned by this delete`);
+      await remove(manager);
+    });
   }
 
   /**

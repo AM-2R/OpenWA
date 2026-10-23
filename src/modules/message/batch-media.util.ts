@@ -23,7 +23,10 @@ export function stripBatchMediaPayloads(messages: MessageBatch['messages']): voi
  * captured a scope before the close stops at its next item without recording anything, and nothing else moves
  * its row on while this process lives. The boot reaper gets any row this misses on the next start.
  */
-export async function failUnfinishedSessionBatches(dataSource: DataSource, sessionId: string): Promise<void> {
+export async function failUnfinishedSessionBatches(
+  dataSource: Pick<DataSource, 'getRepository'>,
+  sessionId: string,
+): Promise<void> {
   const batches = dataSource.getRepository(MessageBatch);
   const unfinished = await batches.find({
     where: { sessionId, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },

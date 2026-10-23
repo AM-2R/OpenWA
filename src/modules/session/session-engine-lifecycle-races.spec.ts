@@ -76,7 +76,7 @@ const flush = async (): Promise<void> => {
 
 interface Internals {
   engines: EngineRegistry;
-  controls: { reapRetiredEngine(id: string): Promise<void> };
+  controls: { reapRetiredEngine(id: string, engine: IWhatsAppEngine): Promise<void> };
   stoppingSessions: Set<string>;
   reconnectStates: Map<string, ReconnectState>;
   logger: { warn: (...args: unknown[]) => void };
@@ -433,7 +433,7 @@ describe('SessionEngineLifecycle races', () => {
         const state: ReconnectState = { attempts: 0, timer: null, maxAttempts: 5, baseDelay: 5000 };
         internals.engines.set(ID, retired as never);
 
-        const reaping = internals.controls.reapRetiredEngine(ID);
+        const reaping = internals.controls.reapRetiredEngine(ID, retired as never);
         await flush();
         internals.engines.set(ID, replacement as never);
         internals.reconnectStates.set(ID, state);

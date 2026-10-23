@@ -281,10 +281,11 @@ export class SessionController {
   @ApiResponse({
     status: 409,
     description:
-      'A credential teardown for the same session name is still in flight (retryable — the body ' +
+      'A credential teardown for the same session name is still in flight (retryable: the body ' +
       "carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; wait for it to settle and retry), OR " +
       "another node currently holds this session's live engine and deleting it here would strip a " +
-      'session the owner is running. No destructive side effect runs before either refusal.',
+      'session the owner is running, OR ownership changes while deletion runs. The first two refusals ' +
+      'remove nothing. Ownership loss stops later deletion units; earlier batches may already be committed.',
   })
   async delete(@Param('sessionId', ParseUUIDPipe) id: string): Promise<void> {
     const session = await this.sessionService.findOne(id);

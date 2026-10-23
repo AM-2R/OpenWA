@@ -121,8 +121,11 @@ function createMockSession(overrides: Partial<Session> = {}): Session {
 
 /** A query builder whose chain methods return itself and whose raw read finds nothing unless told otherwise. */
 function chainableQuery(): Record<string, jest.Mock> {
-  const query: Record<string, jest.Mock> = { getRawMany: jest.fn().mockResolvedValue([]) };
-  for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit']) {
+  const query: Record<string, jest.Mock> = {
+    getRawMany: jest.fn().mockResolvedValue([]),
+    execute: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+  for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit', 'update', 'set']) {
     query[name] = jest.fn().mockReturnValue(query);
   }
   return query;
@@ -138,8 +141,8 @@ describe('SessionService', () => {
   let shutdown: ShutdownService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let messageRepository: jest.Mocked<Partial<Repository<Message>>>;
-  let outboxRepository: { find: jest.Mock; delete: jest.Mock };
-  let failureRepository: { find: jest.Mock; delete: jest.Mock };
+  let outboxRepository: { target: typeof WebhookOutboxEvent; find: jest.Mock; delete: jest.Mock };
+  let failureRepository: { target: typeof WebhookDeliveryFailure; find: jest.Mock; delete: jest.Mock };
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
@@ -165,6 +168,7 @@ describe('SessionService', () => {
     };
 
     messageRepository = {
+      target: Message,
       find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue(null),
       createQueryBuilder: jest.fn().mockImplementation(chainableQuery),
@@ -185,8 +189,16 @@ describe('SessionService', () => {
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
-    outboxRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
-    failureRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
+    outboxRepository = {
+      target: WebhookOutboxEvent,
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    failureRepository = {
+      target: WebhookDeliveryFailure,
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
 
     dataSource = {
       options: { type: 'better-sqlite3' } as DataSource['options'],
@@ -195,14 +207,18 @@ describe('SessionService', () => {
       getRepository: jest
         .fn()
         .mockImplementation((entity: unknown) =>
-          entity === WebhookOutboxEvent
-            ? outboxRepository
-            : entity === WebhookDeliveryFailure
-              ? failureRepository
-              : messageRepository,
+          entity === Session
+            ? repository
+            : entity === WebhookOutboxEvent
+              ? outboxRepository
+              : entity === WebhookDeliveryFailure
+                ? failureRepository
+                : messageRepository,
         ),
       transaction: jest.fn().mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
         const manager = {
+          getRepository: dataSource.getRepository,
+          createQueryBuilder: jest.fn().mockImplementation(chainableQuery),
           save: jest.fn().mockImplementation((entity: unknown) => Promise.resolve(entity)),
           // As TypeORM does: a removed entity comes back with its primary key cleared.
           remove: jest.fn().mockImplementation((entity: { id?: string }) => {
@@ -1488,7 +1504,7 @@ describe('SessionService', () => {
         expect(del).toHaveBeenNthCalledWith(3, { id: In(ids(2 * BATCH, 20).map(row => row.id)) });
         // Every batch is out before the transaction that removes the rest and the session row.
         const transaction = dataSource.transaction as jest.Mock;
-        expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder[0]);
+        expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder.at(-1)!);
       });
 
       it('without a timestamp follow the ones with, paged by id', async () => {
@@ -1559,7 +1575,11 @@ describe('SessionService', () => {
           return Promise.resolve({ affected: id.value.length });
         });
         let leftBeforeTransaction = -1;
-        (dataSource.transaction as jest.Mock).mockImplementationOnce(() => {
+        const transact = (dataSource.transaction as jest.Mock).getMockImplementation() as (
+          cb: unknown,
+        ) => Promise<unknown>;
+        (dataSource.transaction as jest.Mock).mockImplementation((cb: unknown) => {
+          if (left.size > 0) return transact(cb);
           leftBeforeTransaction = left.size;
           return Promise.reject(new Error('closing transaction not under test'));
         });
@@ -1707,7 +1727,7 @@ describe('SessionService', () => {
         expect(outboxRepository.delete).toHaveBeenNthCalledWith(2, { id: In(ids(BATCH, 3).map(row => row.id)) });
         const transaction = dataSource.transaction as jest.Mock;
         expect(outboxRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
-          transaction.mock.invocationCallOrder[0],
+          transaction.mock.invocationCallOrder.at(-1)!,
         );
       });
 
@@ -1727,7 +1747,7 @@ describe('SessionService', () => {
         expect(failureRepository.delete).toHaveBeenNthCalledWith(2, { id: In(ids(BATCH, 3).map(row => row.id)) });
         const transaction = dataSource.transaction as jest.Mock;
         expect(failureRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
-          transaction.mock.invocationCallOrder[0],
+          transaction.mock.invocationCallOrder.at(-1)!,
         );
       });
 
@@ -1738,7 +1758,7 @@ describe('SessionService', () => {
 
         await expect(service.delete('sess-uuid-1')).rejects.toThrow('canceling statement');
 
-        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
         expect(repository.remove).not.toHaveBeenCalled();
       });
     });
@@ -2431,7 +2451,7 @@ describe('SessionService', () => {
 
       await expect(service.delete('sess-uuid-1')).rejects.toThrow(ConflictException);
 
-      expect(ownership.claim).toHaveBeenCalledWith('sess-uuid-1');
+      expect(ownership.claim).toHaveBeenCalledWith('sess-uuid-1', expect.any(Function));
       expect(ownership.release).not.toHaveBeenCalled();
     });
 
@@ -2974,7 +2994,10 @@ describe('SessionService', () => {
         ],
         [
           'refused when its record is written',
-          () => (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 }),
+          () =>
+            (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
+              Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
+            ),
           ConflictException,
         ],
       ])(
@@ -3012,7 +3035,10 @@ describe('SessionService', () => {
           await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
           await service.stop(row.id);
           if (refusal === 'ownership read') jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
-          else (repository.update as jest.Mock).mockResolvedValueOnce({ affected: 0 });
+          else
+            (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
+              Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
+            );
           await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
 
           expect(await outcome).toBeInstanceOf(SessionStoppedException);
