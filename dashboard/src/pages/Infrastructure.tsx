@@ -122,27 +122,45 @@ export function Infrastructure() {
       const dbType = pinned('DATABASE_TYPE')?.database.type ?? db.type;
       const dbHost =
         (pinned('DATABASE_HOST')?.database.host ?? (db.builtIn ? 'postgres' : db.host.trim())) || 'localhost';
-      const dbExternalRetarget =
-        !db.builtIn &&
+      // The database name the save writes: the form's for an external server; for a built-in one the name the server
+      // keeps, the saved config's where its host already reaches the bundled container, else the one the bundled
+      // container serves now (the page loaded it), else openwa.
+      const dbName = db.builtIn
+        ? (namesBundledContainer('postgres', savedConfig?.database.host) && savedConfig?.database.type === 'postgres'
+            ? savedConfig.database.database
+            : infraStatus?.database.type === 'postgres' && namesBundledContainer('postgres', infraStatus.database.host)
+              ? loaded?.database.database
+              : '') || 'openwa'
+        : db.database;
+      const dbRetarget =
         !!loaded &&
-        ((!pinned('DATABASE_PORT') && db.port !== (loaded.database.port || '5432')) ||
-          (!pinned('DATABASE_NAME') && db.database !== (loaded.database.database || 'openwa')));
+        ((!db.builtIn && !pinned('DATABASE_PORT') && db.port !== (loaded.database.port || '5432')) ||
+          (!pinned('DATABASE_NAME') && dbName !== (loaded.database.database || 'openwa')));
       const dbSwitch =
         !!infraStatus &&
         (dbType !== infraStatus.database.type ||
-          (dbType === 'postgres' && (!sameHost('postgres', dbHost, infraStatus.database.host) || dbExternalRetarget)));
+          (dbType === 'postgres' && (!sameHost('postgres', dbHost, infraStatus.database.host) || dbRetarget)));
       const storage = configForm.storageConfig;
       const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
       // The storage section takes the bundled bucket for a flag sent as true only: beside a pinned endpoint an untouched
       // toggle is left out of the save, and the stored bucket stays. It stays under the flag too when the saved config
-      // (the file this save replaced) already reaches the bundled MinIO, which then serves that bucket.
+      // (the file this save replaced) already reaches the bundled MinIO, which then serves that bucket, and else the
+      // bucket the bundled MinIO serves now does.
       const storageBuiltIn = sent.storage?.builtIn === true;
       const keepsBucket = namesBundledContainer('minio', savedConfig?.storage.s3Endpoint);
+      const servesBucket =
+        infraStatus?.storage.type === 's3' && namesBundledContainer('minio', infraStatus.storage.endpoint);
       const endpoint =
         pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storageBuiltIn ? 'http://minio:9000' : storage.s3Endpoint);
       const bucket =
         (pinned('S3_BUCKET')?.storage.s3Bucket ??
-          (storageBuiltIn ? (keepsBucket ? savedConfig?.storage.s3Bucket : 'openwa') : storage.s3Bucket)) ||
+          (storageBuiltIn
+            ? keepsBucket
+              ? savedConfig?.storage.s3Bucket
+              : servesBucket
+                ? infraStatus?.storage.bucket
+                : 'openwa'
+            : storage.s3Bucket)) ||
         'openwa';
       const storageSwitch =
         !!infraStatus &&

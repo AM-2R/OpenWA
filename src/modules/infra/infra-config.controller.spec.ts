@@ -1722,6 +1722,135 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       expect(env).toContain('S3_BUCKET=openwa');
       expect(env).toContain('S3_REGION=us-east-1');
     });
+
+    // A database and bucket of their own on the bundled containers, switched away to other servers and saved without a
+    // restart, then switched back: the file names the other servers now, but the running process still dials the
+    // bundled containers with the values its boot loaded into the environment, and those are what they serve.
+    describe('switched away and back before a restart', () => {
+      const RUNNING: Record<string, string> = {
+        DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'openwa-postgres',
+        DATABASE_USERNAME: 'app',
+        DATABASE_PASSWORD: 'RunPw12345!',
+        DATABASE_NAME: 'appdb',
+        POSTGRES_SCHEMA: 'tenant',
+        STORAGE_TYPE: 's3',
+        S3_ENDPOINT: 'http://openwa-minio:9000',
+        S3_BUCKET: 'media',
+        S3_REGION: 'eu-west-1',
+        S3_ACCESS_KEY_ID: 'RunKey1234567',
+        S3_SECRET_ACCESS_KEY: 'RunSecret1234567890',
+      };
+      // What the switch away wrote: the other servers, with a password, bucket and keys of their own typed.
+      const SWITCHED =
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.ext.example\nDATABASE_USERNAME=app\n' +
+        'DATABASE_PASSWORD=ExtPw12345!\nDATABASE_NAME=extdb\nPOSTGRES_SCHEMA=tenant\nSTORAGE_TYPE=s3\nMINIO_BUILTIN=false\n' +
+        'S3_ENDPOINT=https://s3.ext.example\nS3_BUCKET=newbucket\nS3_REGION=us-west-2\nS3_ACCESS_KEY_ID=ExtKey1234567\n' +
+        'S3_SECRET_ACCESS_KEY=ExtSecret1234567890\n';
+      const KEYS = [
+        'DATABASE_HOST',
+        'DATABASE_USERNAME',
+        'DATABASE_PASSWORD',
+        'DATABASE_NAME',
+        'POSTGRES_SCHEMA',
+        'S3_ENDPOINT',
+        'S3_BUCKET',
+        'S3_REGION',
+        'S3_ACCESS_KEY_ID',
+        'S3_SECRET_ACCESS_KEY',
+      ];
+      const switchBack = (running: Record<string, string>) => {
+        Object.assign(process.env, running);
+        const env = jest
+          .requireActual<typeof import('dotenv')>('dotenv')
+          .parse(
+            written(
+              { database: { type: 'postgres', builtIn: true }, storage: { type: 's3', builtIn: true } },
+              SWITCHED,
+            ),
+          );
+        return Object.fromEntries(KEYS.map(key => [key, env[key]]));
+      };
+      // Nothing is pinned: the running process holds the values its boot loaded from the file.
+      afterEach(() => {
+        for (const key of Object.keys(RUNNING)) delete process.env[key];
+      });
+
+      it('keeps the user, database, schema, password, bucket, region and keys the running process uses there', () => {
+        expect(switchBack(RUNNING)).toEqual({
+          DATABASE_HOST: 'postgres',
+          DATABASE_USERNAME: 'app',
+          DATABASE_PASSWORD: 'RunPw12345!',
+          DATABASE_NAME: 'appdb',
+          POSTGRES_SCHEMA: 'tenant',
+          S3_ENDPOINT: 'http://minio:9000',
+          S3_BUCKET: 'media',
+          S3_REGION: 'eu-west-1',
+          S3_ACCESS_KEY_ID: 'RunKey1234567',
+          S3_SECRET_ACCESS_KEY: 'RunSecret1234567890',
+        });
+      });
+
+      it.each(HOST_SPELLINGS.database.reach.map((db, i) => [db, HOST_SPELLINGS.storage.reach[i]]))(
+        'keeps them while the running process dials %j and %j',
+        (db, s3) => {
+          const env = switchBack({ ...RUNNING, DATABASE_HOST: db, S3_ENDPOINT: s3 });
+          expect([env.DATABASE_NAME, env.DATABASE_PASSWORD, env.S3_BUCKET, env.S3_ACCESS_KEY_ID]).toEqual([
+            'appdb',
+            'RunPw12345!',
+            'media',
+            'RunKey1234567',
+          ]);
+        },
+      );
+
+      it('writes the bundled ones while the running process dials other servers', () => {
+        expect(
+          switchBack({ ...RUNNING, DATABASE_HOST: 'db.old.example', S3_ENDPOINT: 'https://s3.old.example' }),
+        ).toEqual({
+          DATABASE_HOST: 'postgres',
+          DATABASE_USERNAME: 'openwa',
+          DATABASE_PASSWORD: 'openwa',
+          DATABASE_NAME: 'openwa',
+          POSTGRES_SCHEMA: 'public',
+          S3_ENDPOINT: 'http://minio:9000',
+          S3_BUCKET: 'openwa',
+          S3_REGION: 'us-east-1',
+          S3_ACCESS_KEY_ID: 'minioadmin',
+          S3_SECRET_ACCESS_KEY: 'minioadmin',
+        });
+      });
+
+      it('writes the bundled ones while the running process uses SQLite and local storage', () => {
+        const env = switchBack({ ...RUNNING, DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+        expect([env.DATABASE_NAME, env.DATABASE_PASSWORD, env.S3_BUCKET, env.S3_ACCESS_KEY_ID]).toEqual([
+          'openwa',
+          'openwa',
+          'openwa',
+          'minioadmin',
+        ]);
+      });
+
+      // A file that already names the bundled containers is the choice the next boot makes: its values stay.
+      it('keeps the stored ones of a file that names the bundled containers over the running ones', () => {
+        Object.assign(process.env, RUNNING);
+        const env = jest
+          .requireActual<typeof import('dotenv')>('dotenv')
+          .parse(
+            written(
+              { database: { type: 'postgres', builtIn: true }, storage: { type: 's3', builtIn: true } },
+              SWITCHED.replace('db.ext.example', 'postgres').replace('https://s3.ext.example', 'http://minio:9000'),
+            ),
+          );
+        expect([env.DATABASE_NAME, env.DATABASE_PASSWORD, env.S3_BUCKET, env.S3_REGION, env.S3_ACCESS_KEY_ID]).toEqual([
+          'extdb',
+          'ExtPw12345!',
+          'newbucket',
+          'us-west-2',
+          'ExtKey1234567',
+        ]);
+      });
+    });
   });
 
   // The guard must evaluate what the next boot would SEE: load-env.ts loads with dotenv

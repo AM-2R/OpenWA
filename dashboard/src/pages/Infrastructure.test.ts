@@ -1279,42 +1279,54 @@ test('an unrelated save beside a pinned bundled endpoint warns of no storage swi
   assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
 });
 
-// A pinned external host outranks the toggle, so turning Use Built-in on moves nothing.
-test('turning Use Built-in on under a pinned external host warns of no switch', async () => {
-  const { screen, fireEvent, within } = rtl;
-  resetFetchCalls();
-  overrides = {
-    status: {
-      ...INFRA_STATUS,
-      database: { connected: true, type: 'postgres', host: 'db.external.example', builtIn: false },
-      storage: { type: 's3', bucket: 'openwa', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
-      envPinned: ['DATABASE_HOST', 'S3_ENDPOINT'],
-    },
-    saved: {
-      ...SAVED_CONFIG,
-      database: { ...SAVED_CONFIG.database, host: 'db.external.example', builtIn: false, builtInSet: false },
-      storage: {
-        ...SAVED_CONFIG.storage,
-        type: 's3',
-        builtIn: false,
-        builtInSet: false,
-        s3Bucket: 'openwa',
-        s3Endpoint: 'https://s3.example',
+// A pinned external host outranks the toggle, so turning Use Built-in on moves nothing but the database name the
+// built-in save writes, openwa: with that name already in use nothing moves, with one of its own the database does.
+for (const { name, moves } of [
+  { name: 'openwa', moves: false },
+  { name: 'openwa_prod', moves: true },
+]) {
+  test(`turning Use Built-in on under a pinned external host over database ${name} ${moves ? 'warns of the database' : 'warns of no switch'}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: {
+        ...INFRA_STATUS,
+        database: { connected: true, type: 'postgres', host: 'db.external.example', builtIn: false },
+        storage: { type: 's3', bucket: 'openwa', endpoint: 'https://s3.example', builtIn: false, s3Available: true },
+        envPinned: ['DATABASE_HOST', 'S3_ENDPOINT'],
       },
-    },
-  };
-  const { container } = renderInfrastructure();
+      saved: {
+        ...SAVED_CONFIG,
+        database: {
+          ...SAVED_CONFIG.database,
+          host: 'db.external.example',
+          database: name,
+          builtIn: false,
+          builtInSet: false,
+        },
+        storage: {
+          ...SAVED_CONFIG.storage,
+          type: 's3',
+          builtIn: false,
+          builtInSet: false,
+          s3Bucket: 'openwa',
+          s3Endpoint: 'https://s3.example',
+        },
+      },
+    };
+    const { container } = renderInfrastructure();
 
-  await screen.findByText('Database Configuration');
-  await awaitSeeded(container);
-  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
-  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+    fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
 
-  const dialog = await screen.findByRole('dialog');
-  assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) === null, true, 'database warning');
-  assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
-});
+    const dialog = await screen.findByRole('dialog');
+    assert.equal(within(dialog).queryByText(DB_SWITCH_WARNING, { exact: false }) !== null, moves, 'database warning');
+    assert.equal(within(dialog).queryByText(STORAGE_WARNING, { exact: false }) === null, true, 'storage warning');
+  });
+}
 
 // The host is compared as the save writes it, trimmed and with the default for an empty field.
 test('a host typed with spaces around it is no switch', async () => {
@@ -2812,6 +2824,95 @@ test('typed external fields beside a host pinned elsewhere are sent with the fla
   assert.deepEqual([body.database?.builtIn, body.database?.username, body.database?.database], [false, 'app', 'appdb']);
   rtl.within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
 });
+
+// A database and bucket of their own on the bundled containers (flags false, hosts on the container names), switched
+// away and saved with Restart Later, then switched back to Use Built-in in the same visit. The gateway keeps what the
+// bundled containers serve the running process, so the second save moves nothing, unless the first one renamed the
+// database on the bundled host itself, which the next boot then dials.
+const RUNNING_OWN_BUNDLED: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: true, type: 'postgres', host: 'openwa-postgres', builtIn: true, running: false },
+  storage: { type: 's3', bucket: 'media', endpoint: 'http://openwa-minio:9000', builtIn: true, s3Available: true },
+};
+const SAVED_OWN_BUNDLED: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: {
+    ...SAVED_CONFIG.database,
+    host: 'openwa-postgres',
+    port: '5432',
+    username: 'app',
+    database: 'appdb',
+    schema: 'tenant',
+    builtIn: true,
+    builtInSet: false,
+  },
+  storage: {
+    ...SAVED_CONFIG.storage,
+    type: 's3',
+    builtIn: true,
+    builtInSet: false,
+    s3Bucket: 'media',
+    s3Region: 'eu-west-1',
+    s3Endpoint: 'http://openwa-minio:9000',
+  },
+};
+for (const { label, toggle, field, value, after, warning, warnsBack } of [
+  {
+    label: 'the database switched to another server',
+    toggle: 'Use Built-in PostgreSQL Container',
+    field: 'Host',
+    value: 'db.ext.example',
+    after: { database: { ...SAVED_OWN_BUNDLED.database, host: 'db.ext.example', builtIn: false, builtInSet: true } },
+    warning: DB_SWITCH_WARNING,
+    warnsBack: false,
+  },
+  {
+    label: 'the database renamed on the bundled host',
+    toggle: 'Use Built-in PostgreSQL Container',
+    field: 'Database Name',
+    value: 'appdb2',
+    after: { database: { ...SAVED_OWN_BUNDLED.database, database: 'appdb2' } },
+    warning: DB_SWITCH_WARNING,
+    warnsBack: true,
+  },
+  {
+    label: 'the storage switched to another endpoint',
+    toggle: 'Use Built-in MinIO Container',
+    field: 'Custom Endpoint (optional)',
+    value: 'https://s3.new.example',
+    after: {
+      storage: { ...SAVED_OWN_BUNDLED.storage, s3Endpoint: 'https://s3.new.example', builtIn: false, builtInSet: true },
+    },
+    warning: STORAGE_WARNING,
+    warnsBack: false,
+  },
+]) {
+  test(`back to Use Built-in after ${label} and Restart Later ${warnsBack ? 'warns' : 'warns of no move'}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: RUNNING_OWN_BUNDLED,
+      saved: SAVED_OWN_BUNDLED,
+      savedAfterSave: { ...SAVED_OWN_BUNDLED, ...after },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    fireEvent.click(toggleInput(container, toggle));
+    fireEvent.change(fieldInput(container, field), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+    const first = await screen.findByRole('dialog');
+    within(first).getByText(warning, { exact: false });
+    fireEvent.click(within(first).getByRole('button', { name: 'Restart Later' }));
+    await rtl.waitFor(() => assert.equal(screen.queryByRole('dialog'), null));
+
+    fireEvent.click(toggleInput(container, toggle));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+    const second = await screen.findByRole('dialog');
+    assert.equal(within(second).queryByText(warning, { exact: false }) !== null, warnsBack);
+  });
+}
 
 // ── Restart-flow timer cleanup on unmount ────────────────────────────────────
 
