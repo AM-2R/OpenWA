@@ -120,6 +120,12 @@
   border-color: var(--error);
 }
 
+/* The red border keeps showing the error while the field is focused, so the focus cue is a ring beside it. */
+.login-container .input-wrapper input.error:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .login-container .toggle-visibility {
   position: absolute;
   inset-inline-end: 0.75rem;
