@@ -532,6 +532,8 @@
   margin: 0 0 1rem;
   font-size: 0.8125rem;
   color: var(--warning-text);
+  /* A long variable name (DATABASE_SSL_REJECT_UNAUTHORIZED) breaks instead of running past a narrow card. */
+  overflow-wrap: anywhere;
 }
 .infrastructure-page .env-pin-note svg {
   flex-shrink: 0;

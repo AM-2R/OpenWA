@@ -108,7 +108,8 @@ export function Infrastructure() {
       const dbExternalRetarget =
         !db.builtIn &&
         !!loaded &&
-        (db.port !== (loaded.database.port || '5432') || db.database !== (loaded.database.database || 'openwa'));
+        ((!pinned('DATABASE_PORT') && db.port !== (loaded.database.port || '5432')) ||
+          (!pinned('DATABASE_NAME') && db.database !== (loaded.database.database || 'openwa')));
       const dbSwitch =
         !!infraStatus &&
         (dbType !== infraStatus.database.type ||
@@ -123,7 +124,9 @@ export function Infrastructure() {
       const endpoint =
         pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storageBuiltIn ? 'http://minio:9000' : storage.s3Endpoint);
       const bucket =
-        (storageBuiltIn ? (keepsBucket ? savedConfig?.storage.s3Bucket : 'openwa') : storage.s3Bucket) || 'openwa';
+        (pinned('S3_BUCKET')?.storage.s3Bucket ??
+          (storageBuiltIn ? (keepsBucket ? savedConfig?.storage.s3Bucket : 'openwa') : storage.s3Bucket)) ||
+        'openwa';
       const storageSwitch =
         !!infraStatus &&
         (storageType !== infraStatus.storage.type ||
@@ -258,7 +261,8 @@ export function Infrastructure() {
   // Pin-only: PUPPETEER_ARGS cannot go through settingNote, because the running list is re-tokenized and
   // gains the pinned `--lang` flag, so it never string-compares equal to the saved value. The headless
   // flag and the two paths do have a running and a saved value, but show only a reported pin as well, and so
-  // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides.
+  // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides, and every other setting a
+  // save writes, after the row that holds its field (a note inside a narrow port field would not fit).
   const pinNote = (envKey: string) =>
     infraStatus?.envPinned?.includes(envKey) ? (
       <p className="env-pin-note">
@@ -370,6 +374,7 @@ export function Infrastructure() {
                 namesBundledContainer('postgres', infraStatus.database.host),
               )}
               {pinNote('DATABASE_HOST')}
+              {pinNote('POSTGRES_BUILTIN')}
 
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
@@ -393,6 +398,7 @@ export function Infrastructure() {
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_PORT')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-3">{t('common.username')}</label>
@@ -414,6 +420,8 @@ export function Infrastructure() {
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_USERNAME')}
+                  {pinNote('DATABASE_PASSWORD')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-5">{t('infrastructure.database.dbName')}</label>
@@ -444,6 +452,8 @@ export function Infrastructure() {
                       />
                     </div>
                   </div>
+                  {pinNote('DATABASE_NAME')}
+                  {pinNote('DATABASE_POOL_SIZE')}
                   <div className="form-row">
                     <div className="form-group">
                       <label htmlFor="infra-7">{t('infrastructure.database.schema')}</label>
@@ -457,6 +467,7 @@ export function Infrastructure() {
                       <small>{t('infrastructure.database.schemaDesc')}</small>
                     </div>
                   </div>
+                  {pinNote('POSTGRES_SCHEMA')}
                   <div className="toggle-row">
                     <div className="toggle-info">
                       <span id="toggle-db-ssl">{t('infrastructure.database.ssl')}</span>
@@ -472,6 +483,7 @@ export function Infrastructure() {
                       <span className="toggle-slider"></span>
                     </label>
                   </div>
+                  {pinNote('DATABASE_SSL')}
                   {configForm.dbConfig.sslEnabled && (
                     <div className="toggle-row">
                       <div className="toggle-info">
@@ -489,6 +501,7 @@ export function Infrastructure() {
                       </label>
                     </div>
                   )}
+                  {configForm.dbConfig.sslEnabled && pinNote('DATABASE_SSL_REJECT_UNAUTHORIZED')}
                 </div>
               )}
             </>
@@ -675,6 +688,7 @@ export function Infrastructure() {
                 namesBundledContainer('redis', infraStatus.redis.host),
               )}
               {pinNote('REDIS_HOST')}
+              {pinNote('REDIS_BUILTIN')}
 
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
@@ -709,6 +723,8 @@ export function Infrastructure() {
                       />
                     </div>
                   </div>
+                  {pinNote('REDIS_PORT')}
+                  {pinNote('REDIS_PASSWORD')}
                 </div>
               )}
 
@@ -876,6 +892,7 @@ export function Infrastructure() {
                   namesBundledContainer('minio', infraStatus.storage.endpoint),
                 )}
                 {pinNote('S3_ENDPOINT')}
+                {pinNote('MINIO_BUILTIN')}
 
                 {!configForm.storageConfig.builtIn && (
                   <>
@@ -899,6 +916,8 @@ export function Infrastructure() {
                         />
                       </div>
                     </div>
+                    {pinNote('S3_BUCKET')}
+                    {pinNote('S3_REGION')}
                     <div className="form-row">
                       <div className="form-group">
                         <label htmlFor="infra-16">{t('infrastructure.storage.accessKey')}</label>
@@ -920,6 +939,8 @@ export function Infrastructure() {
                         />
                       </div>
                     </div>
+                    {pinNote('S3_ACCESS_KEY_ID')}
+                    {pinNote('S3_SECRET_ACCESS_KEY')}
                     <div className="form-group">
                       <label htmlFor="infra-18">{t('infrastructure.storage.endpoint')}</label>
                       <input

@@ -1688,6 +1688,173 @@ test('a host the environment pins is named under its Use Built-in toggle', async
   assert.equal(hostPinNoteOf(container, 'Use Built-in MinIO Container'), 'S3_ENDPOINT');
 });
 
+// Every other setting a save writes, as GET /infra/status reports it: external services so each field shows.
+const RUNNING_EXTERNAL_ALL: InfraStatus = {
+  ...INFRA_STATUS,
+  database: { connected: true, type: 'postgres', host: 'db.ext.example', builtIn: false },
+  redis: { enabled: true, connected: true, host: 'cache.ext.example', port: 6379, builtIn: false },
+  queue: { enabled: true, webhooks: { pending: 0, completed: 0, failed: 0 } },
+  storage: { type: 's3', bucket: 'media', endpoint: 'https://s3.ext.example', builtIn: false, s3Available: true },
+};
+const SAVED_EXTERNAL_ALL: SavedConfig = {
+  ...SAVED_CONFIG,
+  database: { ...SAVED_CONFIG.database, host: 'db.ext.example', sslEnabled: true },
+  redis: {
+    enabled: true,
+    builtIn: false,
+    builtInSet: true,
+    host: 'cache.ext.example',
+    port: '6379',
+    passwordSet: true,
+  },
+  queue: { enabled: true },
+  storage: {
+    ...SAVED_CONFIG.storage,
+    type: 's3',
+    s3Bucket: 'media',
+    s3Region: 'eu-west-1',
+    s3Endpoint: 'https://s3.ext.example',
+    s3CredentialsSet: true,
+  },
+};
+const DETAIL_PINS = {
+  database: [
+    'POSTGRES_BUILTIN',
+    'DATABASE_PORT',
+    'DATABASE_USERNAME',
+    'DATABASE_PASSWORD',
+    'DATABASE_NAME',
+    'DATABASE_POOL_SIZE',
+    'POSTGRES_SCHEMA',
+    'DATABASE_SSL',
+    'DATABASE_SSL_REJECT_UNAUTHORIZED',
+  ],
+  redis: ['REDIS_BUILTIN', 'REDIS_PORT', 'REDIS_PASSWORD', 'QUEUE_ENABLED'],
+  storage: ['MINIO_BUILTIN', 'S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+};
+
+function infraCard(container: HTMLElement, heading: string): HTMLElement {
+  const card = Array.from(container.querySelectorAll<HTMLElement>('.infra-card')).find(
+    c => c.querySelector('h2')?.textContent === heading,
+  );
+  if (!card) throw new Error(`no card "${heading}"`);
+  return card;
+}
+
+/** The variables the pin notes right after an element name, in order. */
+function pinNamesAfter(element: Element | null | undefined): string[] {
+  const names: string[] = [];
+  for (
+    let next = element?.nextElementSibling;
+    next?.classList.contains('env-pin-note');
+    next = next.nextElementSibling
+  ) {
+    const name = ENV_PIN_NOTE.exec(next.textContent?.trim() ?? '')?.[1];
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+test('every setting a save writes names its variable beside its field when the environment pins it', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_EXTERNAL_ALL, envPinned: Object.values(DETAIL_PINS).flat() },
+    saved: SAVED_EXTERNAL_ALL,
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  const db = infraCard(container, 'Database Configuration');
+  const redis = infraCard(container, 'Redis');
+  const storage = infraCard(container, 'Storage Configuration');
+  const row = (card: HTMLElement, label: string) => fieldInput(card, label).closest('.form-row');
+  const toggleRow = (card: HTMLElement, label: string) => toggleInput(card, label).closest('.toggle-row');
+  assert.deepEqual(
+    {
+      dbBuiltIn: pinNamesAfter(toggleRow(db, 'Use Built-in PostgreSQL Container')),
+      dbHostRow: pinNamesAfter(row(db, 'Host')),
+      dbCredentialRow: pinNamesAfter(row(db, 'Username')),
+      dbNameRow: pinNamesAfter(row(db, 'Database Name')),
+      dbSchemaRow: pinNamesAfter(row(db, 'Schema')),
+      dbSsl: pinNamesAfter(toggleRow(db, 'SSL Connection')),
+      dbSslVerify: pinNamesAfter(toggleRow(db, 'Verify SSL Certificate')),
+      redisBuiltIn: pinNamesAfter(toggleRow(redis, 'Use Built-in Redis Container')),
+      redisRow: pinNamesAfter(row(redis, 'Host')),
+      queue: pinNamesAfter(toggleRow(redis, 'Enable BullMQ Queue System')),
+      storageBuiltIn: pinNamesAfter(toggleRow(storage, 'Use Built-in MinIO Container')),
+      storageBucketRow: pinNamesAfter(row(storage, 'Bucket Name')),
+      storageKeyRow: pinNamesAfter(row(storage, 'Access Key')),
+    },
+    {
+      dbBuiltIn: ['POSTGRES_BUILTIN'],
+      dbHostRow: ['DATABASE_PORT'],
+      dbCredentialRow: ['DATABASE_USERNAME', 'DATABASE_PASSWORD'],
+      dbNameRow: ['DATABASE_NAME', 'DATABASE_POOL_SIZE'],
+      dbSchemaRow: ['POSTGRES_SCHEMA'],
+      dbSsl: ['DATABASE_SSL'],
+      dbSslVerify: ['DATABASE_SSL_REJECT_UNAUTHORIZED'],
+      redisBuiltIn: ['REDIS_BUILTIN'],
+      redisRow: ['REDIS_PORT', 'REDIS_PASSWORD'],
+      queue: ['QUEUE_ENABLED'],
+      storageBuiltIn: ['MINIO_BUILTIN'],
+      storageBucketRow: ['S3_BUCKET', 'S3_REGION'],
+      storageKeyRow: ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+    },
+  );
+  const notes = Array.from(container.querySelectorAll('.env-pin-note')).map(note => note.textContent?.trim() ?? '');
+  assert.equal(notes.length, Object.values(DETAIL_PINS).flat().length, 'one note per pinned variable');
+});
+
+test('without a reported pin the settings a save writes show no pin note', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  overrides = { status: { ...RUNNING_EXTERNAL_ALL, envPinned: [] }, saved: SAVED_EXTERNAL_ALL };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+
+  const notes = Array.from(container.querySelectorAll('.env-pin-note')).map(note => note.textContent?.trim() ?? '');
+  assert.deepEqual(notes, []);
+});
+
+// The next boot reads a pinned bucket, port or database name whatever the form holds, so an edit there moves nothing;
+// a field beside it the pin does not cover still does.
+for (const { pin, label, value, warns } of [
+  { pin: 'S3_BUCKET', label: 'Bucket Name', value: 'newbucket', warns: false },
+  { pin: 'S3_BUCKET', label: 'Custom Endpoint (optional)', value: 'https://s3.new.example', warns: true },
+  { pin: 'DATABASE_NAME', label: 'Database Name', value: 'otherdb', warns: false },
+  { pin: 'DATABASE_PORT', label: 'Port', value: '5433', warns: false },
+  { pin: 'DATABASE_NAME', label: 'Host', value: 'db.new.example', warns: true },
+  { pin: 'DATABASE_PORT', label: 'Database Name', value: 'otherdb', warns: true },
+]) {
+  test(`with ${pin} pinned, an edit of ${label} ${warns ? 'still warns of a data move' : 'warns of no data move'}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: { ...RUNNING_EXTERNAL_ALL, envPinned: [pin] },
+      saved: {
+        ...SAVED_EXTERNAL_ALL,
+        database: { ...SAVED_EXTERNAL_ALL.database, port: '6432', database: 'appdb', sslEnabled: false },
+      },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    const card = infraCard(container, pin.startsWith('S3_') ? 'Storage Configuration' : 'Database Configuration');
+    fireEvent.change(fieldInput(card, label), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+    const dialog = await screen.findByRole('dialog');
+    const warning = pin.startsWith('S3_') ? STORAGE_WARNING : DB_SWITCH_WARNING;
+    assert.equal(within(dialog).queryByText(warning, { exact: false }) !== null, warns, 'the data-backend warning');
+  });
+}
+
 test('the engine radio seeds from the effective engine when ENGINE_TYPE is pinned', async () => {
   const { screen, waitFor } = rtl;
   resetFetchCalls();
