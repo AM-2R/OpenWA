@@ -20,22 +20,12 @@ export const LID_MAPPING_CACHE_DEFAULT = 5000;
 const LID_QUERY_CHUNK = 500;
 
 /**
- * How long a report waits after the same write failed. A database that is down or full would otherwise take
- * one failed statement, and log one warning, per inbound message from the contact. The same hold the
- * sender resolver gives a lid no store maps.
+ * How often a failed write is logged. A database that is down or full takes one failed statement per report
+ * that has something to write (each inbound message that carries the lid, while its write keeps failing),
+ * since a report held back would leave the table naming a number the contact no longer has; the warning is
+ * what is bounded, to one in this interval for the whole store, with a count of the failures in between.
  */
-const LID_WRITE_RETRY_MS = 60_000;
-
-/** A lid's failed phone write, and when a warning about the lid was last logged. */
-interface FailedWrite {
-  /** When it failed, in ms on the store's monotonic clock. */
-  at: number;
-  /** It was replacing another phone, which the table may still hold. */
-  stale: boolean;
-  warnedAt: number;
-  /** Failures since that warning that were not logged. */
-  unlogged: number;
-}
+const LID_WRITE_WARN_MS = 60_000;
 
 function chunk<T>(items: T[], size = LID_QUERY_CHUNK): T[][] {
   const out: T[][] = [];
@@ -72,8 +62,7 @@ export interface LidMappingStore {
    * this node already holds takes the row, unless this node already counted a report of it from that
    * session: after s1, s2, s1 report one phone the owner is s2. A `null` phone records a negative result,
    * and replaces a stored phone only when its owner (or none, or one since deleted or logged out) gives it.
-   * Never rejects; resolves false when the report did not reach the table (its write failed, or waits after
-   * one that did).
+   * Never rejects; resolves false when its write failed.
    */
   remember(lid: string, phone: string | null, sessionId?: string): Promise<boolean>;
 }
@@ -141,12 +130,12 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   private readonly seenBy = new Map<string, Set<string>>();
   /**
    * Cached lids whose phone failed to write here (see {@link unstored}). Kept only while the cache holds that
-   * phone: dropped with the cached entry, and once a write of it lands or a negative clears the row. The same
-   * phone reported again waits {@link LID_WRITE_RETRY_MS} before it writes, from any session, so a failing
-   * database takes one statement per lid a minute. A write that was replacing another phone does not wait:
-   * until it lands the table may still name the old number, and a restart inside the wait would load it.
+   * phone: dropped with the cached entry, and once a write of it lands or a negative clears the row.
    */
-  private readonly failedWrites = new Map<string, FailedWrite>();
+  private readonly failedWrites = new Set<string>();
+  /** When a failed write was last logged, on {@link now}, and how many have failed since without a line. */
+  private writeWarnedAt = -Infinity;
+  private unloggedWriteFailures = 0;
   /** Monotonic clock in ms (a seam for tests). */
   private readonly now = (): number => performance.now();
   // 0 = unbounded (legacy behaviour). Every other long-lived map in the engine surface is bounded, so
@@ -345,8 +334,6 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     if (cached === phone && (phone === null || !sessionId || this.seenBy.get(lid)?.has(sessionId))) {
       return true;
     }
-    const failed = this.failedWrites.get(lid);
-    if (cached === phone && failed && !failed.stale && this.now() - failed.at < LID_WRITE_RETRY_MS) return false;
     // A negative is not cached until the table has taken it: see clear().
     if (phone !== null) this.index(lid, phone, sessionId ?? null);
     this.unsettledWrites.set(lid, (this.unsettledWrites.get(lid) ?? 0) + 1);
@@ -361,12 +348,10 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     } catch (err) {
       // The table does not have this report, so the session's next one writes again.
       if (sessionId) this.seenBy.get(lid)?.delete(sessionId);
-      const message = `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`;
-      if (phone !== null && this.lidToPhone.get(lid) === phone) {
-        this.noteFailedWrite(lid, typeof cached === 'string' && cached !== phone, message);
-      } else {
-        this.logger.warn(message);
-      }
+      if (phone !== null && this.lidToPhone.get(lid) === phone) this.failedWrites.add(lid);
+      this.warnWriteFailed(
+        `Failed to persist lid->phone mapping for ${lid}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return false;
     } finally {
       const left = (this.unsettledWrites.get(lid) ?? 1) - 1;
@@ -417,21 +402,17 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     this.absentFromTable.delete(lid);
   }
 
-  /** Record a failed phone write for {@link failedWrites}, and log it once a lid per hold, counting the rest. */
-  private noteFailedWrite(lid: string, replacing: boolean, message: string): void {
+  /** Log a failed write at most once per {@link LID_WRITE_WARN_MS}, counting the ones in between. */
+  private warnWriteFailed(message: string): void {
     const now = this.now();
-    const failed = this.failedWrites.get(lid) ?? { at: now, stale: false, warnedAt: -Infinity, unlogged: 0 };
-    Object.assign(failed, { at: now, stale: replacing || failed.stale });
-    if (now - failed.warnedAt >= LID_WRITE_RETRY_MS) {
-      this.logger.warn(
-        failed.unlogged ? `${message} (${failed.unlogged} more failed since the last warning)` : message,
-      );
-      failed.warnedAt = now;
-      failed.unlogged = 0;
-    } else {
-      failed.unlogged++;
+    if (now - this.writeWarnedAt < LID_WRITE_WARN_MS) {
+      this.unloggedWriteFailures++;
+      return;
     }
-    this.failedWrites.set(lid, failed);
+    const unlogged = this.unloggedWriteFailures;
+    this.logger.warn(unlogged ? `${message} (${unlogged} more failed since the last warning)` : message);
+    this.writeWarnedAt = now;
+    this.unloggedWriteFailures = 0;
   }
 
   /**
