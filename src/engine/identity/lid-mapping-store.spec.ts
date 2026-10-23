@@ -1066,6 +1066,46 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
   });
 
+  it('writes a new phone on the next report when its first write failed', async () => {
+    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember('111', '628111', s1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockClear();
+    expect(await row('111')).toBeNull();
+
+    await store.remember('111', '628111', s1);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+  });
+
+  it('writes a negative again when its first attempt failed', async () => {
+    await store.remember('111', '628111', s1);
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember('111', null, s1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockClear();
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+
+    await store.remember('111', null, s1);
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: s1 });
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+  });
+
+  it('takes the row on the next report of a session whose negative failed to write', async () => {
+    await store.remember('111', '628111', s2);
+    await store.remember('111', '628111', s1);
+    jest.spyOn(repo, 'update').mockRejectedValueOnce(new Error('connection lost'));
+    await store.remember('111', null, s2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockClear();
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+
+    await store.remember('111', '628111', s2);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s2 });
+  });
+
   it('keeps a phone stored while the negative of another session is being written', async () => {
     const update = hold('update');
     const negative = store.remember('111', null, s2);
