@@ -33,6 +33,70 @@ class User {
   }
 }
 
+describe.each(['stored read', 'next key'] as const)('Read receipt identity after %s', phase => {
+  it.each(['unchanged', 'retired', 'replaced'] as const)('keeps preparation on the %s socket', async state => {
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const result = (lid: string) => ({ list: [{ id: '628111@s.whatsapp.net', lid }] });
+    const makeSocket = () => ({
+      executeUSyncQuery: jest.fn().mockResolvedValue(result('222@lid')),
+      readMessages: jest.fn().mockResolvedValue(undefined),
+    });
+    const first = makeSocket();
+    first.executeUSyncQuery.mockResolvedValueOnce(result('111@lid'));
+    const replacement = makeSocket();
+    let current: typeof first | null = first;
+    const changeSocket = () => {
+      if (state === 'retired') current = null;
+      if (state === 'replaced') current = replacement;
+    };
+    const recordLidMapping = jest.fn(() => {
+      if (phase === 'next key') changeSocket();
+    });
+    const host = {
+      ensureReady: () => undefined,
+      getSocket: () => {
+        if (!current) throw new EngineNotReadyError();
+        return current as unknown as WASocket;
+      },
+      loadLib: () => Promise.resolve({ USyncQuery: Query, USyncUser: User }),
+      getStoredMessages: async () => {
+        if (phase === 'stored read') {
+          entered();
+          await gate;
+        }
+        return ['111', '222'].map((lid, i) => ({
+          key: { id: `M${i + 1}`, remoteJid: `${lid}@lid`, fromMe: false },
+        }));
+      },
+      findPersistedLidPhone: () => Promise.resolve(null),
+      recordLidMapping,
+      toEngineJid: (jid: string) => jid.replace('@c.us', '@s.whatsapp.net'),
+    } as unknown as BaileysContactsHost;
+    const pending = new BaileysContacts(host).sendSeen('628111@c.us', ['M1', 'M2']).catch((error: unknown) => error);
+    if (phase === 'stored read') {
+      await started;
+      changeSocket();
+      release();
+    }
+    const outcome: unknown = await pending;
+    if (state === 'unchanged') expect(outcome).toBe(true);
+    else expect(outcome).toBeInstanceOf(EngineNotReadyError);
+    const reports = state === 'unchanged' ? 2 : phase === 'next key' ? 1 : 0;
+    expect(recordLidMapping).toHaveBeenCalledTimes(reports);
+    expect(first.executeUSyncQuery).toHaveBeenCalledTimes(reports);
+    expect(replacement.executeUSyncQuery).not.toHaveBeenCalled();
+    expect(first.readMessages).toHaveBeenCalledTimes(state === 'unchanged' ? 1 : 0);
+    expect(replacement.readMessages).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(['persisted', 'fresh', 'library'] as const)('Chat identity prepared through %s mapping', source => {
   it.each(operations)('does not carry %s across a socket replacement', async (_name, act) => {
     let release!: () => void;

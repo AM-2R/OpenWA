@@ -386,7 +386,7 @@ export class BaileysContacts {
   async sendSeen(chatId: string, messageIds?: string[], authors?: ReadonlyMap<string, string>): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const keys = await this.receiptKeys(chatId, messageIds, authors);
+    const keys = await this.receiptKeys(socket, chatId, messageIds, authors);
     if (keys.length === 0) {
       return false; // nothing known to mark read
     }
@@ -418,6 +418,7 @@ export class BaileysContacts {
    * the receipt rather than sent as one WhatsApp may ignore.
    */
   private async receiptKeys(
+    socket: WASocket,
     chatId: string,
     messageIds?: string[],
     authors?: ReadonlyMap<string, string>,
@@ -428,7 +429,7 @@ export class BaileysContacts {
       // The newest RECEIVED message, not the preview: after an API reply the preview is an own key,
       // which Baileys drops from the receipt, so the call would answer true having sent nothing.
       const last = this.host.lastInboundMessage(chatId);
-      return last && (await this.matchesChat(last.key, chatId)) ? [last.key] : [];
+      return last && (await this.matchesChat(last.key, chatId, socket)) ? [last.key] : [];
     }
     if (messageIds.length === 0) {
       return []; // an explicit empty list asks for nothing to be acknowledged, not for the newest
@@ -446,7 +447,7 @@ export class BaileysContacts {
     // chat, which is exactly what every id ran on before stored keys existed.
     const keyById = new Map<string, WAMessageKey>();
     for (const msg of stored) {
-      if (msg.key?.id && msg.key.remoteJid && (await this.matchesChat(msg.key, chatId))) {
+      if (msg.key?.id && msg.key.remoteJid && (await this.matchesChat(msg.key, chatId, socket))) {
         keyById.set(msg.key.id, msg.key);
       }
     }
@@ -460,8 +461,8 @@ export class BaileysContacts {
     });
   }
 
-  private async matchesChat(key: WAMessageKey, chatId: string): Promise<boolean> {
-    const socket = this.sock();
+  private async matchesChat(key: WAMessageKey, chatId: string, expected?: WASocket): Promise<boolean> {
+    const socket = this.sock(expected);
     const persisted = await storedKeyInChatPersisted(key, chatId, jid => this.host.findPersistedLidPhone(jid));
     this.sock(socket);
     if (persisted) return true;
