@@ -537,6 +537,23 @@ describe.each([
     expect(events('message.received')).toEqual([expect.objectContaining({ body: 'fixed', edited: true })]);
   });
 
+  it('announces a message edited and then deleted for me while the hook runs as deleted, without the mark', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    client.emit('message', incoming('A', 'orig'));
+    await flush();
+    editEvent(client, 'A', 'fixed');
+    await flush();
+    const deleted = projector.recordRevoke('s1', 'A', { kind: 'revoke', chatId: CHAT });
+    hook.resolve();
+    await deleted;
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: '', type: 'revoked', metadata: null })]);
+    expect(events('message.received')).toEqual([expect.objectContaining({ body: '', type: 'revoked' })]);
+    expect(events('message.received')[0]).not.toHaveProperty('edited');
+  });
+
   it.each([
     ['before', true],
     ['after', false],
@@ -691,6 +708,68 @@ describe.each([
     await flush();
 
     expect(sentMarks()).toEqual([undefined, undefined]);
+    expect(events('message.sent')[1]).not.toHaveProperty('edited');
+  });
+
+  // A delete for me raises no revoke event: the REST delete alone takes the message back.
+  it('announces an own message delivered again while its edit is written and deleted for me, without the mark', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    const write = deferred<void>();
+    holdWrite = patch => (patch.body === 'e1' ? write.promise : undefined);
+    editEvent(client, 'S', 'e1', { fromMe: true });
+    client.emit('message_create', own('S', 'e1'));
+    await flush();
+    const deleted = projector.recordRevoke('s1', 'S', { kind: 'revoke', chatId: CHAT });
+    await flush();
+    write.resolve();
+    await deleted;
+    await flush();
+
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'S', body: '', type: 'revoked', metadata: null })]);
+    expect(events('message.sent')).toEqual([
+      expect.objectContaining({ body: 'orig', type: 'text' }),
+      expect.objectContaining({ body: '', type: 'revoked' }),
+    ]);
+    expect(events('message.sent')[1]).not.toHaveProperty('edited');
+  });
+
+  it('announces an own message delivered again as deleted without the mark its row still has', async () => {
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    client.emit('message_create', { ...own('S', ''), type: 'revoked' });
+    await flush();
+
+    expect(events('message.sent')).toEqual([
+      expect.objectContaining({ body: 'orig', type: 'text' }),
+      expect.objectContaining({ body: '', type: 'revoked' }),
+    ]);
+    expect(events('message.sent')[1]).not.toHaveProperty('edited');
+  });
+
+  // Its commit waits behind an earlier message of the chat, whose hook runs meanwhile.
+  it('announces an own message delivered again as deleted while its edit waits with it, without the mark', async () => {
+    const hook = deferred<void>();
+    hookGate = hook.promise;
+    client.emit('message', incoming('P', 'earlier'));
+    await flush();
+    client.emit('message_create', own('S', 'orig'));
+    await flush();
+    editEvent(client, 'S', 'e0', { fromMe: true });
+    await flush();
+    client.emit('message_create', { ...own('S', ''), type: 'revoked' });
+    await flush();
+    hook.resolve();
+    await flush();
+
+    expect(events('message.sent')).toEqual([
+      expect.objectContaining({ body: 'e0', type: 'text', edited: true }),
+      expect.objectContaining({ type: 'revoked' }),
+    ]);
     expect(events('message.sent')[1]).not.toHaveProperty('edited');
   });
 

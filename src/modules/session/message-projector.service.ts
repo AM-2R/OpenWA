@@ -1044,13 +1044,14 @@ export class MessageProjector {
    * null once the engine revoked it (message.revoked already went out, so the deleted content is not
    * announced after it), the revoked placeholder when only the REST delete did (a delete-for-me emits no
    * engine revoke, and the message still exists for its sender), the edited body when edited
-   * (message.edited already went out with it), plus `edited: true` when the row is marked for it: a consumer
-   * that held no copy of the message could not apply that event. The stored row takes the same changes in
-   * {@link applyChangesMadeInFlight}.
+   * (message.edited already went out with it), plus `edited: true` when the row is marked for it or already
+   * was (`rowMarked`): a consumer that held no copy of the message could not apply that event. A message
+   * announced deleted carries no mark. The stored row takes the same changes in {@link applyChangesMadeInFlight}.
    */
   private withChangesMadeInFlight(
     id: string,
     message: InboundMessageData,
+    rowMarked = false,
   ): (InboundMessageData & { edited?: true }) | null {
     const pending = this.inboundInFlight.get(`${id}:${message.id}`);
     if (pending?.revokeAnnounced) return null;
@@ -1061,9 +1062,11 @@ export class MessageProjector {
         message;
       return { ...kept, body: '', type: 'revoked' };
     }
+    // The mark described content a message delivered deleted no longer has.
+    const edited = (rowMarked || pending?.edited) && message.type !== 'revoked';
     // An edit the engine applied before the hand-over is in the body already.
-    if (pending?.editedBody === undefined) return pending?.edited ? { ...message, edited: true as const } : message;
-    return { ...message, body: pending.editedBody, ...(pending.edited ? { edited: true as const } : {}) };
+    if (pending?.editedBody === undefined) return edited ? { ...message, edited: true as const } : message;
+    return { ...message, body: pending.editedBody, ...(edited ? { edited: true as const } : {}) };
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
@@ -1230,9 +1233,8 @@ export class MessageProjector {
       }
     }
 
-    const announced = this.withChangesMadeInFlight(id, finalMessage);
-    if (!announced) return;
-    const sent = rowMarked ? { ...announced, edited: true as const } : announced;
+    const sent = this.withChangesMadeInFlight(id, finalMessage, rowMarked);
+    if (!sent) return;
     void this.webhookService.dispatch(id, 'message.sent', sent);
     // Emit real-time event to WebSocket clients (as message.sent, not message.received)
     this.eventsGateway.emitMessageSent(id, sent);
