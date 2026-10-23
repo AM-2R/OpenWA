@@ -1,5 +1,17 @@
+import * as timers from 'timers/promises';
 import { DataSource } from 'typeorm';
 import { awaitNoOpenTransaction } from './shared-connection';
+
+// Fake timers leave timers/promises alone, so the helper's waits are watched here; they still run for real.
+jest.mock('timers/promises', () => {
+  const actual = jest.requireActual<typeof import('timers/promises')>('timers/promises');
+  return {
+    __esModule: true,
+    ...actual,
+    setImmediate: jest.fn(actual.setImmediate),
+    setTimeout: jest.fn(actual.setTimeout),
+  };
+});
 
 describe('awaitNoOpenTransaction', () => {
   let db: DataSource;
@@ -14,8 +26,15 @@ describe('awaitNoOpenTransaction', () => {
 
   it('resolves at once where each runner has a connection of its own, or none reports its state', async () => {
     jest.useFakeTimers();
+    jest.mocked(timers.setImmediate).mockClear();
+    jest.mocked(timers.setTimeout).mockClear();
     await expect(awaitNoOpenTransaction({ options: { type: 'postgres' } } as DataSource)).resolves.toBe(true);
     await expect(awaitNoOpenTransaction({ options: { type: 'better-sqlite3' } } as DataSource)).resolves.toBe(true);
+    expect(timers.setImmediate).not.toHaveBeenCalled();
+    expect(timers.setTimeout).not.toHaveBeenCalled();
+    // The shared connection does take its turn, so the two checks above watch the waits the helper makes.
+    await expect(awaitNoOpenTransaction(db)).resolves.toBe(true);
+    expect(timers.setImmediate).toHaveBeenCalledTimes(1);
   });
 
   it('waits for a transaction open on the shared connection to end', async () => {
