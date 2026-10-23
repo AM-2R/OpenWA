@@ -326,8 +326,8 @@ export class SessionEngineControls {
 
       // An operator's stop outranks any start but POST /start, so this refuses boot auto-start and
       // the takeover sweep, which pick their rows once and launch them seconds apart, when a stop
-      // landed after that read.
-      if (session.desiredState === 'stopped' && !explicit) {
+      // landed after that read. A delete's record ('deleting') counts as one.
+      if (session.desiredState && !explicit) {
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
 
@@ -390,7 +390,7 @@ export class SessionEngineControls {
       // mark again and retires this start after its init. A launch that fails after the clear still
       // counts as the start the operator asked for.
       const { desiredState } = await this.requireSession(id);
-      if (desiredState === 'stopped' && (!explicit || session.desiredState !== 'stopped')) {
+      if (desiredState && (!explicit || !session.desiredState)) {
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }
@@ -406,8 +406,8 @@ export class SessionEngineControls {
       if (this.host.isClosed()) {
         throw closedRefusal();
       }
-      if (desiredState === 'stopped') {
-        await this.sessionRepository.update({ id, desiredState: 'stopped' }, { desiredState: null });
+      if (desiredState) {
+        await this.sessionRepository.update({ id, desiredState }, { desiredState: null });
         // The clear stands (this start was the operator's), but the hook must not fire for a start
         // shutdown overtook during the write.
         if (this.host.isClosed()) {

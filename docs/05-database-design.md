@@ -346,8 +346,9 @@ CREATE TABLE sessions (
     "leaseExpiresAt" TIMESTAMP,
     -- 'stopped' after POST /stop or /force-kill, NULL again after an explicit POST /start. Boot
     -- auto-start and the takeover sweep skip a stopped row. Server-owned: not in any session
-    -- response, only in the /api/infra/export-data backup. A DELETE writes it too: kept when the
-    -- delete fails part-way or its node dies, taken back when it fails before removing anything.
+    -- response, only in the /api/infra/export-data backup. A DELETE writes 'deleting', read the
+    -- same way: kept when the delete fails part-way or its node dies, taken back when it fails
+    -- before removing anything, unless a stop was recorded over it meanwhile.
     "desiredState" VARCHAR(20),
     "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()

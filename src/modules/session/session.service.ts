@@ -748,24 +748,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Record the delete as a stop on a row that has none, so a session whose delete ends part-way, with the
    * process that ran it, stays down: no peer adopts it and no boot starts it. Written after a take-back in
-   * progress, which would otherwise clear it.
+   * progress, which would otherwise clear it. 'deleting' rather than 'stopped', so the take-back can tell it
+   * from a stop that replaced it, also one another node recorded.
    */
   private async keepDownForDelete(id: string, stops: DeleteStops): Promise<void> {
     if (stops.givingBack) await stops.givingBack;
     const { affected } = await this.sessionRepository.update(
       { id, desiredState: IsNull() },
-      { desiredState: 'stopped' },
+      { desiredState: 'deleting' },
     );
     if (affected === 1) stops.recorded = true;
   }
 
   /**
    * Undo keepDownForDelete; answers whether the record is off the row. Best effort: the delete's own error is
-   * the answer, and a stop left on is safe.
+   * the answer, and a stop left on is safe. A stop recorded over it since is left alone.
    */
   private async clearDeleteStop(id: string): Promise<boolean> {
     try {
-      await this.sessionRepository.update({ id, desiredState: 'stopped' }, { desiredState: null });
+      await this.sessionRepository.update({ id, desiredState: 'deleting' }, { desiredState: null });
       return true;
     } catch (error) {
       this.logger.warn(`Could not clear the stop a failed delete recorded for session ${id}`, {
@@ -1095,7 +1096,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   /**
    * Re-record a stop an explicit start may have erased. The start clears the stop record with a
-   * write conditional on the row still reading 'stopped', and a stop's own write leaves that value
+   * write conditional on the row still reading what it read, and a stop's own write leaves 'stopped'
    * unchanged, so a stop landing just before the clear was wiped from the row while its in-memory
    * mark retired the start. The session was down, but the next boot would relaunch it. Any stop
    * counted while the start ran and leaving no engine behind is the operator's last word. A failed

@@ -50,6 +50,8 @@
 > Nothing else revisits such a row, since the boot reset skips a foreign claim that is still live.
 > A session an operator stopped (`POST /stop` or `/force-kill`), or whose `DELETE` failed part-way or
 > died with its node, is never adopted, even when its claim did lapse, until an explicit `POST /start`.
+> While versions are mixed during an upgrade, a node still on 0.25.0 does not read a `DELETE`'s record:
+> it can adopt such a session, and a `POST /start` it serves leaves the record in place.
 >
 > Known limitation: a holder that is alive but cannot reach the database for more than three lease
 > TTLs minus one heartbeat (160s at defaults) is marked disconnected by a peer too, and does not write its status back when it reconnects. Its

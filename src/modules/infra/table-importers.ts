@@ -165,9 +165,10 @@ export const TABLE_IMPORTERS: AnyTableImporter[] = [
       session.lastActiveAt,
       session.createdAt,
       session.updatedAt,
-      // 'stopped' is the only value the column holds. A backup written before the column existed,
-      // or an unknown value, restores as NULL: eligible for auto-start and takeover, as before.
-      session.desiredState === 'stopped' ? 'stopped' : null,
+      // A failed delete's 'deleting' restores as 'stopped': no delete runs for the restored row. A
+      // backup written before the column existed, or an unknown value, restores as NULL: eligible for
+      // auto-start and takeover, as before.
+      session.desiredState === 'stopped' || session.desiredState === 'deleting' ? 'stopped' : null,
     ],
   }),
 

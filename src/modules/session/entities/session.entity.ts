@@ -83,13 +83,13 @@ export class Session {
 
   /**
    * Operator intent, server-owned and not part of any session response (only the export-data
-   * backup carries it): 'stopped' once POST /stop or POST /force-kill took the session down, or
-   * while a DELETE runs (kept if it fails part-way), cleared again by an explicit POST /start. Boot
-   * auto-start and the takeover sweep skip a stopped row, so a deliberate stop survives a restart.
-   * NULL (every row that predates the column) means eligible, exactly as before.
+   * backup carries it): 'stopped' once POST /stop or POST /force-kill took the session down, and
+   * 'deleting' while a DELETE runs (kept if it fails part-way), both cleared again by an explicit
+   * POST /start. Boot auto-start and takeover skip a row holding either, so a deliberate stop
+   * survives a restart. NULL (every row that predates the column) means eligible, as before.
    */
   @Column({ type: 'varchar', length: 20, nullable: true })
-  desiredState!: 'stopped' | null;
+  desiredState!: 'stopped' | 'deleting' | null;
 
   @CreateDateColumn()
   createdAt!: Date;
