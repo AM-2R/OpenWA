@@ -491,7 +491,8 @@ export class MessageProjector {
     return turn.hookGate.promise.then(() => {
       if (!this.engines.isLive(id, engine)) return null;
       if (entry.revoked) return messageData;
-      if (entry.editedBody !== undefined) messageData.body = entry.editedBody;
+      // A delivery that came deleted has no text for the edit to replace.
+      if (entry.editedBody !== undefined && messageData.type !== 'revoked') messageData.body = entry.editedBody;
       return run();
     });
   }
@@ -1043,10 +1044,10 @@ export class MessageProjector {
    * The message as a revoke or edit that arrived while it was in flight left it, for its announcement:
    * null once the engine revoked it (message.revoked already went out, so the deleted content is not
    * announced after it), the revoked placeholder when only the REST delete did (a delete-for-me emits no
-   * engine revoke, and the message still exists for its sender), the edited body when edited
-   * (message.edited already went out with it), plus `edited: true` when the row is marked for it or already
-   * was (`rowMarked`): a consumer that held no copy of the message could not apply that event. A message
-   * announced deleted carries no mark. The stored row takes the same changes in {@link applyChangesMadeInFlight}.
+   * engine revoke, and the message still exists for its sender) or when it was delivered deleted, the edited
+   * body when edited (message.edited already went out with it), plus `edited: true` when the row is marked
+   * for it or already was (`rowMarked`): a consumer that held no copy of the message could not apply that
+   * event. The stored row takes the same changes in {@link applyChangesMadeInFlight}.
    */
   private withChangesMadeInFlight(
     id: string,
@@ -1055,15 +1056,14 @@ export class MessageProjector {
   ): (InboundMessageData & { edited?: true }) | null {
     const pending = this.inboundInFlight.get(`${id}:${message.id}`);
     if (pending?.revokeAnnounced) return null;
-    if (pending?.revoked) {
-      // Nothing of the content survives, as in REVOKED_ROW_PATCH.
+    if (pending?.revoked || message.type === 'revoked') {
+      // Nothing of the content survives, as in REVOKED_ROW_PATCH: no edit held for it, and no mark.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { media, quotedMessage, call, buttons, button, location, order, product, poll, mentionedIds, ...kept } =
         message;
       return { ...kept, body: '', type: 'revoked' };
     }
-    // The mark described content a message delivered deleted no longer has.
-    const edited = (rowMarked || pending?.edited) && message.type !== 'revoked';
+    const edited = rowMarked || pending?.edited;
     // An edit the engine applied before the hand-over is in the body already.
     if (pending?.editedBody === undefined) return edited ? { ...message, edited: true as const } : message;
     return { ...message, body: pending.editedBody, ...(edited ? { edited: true as const } : {}) };

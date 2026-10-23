@@ -768,9 +768,11 @@ describe.each([
 
     expect(events('message.sent')).toEqual([
       expect.objectContaining({ body: 'e0', type: 'text', edited: true }),
-      expect.objectContaining({ type: 'revoked' }),
+      expect.objectContaining({ body: '', type: 'revoked' }),
     ]);
     expect(events('message.sent')[1]).not.toHaveProperty('edited');
+    // The message:sent hook of the delivery that came deleted is given no text either.
+    expect(hooked[hooked.length - 1]).toBe('');
   });
 
   it('announces an own message delivered again after its delete and an API edit of it without the mark', async () => {
