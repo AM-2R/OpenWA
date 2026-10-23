@@ -118,6 +118,29 @@ test('the config dialog tabs are padded less on a narrow phone', () => {
   assert.equal(decl(phone[0].body, 'min-width'), undefined);
 });
 
+// A media block overrides its base rule by coming after it: the selector, and so the weight, is the same, so source
+// order decides. A base rule below the block wins at every width and the block does nothing, whatever it declares.
+const properties = (body: string): string[] => [...body.matchAll(/(?:^|;)\s*([\w-]+)\s*:/g)].map(m => m[1]);
+// A `padding` shorthand below a block beats its `padding-inline`, and the other way round.
+const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(`${b}-`) || b.startsWith(`${a}-`);
+
+test('no base rule comes after the media block that overrides it', () => {
+  const buried = rules.flatMap((block, i) =>
+    !block.media
+      ? []
+      : rules
+          .slice(i + 1)
+          .filter(
+            base =>
+              !base.media &&
+              base.selectors.some(s => block.selectors.includes(s)) &&
+              properties(block.body).some(p => properties(base.body).some(q => overlaps(p, q))),
+          )
+          .map(base => `${block.media} ${block.selectors.join(', ')} is overridden by ${base.selectors.join(', ')}`),
+  );
+  assert.deepEqual(buried, []);
+});
+
 // Beside the 280px status rail the card grid keeps a 320px minimum track. With the sidebar open that needs 948px
 // of viewport; from 861px up to there the cards were wider than their column and lost their right edge and their
 // action buttons. Below that the rail stacks above the cards.
