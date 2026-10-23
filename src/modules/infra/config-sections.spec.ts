@@ -204,3 +204,49 @@ it.each(cases)(
     expect(merged).toEqual(expected);
   },
 );
+
+function savedValues(existing: Record<string, string>, ctx: ConfigSectionContext): Record<string, string> {
+  const saved = { ...existing, ...ctx.updates };
+  for (const key of ctx.staleKeys) delete saved[key];
+  return saved;
+}
+
+function context(): ConfigSectionContext {
+  return { updates: {}, staleKeys: new Set(), profiles: [] };
+}
+
+it.each(['true', 'false'])(
+  'preserves stored bundled TLS keys beneath an external host pin with startup flag %s',
+  flag => {
+    process.env.DATABASE_HOST = 'db.external.example';
+    process.env.DATABASE_SSL = 'true';
+    recordPinnedEnvKeys({ DATABASE_HOST: process.env.DATABASE_HOST, DATABASE_SSL: 'true' });
+    const existing = {
+      DATABASE_TYPE: 'postgres',
+      DATABASE_HOST: 'openwa-POSTGRES.',
+      POSTGRES_BUILTIN: flag,
+      DATABASE_PASSWORD: 'StoredPassword123456',
+      DATABASE_SSL: 'false',
+      DATABASE_SSL_REJECT_UNAUTHORIZED: 'false',
+    };
+    const ctx = context();
+
+    applyDatabaseSection({ type: 'postgres', sslEnabled: true, sslRejectUnauthorized: true }, existing, ctx);
+
+    expect(savedValues(existing, ctx)).toEqual(existing);
+  },
+);
+
+it.each([true, false])('writes explicitly chosen database TLS under an external host pin, builtIn %s', builtIn => {
+  process.env.DATABASE_HOST = 'db.pinned.example';
+  recordPinnedEnvKeys({ DATABASE_HOST: process.env.DATABASE_HOST });
+  const existing = { DATABASE_TYPE: 'postgres', DATABASE_HOST: 'postgres', DATABASE_SSL: 'false' };
+  const ctx = context();
+
+  applyDatabaseSection({ builtIn, sslEnabled: true, sslRejectUnauthorized: false }, existing, ctx);
+
+  expect(savedValues(existing, ctx)).toMatchObject({
+    DATABASE_SSL: 'true',
+    DATABASE_SSL_REJECT_UNAUTHORIZED: 'false',
+  });
+});

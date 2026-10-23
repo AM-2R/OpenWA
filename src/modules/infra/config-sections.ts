@@ -80,10 +80,12 @@ export function applyDatabaseSection(
   // external host pin preserves the same stored service's connection details instead of applying its preset again.
   const dbBuiltIn = database.builtIn ?? namesBundledContainer('postgres', existing.DATABASE_HOST);
   if (type === 'postgres') {
-    if (
+    const preserveBundledDetails =
       dbBuiltIn &&
-      (database.builtIn !== undefined || existing.DATABASE_TYPE !== 'postgres' || !hostPinnedElsewhere('postgres'))
-    ) {
+      database.builtIn === undefined &&
+      existing.DATABASE_TYPE === 'postgres' &&
+      hostPinnedElsewhere('postgres');
+    if (dbBuiltIn && !preserveBundledDetails) {
       // Built-in PostgreSQL - use container name as host
       updates.DATABASE_HOST = 'postgres';
       updates.DATABASE_PORT = '5432';
@@ -149,11 +151,12 @@ export function applyDatabaseSection(
     }
     // The bundled container runs without TLS (getContainerSpec sets none up), so a built-in database the next boot
     // dials there connects without it: SSL kept from an external server would refuse every connection. Beside a host
-    // pinned elsewhere the next boot dials that server, and the setting sent stays.
+    // pinned elsewhere an inherited bundled choice keeps its stored TLS keys with its other connection details;
+    // an explicit choice still writes the setting sent for that pinned server.
     if (dbBuiltIn && !hostPinnedElsewhere('postgres')) {
       updates.DATABASE_SSL = 'false';
       staleKeys.add('DATABASE_SSL_REJECT_UNAUTHORIZED');
-    } else if (database.sslEnabled !== undefined) {
+    } else if (!preserveBundledDetails && database.sslEnabled !== undefined) {
       updates.DATABASE_SSL = database.sslEnabled ? 'true' : 'false';
       if (database.sslEnabled) {
         // Default to certificate verification; only relax it when the operator opts out
