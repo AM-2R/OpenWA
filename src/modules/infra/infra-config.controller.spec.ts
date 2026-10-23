@@ -1146,6 +1146,44 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
         const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
 
         expect(dotenv.parse(written({ database: {}, redis: {}, storage: {} }, stored))).toEqual(dotenv.parse(stored));
+        expect(
+          dotenv.parse(
+            written(
+              {
+                database: {
+                  host: 'db.ext.example',
+                  port: '5432',
+                  username: 'pinned-user',
+                  database: 'pinned-db',
+                  schema: 'pinned_schema',
+                },
+                redis: { host: 'cache.ext.example', port: '6379' },
+                storage: { s3Endpoint: 'https://s3.ext.example', s3Bucket: 'pinned-bucket', s3Region: 'pinned-region' },
+              },
+              stored,
+            ),
+          ),
+        ).toEqual(dotenv.parse(stored));
+        const explicit = dotenv.parse(
+          written({ database: { builtIn: true }, redis: { builtIn: true }, storage: { builtIn: true } }, stored),
+        );
+        const expectedExplicit: Record<string, string> = {
+          ...dotenv.parse(stored),
+          POSTGRES_BUILTIN: 'true',
+          REDIS_BUILTIN: 'true',
+          MINIO_BUILTIN: 'true',
+          DATABASE_PORT: '5432',
+          DATABASE_USERNAME: 'openwa',
+          DATABASE_NAME: 'openwa',
+          POSTGRES_SCHEMA: 'public',
+          REDIS_PORT: '6379',
+          S3_BUCKET: 'openwa',
+          S3_REGION: 'us-east-1',
+          S3_ACCESS_KEY_ID: 'StoredKey123456',
+          S3_SECRET_ACCESS_KEY: 'StoredSecret1234567890',
+        };
+        delete expectedExplicit.REDIS_PASSWORD;
+        expect(explicit).toEqual(expectedExplicit);
         expect(dotenv.parse(written({ database: { poolSize: 25 }, redis: {}, storage: {} }, stored))).toEqual({
           ...dotenv.parse(stored),
           DATABASE_POOL_SIZE: '25',
