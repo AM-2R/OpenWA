@@ -117,10 +117,12 @@ export function applyDatabaseSection(
       // A newly initialized bundled database starts in public; an existing one keeps its schema.
       updates.POSTGRES_SCHEMA = kept.POSTGRES_SCHEMA || 'public';
     } else if (!dbBuiltIn) {
-      // External PostgreSQL. Flipping built-in -> external must not carry the bundled
-      // 'openwa' password into the external config: the production boot guard rejects
-      // it, so the next boot would crash-loop. A password in the same payload wins.
-      if (database.builtIn === false && existing.POSTGRES_BUILTIN === 'true' && !database.password) {
+      // Only an already selected external PostgreSQL owns the stored password. Startup flags do not
+      // identify its server, and inactive SQLite details must not seed a newly selected service.
+      if (
+        (existing.DATABASE_TYPE !== 'postgres' || namesBundledContainer('postgres', existing.DATABASE_HOST)) &&
+        !database.password
+      ) {
         staleKeys.add('DATABASE_PASSWORD');
       }
       // A blank host or user is what boot reads as unset, which it refuses for PostgreSQL, so a padded or
@@ -288,14 +290,13 @@ export function applyStorageSection(
       updates.S3_BUCKET = kept.S3_BUCKET || 'openwa';
       updates.S3_REGION = kept.S3_REGION || 'us-east-1';
     } else if (!storageBuiltIn) {
-      // External S3/MinIO. Flipping built-in -> external must not carry the bundled
-      // 'minioadmin' credentials or the internal endpoint into the external config:
-      // the production boot guard rejects those credentials (crash-loop), and a stale
-      // MinIO endpoint would send AWS-bound traffic to the wrong host. Values in the
-      // same payload win.
-      if (storage.builtIn === false && existing.MINIO_BUILTIN === 'true') {
+      // Only an already selected external S3 service owns the stored credentials and endpoint.
+      // A new external selection must not reuse bundled or inactive local-storage details.
+      if (existing.STORAGE_TYPE !== 's3' || namesBundledContainer('minio', existing.S3_ENDPOINT)) {
         if (!storage.s3AccessKey) staleKeys.add('S3_ACCESS_KEY_ID');
         if (!storage.s3SecretKey) staleKeys.add('S3_SECRET_ACCESS_KEY');
+        staleKeys.add('S3_ACCESS_KEY');
+        staleKeys.add('S3_SECRET_KEY');
         if (!storage.s3Endpoint) staleKeys.add('S3_ENDPOINT');
       }
       if (storage.s3Bucket !== undefined) updates.S3_BUCKET = storage.s3Bucket;

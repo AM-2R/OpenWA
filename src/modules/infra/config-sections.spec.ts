@@ -182,7 +182,9 @@ it.each(cases)(
         existing,
         ctx,
       );
-      if (builtIn === false)
+      if (builtIn === false) {
+        delete expected.S3_ACCESS_KEY;
+        delete expected.S3_SECRET_KEY;
         Object.assign(expected, {
           S3_ENDPOINT: 'https://new.external.example',
           S3_BUCKET: 'new-bucket',
@@ -190,7 +192,7 @@ it.each(cases)(
           S3_ACCESS_KEY_ID: 'NewKey123456',
           S3_SECRET_ACCESS_KEY: 'NewSecret1234567890',
         });
-      else if (!(builtIn === undefined && pin === 'external' && !changed))
+      } else if (!(builtIn === undefined && pin === 'external' && !changed))
         Object.assign(expected, {
           S3_ENDPOINT: 'http://minio:9000',
           S3_BUCKET: !changed && pin !== 'external' ? 'media' : 'openwa',
@@ -268,4 +270,109 @@ it.each(credentialNames)('removes inactive S3 credentials %s and %s when selecti
   applyStorageSection({ type: 'local' }, existing, ctx);
 
   expect(savedValues(existing, ctx)).toEqual({ STORAGE_TYPE: 'local', MINIO_BUILTIN: 'false' });
+});
+
+it.each(['true', 'false'])(
+  'keeps only credentials belonging to the selected external database with startup flag %s',
+  flag => {
+    for (const type of ['postgres', 'sqlite']) {
+      for (const host of ['db.external.example', ' OpenWA-POSTGRES. ']) {
+        const existing = {
+          DATABASE_TYPE: type,
+          DATABASE_HOST: host,
+          POSTGRES_BUILTIN: flag,
+          DATABASE_PASSWORD: 'StoredPassword123456',
+        };
+        const ctx = context();
+
+        applyDatabaseSection(
+          { type: 'postgres', builtIn: false, host: 'db.external.example', password: '' },
+          existing,
+          ctx,
+        );
+
+        expect(savedValues(existing, ctx).DATABASE_PASSWORD).toBe(
+          type === 'postgres' && host === 'db.external.example' ? 'StoredPassword123456' : undefined,
+        );
+      }
+    }
+  },
+);
+
+it.each(credentialNames)(
+  'keeps only credentials %s and %s belonging to selected external S3 storage',
+  (access, secret) => {
+    for (const flag of ['true', 'false']) {
+      for (const type of ['s3', 'local']) {
+        for (const endpoint of ['https://s3.external.example', 'http://OpenWA-MINIO.:9000']) {
+          const existing = {
+            STORAGE_TYPE: type,
+            S3_ENDPOINT: endpoint,
+            MINIO_BUILTIN: flag,
+            [access]: 'StoredKey123456',
+            [secret]: 'StoredSecret1234567890',
+          };
+          const ctx = context();
+
+          applyStorageSection(
+            { type: 's3', builtIn: false, s3Endpoint: 'https://s3.external.example', s3AccessKey: '', s3SecretKey: '' },
+            existing,
+            ctx,
+          );
+
+          const saved = savedValues(existing, ctx);
+          expect([saved[access], saved[secret]]).toEqual(
+            type === 's3' && endpoint === 'https://s3.external.example'
+              ? ['StoredKey123456', 'StoredSecret1234567890']
+              : [undefined, undefined],
+          );
+        }
+      }
+    }
+  },
+);
+
+it.each(credentialNames)('fresh S3 credentials replace inactive %s and %s', (access, secret) => {
+  const existing = { STORAGE_TYPE: 'local', [access]: 'OldKey123456', [secret]: 'OldSecret1234567890' };
+  const ctx = context();
+
+  applyStorageSection(
+    { type: 's3', builtIn: false, s3AccessKey: 'NewKey123456', s3SecretKey: 'NewSecret1234567890' },
+    existing,
+    ctx,
+  );
+
+  expect(savedValues(existing, ctx)).toMatchObject({
+    S3_ACCESS_KEY_ID: 'NewKey123456',
+    S3_SECRET_ACCESS_KEY: 'NewSecret1234567890',
+  });
+  expect(savedValues(existing, ctx).S3_ACCESS_KEY).toBeUndefined();
+  expect(savedValues(existing, ctx).S3_SECRET_KEY).toBeUndefined();
+});
+
+it('does not carry the bundled S3 endpoint into a newly selected external service', () => {
+  const ctx = context();
+  const existing = { STORAGE_TYPE: 's3', MINIO_BUILTIN: 'false', S3_ENDPOINT: 'http://OpenWA-MINIO.:9000' };
+
+  applyStorageSection(
+    { builtIn: false, s3AccessKey: 'NewKey123456', s3SecretKey: 'NewSecret1234567890' },
+    existing,
+    ctx,
+  );
+
+  expect(savedValues(existing, ctx).S3_ENDPOINT).toBeUndefined();
+});
+
+it.each(['true', 'false'])('keeps external Redis credentials independently of startup flag %s', flag => {
+  const existing = {
+    REDIS_ENABLED: 'true',
+    REDIS_BUILTIN: flag,
+    REDIS_HOST: 'redis.external.example',
+    REDIS_PASSWORD: 'StoredRedis123456',
+  };
+  const ctx = context();
+
+  applyRedisSection({ enabled: true, builtIn: false, host: existing.REDIS_HOST, password: '' }, existing, ctx);
+
+  expect(savedValues(existing, ctx).REDIS_PASSWORD).toBe('StoredRedis123456');
 });

@@ -407,7 +407,10 @@ describe('InfraConfigController.saveConfig env-name correctness and merge (#226)
   });
 
   it('does not blank a stored secret when the form submits an empty value', () => {
-    const env = written({ database: { type: 'postgres', host: 'db', password: '' } }, 'DATABASE_PASSWORD=keepme\n');
+    const env = written(
+      { database: { type: 'postgres', host: 'db', password: '' } },
+      'DATABASE_TYPE=postgres\nDATABASE_PASSWORD=keepme\n',
+    );
     expect(env).toContain('DATABASE_PASSWORD=keepme');
     expect(env).toContain('DATABASE_HOST=db');
   });
