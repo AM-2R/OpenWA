@@ -71,8 +71,9 @@ export interface LidMappingStore {
    * Write-through: update the cache + persist. A phone is last-write-wins. A session reporting the phone
    * this node already holds takes the row, unless this node already counted a report of it from that
    * session: after s1, s2, s1 report one phone the owner is s2. A `null` phone records a negative result,
-   * and replaces a stored phone only when its owner (or none, or one since deleted) gives it. Never rejects;
-   * resolves false when the report did not reach the table (its write failed, or waits after one that did).
+   * and replaces a stored phone only when its owner (or none, or one since deleted or logged out) gives it.
+   * Never rejects; resolves false when the report did not reach the table (its write failed, or waits after
+   * one that did).
    */
   remember(lid: string, phone: string | null, sessionId?: string): Promise<boolean>;
 }
@@ -377,11 +378,11 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   /**
    * Record that a session found no phone for a lid. The row is shared by every session, and one account
    * can see a contact's number while another cannot, so a negative replaces the row only when it holds
-   * no phone or the phone was written by this session (or by none, or by one no longer in `sessions`);
-   * another live session's mapping stays. The check is part of the update, not a read before it, so a
-   * phone stored meanwhile is never overwritten. When the row is cleared the cached entry is dropped
-   * rather than set: a phone written while the statements ran may be the newer value, and the next read
-   * takes whichever the table holds.
+   * no phone or the phone was written by this session (or by none, or by one no longer linked: gone from
+   * `sessions`, or logged out, which clears its `phone`); another linked session's mapping stays. The check
+   * is part of the update, not a read before it, so a phone stored meanwhile is never overwritten. When the
+   * row is cleared the cached entry is dropped rather than set: a phone written while the statements ran may
+   * be the newer value, and the next read takes whichever the table holds.
    */
   private async clear(lid: string, sessionId: string | null): Promise<void> {
     const updatedAt = new Date();
@@ -396,8 +397,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
       { lid, phone: IsNull() },
       { lid, sessionId: IsNull() },
       // A session deleted without its rows being released (an older release, a crash, a restored backup)
-      // owns them no more than a released one does. CAST: sessions.id is a uuid on PostgreSQL.
-      { lid, sessionId: Raw(owner => `${owner} NOT IN (SELECT CAST(s."id" AS TEXT) FROM sessions s)`) },
+      // owns them no more than a released one does, and neither does one logged out: it reports nothing
+      // until it is linked again. CAST: sessions.id is a uuid on PostgreSQL.
+      {
+        lid,
+        sessionId: Raw(
+          owner => `${owner} NOT IN (SELECT CAST(s."id" AS TEXT) FROM sessions s WHERE s."phone" IS NOT NULL)`,
+        ),
+      },
       ...(sessionId ? [{ lid, sessionId }] : []),
     ];
     const { affected } = await this.repo.update(replaceable, { phone: null, sessionId, updatedAt });

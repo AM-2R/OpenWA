@@ -284,7 +284,7 @@ describe('SessionLidResolver over the shared lid table', () => {
     }).initialize();
     const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
     try {
-      await ds.getRepository(Session).insert({ id: s1, name: s1 });
+      await ds.getRepository(Session).insert({ id: s1, name: s1, phone: '629000000001' });
       const repo = ds.getRepository(LidMapping);
       const store = new LidMappingStoreService(repo);
       const warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');

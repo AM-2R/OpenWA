@@ -148,7 +148,7 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
       entities: [LidMapping, Session],
       synchronize: true,
     }).initialize();
-    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id })));
+    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id, phone: `6290000000${id[7]}` })));
     store = new LidMappingStoreService(ds.getRepository(LidMapping));
     // A statement that fails is only logged, which would let a case pass on a write that never ran.
     warn = jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn');
@@ -186,7 +186,7 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
 
   it('still admits it after the latest session to report the phone is deleted, once an earlier one reports it again', async () => {
     const s3 = '00000003-0000-4000-8000-000000000000';
-    await ds.getRepository(Session).insert({ id: s3, name: s3 });
+    await ds.getRepository(Session).insert({ id: s3, name: s3, phone: '629000000003' });
     await store.remember(LID, PHONE, s2);
     await ds.getRepository(Session).delete({ id: s2 });
     await store.releaseSession(s2);
@@ -229,6 +229,14 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
       [false, false],
       [true, true],
     ]);
+  });
+
+  it('stops admitting it once the session that stored the phone logs out and another answers no phone', async () => {
+    await ds.getRepository(Session).update({ id: s1 }, { phone: null });
+
+    await store.remember(LID, null, s2);
+
+    expect(await admitted()).toEqual([false, false]);
   });
 
   it('stops admitting it once the session that stored the phone is deleted and another answers no phone', async () => {

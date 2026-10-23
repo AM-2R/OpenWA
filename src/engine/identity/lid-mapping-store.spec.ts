@@ -974,7 +974,7 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
 });
 
 describe('LidMappingStoreService: a negative result on the shared table', () => {
-  // Sessions that exist in `sessions`; `gone` names one that was deleted.
+  // Linked sessions in `sessions` (each carries its account's phone); `gone` names one that was deleted.
   const [s1, s2, s3, s9] = ['1', '2', '3', '9'].map(n => `0000000${n}-0000-4000-8000-000000000000`);
   const gone = '0000000d-0000-4000-8000-000000000000';
   let ds: DataSource;
@@ -1029,7 +1029,7 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
         ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
         : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
     ).initialize();
-    await ds.getRepository(Session).insert([s1, s2, s3, s9].map(id => ({ id, name: id })));
+    await ds.getRepository(Session).insert([s1, s2, s3, s9].map(id => ({ id, name: id, phone: `6290000000${id[7]}` })));
     repo = ds.getRepository(LidMapping);
     store = new LidMappingStoreService(repo);
     clock = 0;
@@ -1091,18 +1091,40 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     expect(await store.findPhoneForLid('111@lid')).toBeNull();
   });
 
+  it('clears a phone stored by a session that has since logged out', async () => {
+    await store.remember('111', '628111', s1);
+    await ds.getRepository(Session).update({ id: s1 }, { phone: null }); // logout, or WhatsApp unlinked it
+
+    await store.remember('111', null, s2);
+
+    expect(await row('111')).toMatchObject({ phone: null, sessionId: s2 });
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+  });
+
+  it('keeps it again once that session is linked again', async () => {
+    await store.remember('111', '628111', s1);
+    await ds.getRepository(Session).update({ id: s1 }, { phone: null });
+    await ds.getRepository(Session).update({ id: s1 }, { phone: '629000000001' });
+
+    await store.remember('111', null, s2);
+
+    expect(await row('111')).toMatchObject({ phone: '628111', sessionId: s1 });
+  });
+
   it('touches no other lid, whichever branch would let the negative replace that row', async () => {
     const stamp = new Date('2020-01-01T00:00:00.000Z');
     const others = [
       { lid: '222', phone: '628222', sessionId: null }, // no owner
       { lid: '444', phone: null, sessionId: s3 }, // holds no phone
       { lid: '555', phone: '628555', sessionId: gone }, // owned by a deleted session
+      { lid: '777', phone: '628777', sessionId: s9 }, // owned by a session that logged out
       { lid: '666', phone: '628666', sessionId: s2 }, // owned by the session answering
     ];
     await repo.insert([
       { lid: '111', phone: '628111', sessionId: s2, updatedAt: stamp },
       ...others.map(o => ({ ...o, updatedAt: stamp })),
     ]);
+    await ds.getRepository(Session).update({ id: s9 }, { phone: null });
     await store.reload();
 
     await store.remember('111', null, s2);
