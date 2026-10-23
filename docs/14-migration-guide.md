@@ -322,7 +322,7 @@ Redis in OpenWA holds only **ephemeral** state: BullMQ jobs (see below), and —
 ```bash
 # Switch from built-in to external Redis
 REDIS_ENABLED=true
-REDIS_BUILTIN=false      # false = external Redis
+REDIS_BUILTIN=false      # Do not start the bundled container
 REDIS_HOST=your-redis-host.com
 REDIS_PORT=6379
 REDIS_USERNAME=optional
@@ -331,8 +331,9 @@ REDIS_TLS=false          # true for a managed Redis that requires TLS
 ```
 
 > Setting `REDIS_BUILTIN` in `.env` **pins** it: the env value wins, and it decides only whether
-> OpenWA starts the bundled container at boot. `true` starts it at every boot, even after the
-> dashboard switched Redis to an external host, and `false` never does; which Redis the app uses
+> OpenWA starts the bundled container at boot. `true` starts it at every boot while Redis is in use
+> and `REDIS_HOST` is not pinned elsewhere, even after the dashboard saved an external host;
+> `false` never starts it. Which Redis the app uses
 > follows `REDIS_HOST`, as the dashboard writes it. That is the right trade for a deployment
 > whose configuration lives in `.env` — but if you manage datastores from the dashboard, leave the
 > key unset (as the shipped templates do) and set only the connection details above. The same holds
