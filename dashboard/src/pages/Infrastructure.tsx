@@ -116,11 +116,14 @@ export function Infrastructure() {
       const storage = configForm.storageConfig;
       const storageType = pinned('STORAGE_TYPE')?.storage.type ?? storage.type;
       // The storage section takes the bundled bucket for a flag sent as true only: beside a pinned endpoint an untouched
-      // toggle is left out of the save, and the stored bucket stays.
+      // toggle is left out of the save, and the stored bucket stays. It stays under the flag too when the saved config
+      // (the file this save replaced) already reaches the bundled MinIO, which then serves that bucket.
       const storageBuiltIn = sent.storage?.builtIn === true;
+      const keepsBucket = namesBundledContainer('minio', savedConfig?.storage.s3Endpoint);
       const endpoint =
         pinned('S3_ENDPOINT')?.storage.s3Endpoint ?? (storageBuiltIn ? 'http://minio:9000' : storage.s3Endpoint);
-      const bucket = (storageBuiltIn ? 'openwa' : storage.s3Bucket) || 'openwa';
+      const bucket =
+        (storageBuiltIn ? (keepsBucket ? savedConfig?.storage.s3Bucket : 'openwa') : storage.s3Bucket) || 'openwa';
       const storageSwitch =
         !!infraStatus &&
         (storageType !== infraStatus.storage.type ||

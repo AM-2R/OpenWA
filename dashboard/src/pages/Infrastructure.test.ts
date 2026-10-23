@@ -2378,7 +2378,127 @@ for (let round = 0; round < spellingRounds; round++) {
     const dialog = await screen.findByRole('dialog');
     assert.doesNotMatch(dialog.textContent ?? '', /The new database starts empty|not moved to the new storage/);
   });
+
+  // A database and bucket of their own on the bundled containers, saved without the flag, read as built-in: the save
+  // keeps the user, database, schema and bucket they use, so nothing moves and no switch is warned of.
+  test(`no data-backend warning for a save over a database and bucket of their own on ${JSON.stringify([db, s3])}`, async () => {
+    const { screen, fireEvent } = rtl;
+    resetFetchCalls();
+    overrides = {
+      status: {
+        ...RUNNING_BUNDLED,
+        database: { ...RUNNING_BUNDLED.database, host: db, running: false },
+        redis: INFRA_STATUS.redis,
+        storage: { ...RUNNING_BUNDLED.storage, endpoint: s3, bucket: 'media', running: false },
+      },
+      saved: {
+        ...SAVED_CONFIG,
+        database: {
+          ...SAVED_CONFIG.database,
+          builtIn: true,
+          builtInSet: false,
+          host: db,
+          port: '5432',
+          username: 'app',
+          database: 'appdb',
+          schema: 'tenant',
+        },
+        storage: {
+          ...SAVED_CONFIG.storage,
+          type: 's3',
+          builtIn: true,
+          builtInSet: false,
+          s3Bucket: 'media',
+          s3Region: 'eu-west-1',
+          s3Endpoint: s3,
+        },
+      },
+    };
+    const { container } = renderInfrastructure();
+
+    await screen.findByText('Database Configuration');
+    await awaitSeeded(container);
+    fireEvent.click(toggleInput(container, 'Headless Mode'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+    const dialog = await screen.findByRole('dialog');
+    assert.doesNotMatch(dialog.textContent ?? '', /The new database starts empty|not moved to the new storage/);
+    const body = findFetchCall('PUT', '/api/infra/config')!.body as {
+      database?: { builtIn?: boolean };
+      storage?: { builtIn?: boolean };
+    };
+    assert.deepEqual([body.database?.builtIn, body.storage?.builtIn], [true, true]);
+  });
 }
+
+// The same values on another server are a switch to the bundled containers, which start with their own.
+test('turning Use Built-in on over a database and bucket of another server warns of both switches', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      database: { connected: true, type: 'postgres', host: 'db.example.com', builtIn: false, running: false },
+      storage: { type: 's3', bucket: 'media', endpoint: 'https://s3.example.com', builtIn: false, s3Available: true },
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      database: { ...SAVED_CONFIG.database, host: 'db.example.com', port: '5432', database: 'appdb' },
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        s3Bucket: 'media',
+        s3Region: 'eu-west-1',
+        s3Endpoint: 'https://s3.example.com',
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Use Built-in PostgreSQL Container'));
+  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  within(dialog).getByText(DB_SWITCH_WARNING, { exact: false });
+  within(dialog).getByText(STORAGE_WARNING, { exact: false });
+});
+
+// A bucket typed while the toggle was off stays in the form once it is on again, but the save keeps the stored one.
+test('a bucket typed and then hidden by Use Built-in on the bundled MinIO is no storage switch', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: {
+      ...INFRA_STATUS,
+      storage: { type: 's3', bucket: 'media', endpoint: 'http://openwa-minio:9000', builtIn: true, s3Available: true },
+    },
+    saved: {
+      ...SAVED_CONFIG,
+      storage: {
+        ...SAVED_CONFIG.storage,
+        type: 's3',
+        builtIn: true,
+        builtInSet: false,
+        s3Bucket: 'media',
+        s3Endpoint: 'http://openwa-minio:9000',
+      },
+    },
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+  fireEvent.change(fieldInput(container, 'Bucket Name'), { target: { value: 'other' } });
+  fireEvent.click(toggleInput(container, 'Use Built-in MinIO Container'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.doesNotMatch(dialog.textContent ?? '', /not moved to the new storage/);
+});
 
 // The database card beside DATABASE_HOST pinned to an external server, over a stored built-in database: the card shows
 // that server, and the typed user and database name are its own. The save sends the flag the card shows with them, so
