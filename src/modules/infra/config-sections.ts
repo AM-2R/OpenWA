@@ -76,10 +76,11 @@ export function applyDatabaseSection(
     updates.POSTGRES_BUILTIN = database.builtIn ? 'true' : 'false';
   }
   // An explicit choice applies the bundled preset; otherwise the stored host decides the mode. A pinned host must
-  // not replace that stored choice, which takes effect again when the pin is removed.
+  // not replace that stored choice, which takes effect again when the pin is removed. An omitted choice beside an
+  // external host pin preserves its connection details instead of applying the bundled preset again.
   const dbBuiltIn = database.builtIn ?? namesBundledContainer('postgres', existing.DATABASE_HOST);
   if (type === 'postgres') {
-    if (dbBuiltIn) {
+    if (dbBuiltIn && (database.builtIn !== undefined || !hostPinnedElsewhere('postgres'))) {
       // Built-in PostgreSQL - use container name as host
       updates.DATABASE_HOST = 'postgres';
       updates.DATABASE_PORT = '5432';
@@ -89,11 +90,8 @@ export function applyDatabaseSection(
       // running process, whose environment the boot loaded and a save leaves as it is: switched away and back before a
       // restart, the file holds the other server's values. From anywhere else they belong to another server.
       const servesStored =
-        (database.builtIn === undefined &&
-          existing.DATABASE_TYPE === 'postgres' &&
-          namesBundledContainer('postgres', existing.DATABASE_HOST)) ||
-        (nextBootValue('DATABASE_TYPE', existing) === 'postgres' &&
-          namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing)));
+        nextBootValue('DATABASE_TYPE', existing) === 'postgres' &&
+        namesBundledContainer('postgres', nextBootValue('DATABASE_HOST', existing));
       const servesRunning =
         process.env.DATABASE_TYPE === 'postgres' && namesBundledContainer('postgres', process.env.DATABASE_HOST);
       const kept: Partial<Record<string, string>> = servesStored ? existing : servesRunning ? process.env : {};
@@ -111,8 +109,7 @@ export function applyDatabaseSection(
       updates.DATABASE_NAME = kept.DATABASE_NAME || 'openwa';
       // A newly initialized bundled database starts in public; an existing one keeps its schema.
       updates.POSTGRES_SCHEMA = kept.POSTGRES_SCHEMA || 'public';
-      profiles.push('postgres');
-    } else {
+    } else if (!dbBuiltIn) {
       // External PostgreSQL. Flipping built-in -> external must not carry the bundled
       // 'openwa' password into the external config: the production boot guard rejects
       // it, so the next boot would crash-loop. A password in the same payload wins.
@@ -135,6 +132,7 @@ export function applyDatabaseSection(
         updates.POSTGRES_SCHEMA = database.schema || 'public';
       }
     }
+    if (dbBuiltIn) profiles.push('postgres');
     // null is what JSON makes of an emptied number input, and reads as absent like the other fields.
     if (database.poolSize !== undefined && database.poolSize !== null) {
       if (!Number.isInteger(database.poolSize) || database.poolSize < 0) {
@@ -188,14 +186,14 @@ export function applyRedisSection(
   if (redis.builtIn !== undefined) updates.REDIS_BUILTIN = redis.builtIn ? 'true' : 'false';
   // As for the database, an omitted choice follows the stored host, independently of the flag that starts a container.
   const redisBuiltIn = redis.builtIn ?? namesBundledContainer('redis', existing.REDIS_HOST);
-  if (redisBuiltIn) {
+  if (redisBuiltIn && (redis.builtIn !== undefined || !hostPinnedElsewhere('redis'))) {
     // Built-in Redis - use container name as host. The bundled container runs without
     // auth, so a password saved by an earlier external setup is stale: leaving it
     // would make the client AUTH against a passwordless server on the next boot.
     updates.REDIS_HOST = 'redis';
     updates.REDIS_PORT = '6379';
     if (!redis.password) staleKeys.add('REDIS_PASSWORD');
-  } else {
+  } else if (!redisBuiltIn) {
     // External Redis (explicit, or inherited when builtIn is absent)
     if (redis.host !== undefined) updates.REDIS_HOST = redis.host.trim() || 'localhost';
     if (redis.port !== undefined) {
@@ -246,7 +244,8 @@ export function applyStorageSection(
   } else {
     staleKeys.add('STORAGE_LOCAL_PATH');
     // An absent builtIn follows the stored endpoint, as for the database and Redis.
-    if (storage.builtIn ?? namesBundledContainer('minio', existing.S3_ENDPOINT)) {
+    const storageBuiltIn = storage.builtIn ?? namesBundledContainer('minio', existing.S3_ENDPOINT);
+    if (storageBuiltIn && (storage.builtIn !== undefined || !hostPinnedElsewhere('minio'))) {
       // Built-in MinIO - use container name as endpoint. The bundled keys are only the DEFAULT, as for the database
       // password: keys at the bundled endpoint (pinned or stored, in any spelling) are that container's, and are kept; else
       // the ones the running process dials it with, as for the database.
@@ -262,16 +261,12 @@ export function applyStorageSection(
       // As for the database: a bucket the next boot already reaches on the bundled MinIO, else the one it serves the
       // running process, is kept with its region.
       const servesStored =
-        (storage.builtIn === undefined &&
-          existing.STORAGE_TYPE === 's3' &&
-          namesBundledContainer('minio', existing.S3_ENDPOINT)) ||
-        (nextBootValue('STORAGE_TYPE', existing) === 's3' &&
-          namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing)));
+        nextBootValue('STORAGE_TYPE', existing) === 's3' &&
+        namesBundledContainer('minio', nextBootValue('S3_ENDPOINT', existing));
       const kept: Partial<Record<string, string>> = servesStored ? existing : servesRunning ? process.env : {};
       updates.S3_BUCKET = kept.S3_BUCKET || 'openwa';
       updates.S3_REGION = kept.S3_REGION || 'us-east-1';
-      profiles.push('minio');
-    } else {
+    } else if (!storageBuiltIn) {
       // External S3/MinIO. Flipping built-in -> external must not carry the bundled
       // 'minioadmin' credentials or the internal endpoint into the external config:
       // the production boot guard rejects those credentials (crash-loop), and a stale
@@ -298,6 +293,7 @@ export function applyStorageSection(
         }
       }
     }
+    if (storageBuiltIn) profiles.push('minio');
   }
 }
 

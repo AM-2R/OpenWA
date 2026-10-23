@@ -1103,12 +1103,7 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
 
       expect(dotenv.parse(written({ database: { poolSize: 25 }, storage: {} }, stored))).toEqual({
         ...dotenv.parse(stored),
-        DATABASE_HOST: 'postgres',
-        DATABASE_PORT: '5432',
         DATABASE_POOL_SIZE: '25',
-        POSTGRES_SCHEMA: 'public',
-        S3_ENDPOINT: 'http://minio:9000',
-        S3_REGION: 'us-east-1',
       });
     });
 
@@ -1133,6 +1128,30 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
       expect(env).not.toContain('stale');
       expect(env).not.toContain('openwa.sqlite');
     });
+
+    it.each(['true', 'false'])(
+      'an omitted choice keeps connection details under external host pins beside flags %s',
+      flag => {
+        pin({
+          DATABASE_HOST: 'db.ext.example',
+          REDIS_HOST: 'cache.ext.example',
+          S3_ENDPOINT: 'https://s3.ext.example',
+        });
+        const stored =
+          `DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=${flag}\nDATABASE_HOST=postgres\nDATABASE_PORT=6432\n` +
+          'DATABASE_USERNAME=app\nDATABASE_PASSWORD=StrongPw12345!\nDATABASE_NAME=appdb\nPOSTGRES_SCHEMA=tenant\nDATABASE_SSL=true\nDATABASE_SSL_REJECT_UNAUTHORIZED=false\n' +
+          `REDIS_ENABLED=true\nREDIS_BUILTIN=${flag}\nREDIS_HOST=redis\nREDIS_PORT=6380\nREDIS_PASSWORD=CachePw123456\n` +
+          `STORAGE_TYPE=s3\nMINIO_BUILTIN=${flag}\nS3_ENDPOINT=http://minio:9000\nS3_BUCKET=media\n` +
+          'S3_ACCESS_KEY=StoredKey123456\nS3_SECRET_KEY=StoredSecret1234567890\n';
+        const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
+
+        expect(dotenv.parse(written({ database: {}, redis: {}, storage: {} }, stored))).toEqual(dotenv.parse(stored));
+        expect(dotenv.parse(written({ database: { poolSize: 25 }, redis: {}, storage: {} }, stored))).toEqual({
+          ...dotenv.parse(stored),
+          DATABASE_POOL_SIZE: '25',
+        });
+      },
+    );
 
     // The page leaves out an untouched flag beside a pinned host. The stored external flag is inherited then, so the
     // credentials the pinned host may need stay as stored, where a flag of true would write the bundled ones.
