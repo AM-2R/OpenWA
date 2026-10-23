@@ -42,6 +42,23 @@ interface QueueStats {
 // The key that holds each managed profile's host.
 const HOST_KEY: Record<string, string> = { postgres: 'DATABASE_HOST', redis: 'REDIS_HOST', minio: 'S3_ENDPOINT' };
 
+// The settings a built-in save writes (or drops) for the bundled container while their fields are hidden; one the
+// environment pins still wins at boot, so its note moves under the Use Built-in toggle.
+const BUILT_IN_DETAIL_KEYS = {
+  postgres: [
+    'DATABASE_PORT',
+    'DATABASE_USERNAME',
+    'DATABASE_PASSWORD',
+    'DATABASE_NAME',
+    'DATABASE_POOL_SIZE',
+    'POSTGRES_SCHEMA',
+    'DATABASE_SSL',
+    'DATABASE_SSL_REJECT_UNAUTHORIZED',
+  ],
+  redis: ['REDIS_PORT', 'REDIS_PASSWORD'],
+  minio: ['S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+};
+
 /** The host the next boot dials for a profile, as GET /config reports it: the environment's, else the saved one. */
 const nextBootHost = (profile: string, config: SavedConfig): string =>
   profile === 'postgres' ? config.database.host : profile === 'redis' ? config.redis.host : config.storage.s3Endpoint;
@@ -262,13 +279,16 @@ export function Infrastructure() {
   // gains the pinned `--lang` flag, so it never string-compares equal to the saved value. The headless
   // flag and the two paths do have a running and a saved value, but show only a reported pin as well, and so
   // do the three datastore hosts, under the Use Built-in toggle a pinned host overrides, and every other setting a
-  // save writes, after the row that holds its field (a note inside a narrow port field would not fit).
+  // save writes, after the row that holds its field (a note inside a narrow port field would not fit), or under the
+  // Use Built-in toggle while it hides that field.
   const pinNote = (envKey: string, note = 'infrastructure.envPinNote') =>
     infraStatus?.envPinned?.includes(envKey) ? (
       <p className="env-pin-note">
         <AlertTriangle size={14} /> {t(note, { name: envKey })}
       </p>
     ) : null;
+  const builtInDetailNotes = (profile: keyof typeof BUILT_IN_DETAIL_KEYS) =>
+    BUILT_IN_DETAIL_KEYS[profile].map(key => <Fragment key={key}>{pinNote(key)}</Fragment>);
   // A pinned *_BUILTIN flag decides only whether the boot starts the bundled container, at every boot while it is
   // true; whether the service uses it follows its host. Beside a host pinned elsewhere the boot starts nothing.
   const flagPinNote = (flagKey: string, profile: string) =>
@@ -385,6 +405,7 @@ export function Infrastructure() {
               )}
               {pinNote('DATABASE_HOST')}
               {flagPinNote('POSTGRES_BUILTIN', 'postgres')}
+              {configForm.dbConfig.builtIn && builtInDetailNotes('postgres')}
 
               {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
@@ -699,6 +720,7 @@ export function Infrastructure() {
               )}
               {pinNote('REDIS_HOST')}
               {flagPinNote('REDIS_BUILTIN', 'redis')}
+              {configForm.redisConfig.builtIn && builtInDetailNotes('redis')}
 
               {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
@@ -903,6 +925,7 @@ export function Infrastructure() {
                 )}
                 {pinNote('S3_ENDPOINT')}
                 {flagPinNote('MINIO_BUILTIN', 'minio')}
+                {configForm.storageConfig.builtIn && builtInDetailNotes('minio')}
 
                 {!configForm.storageConfig.builtIn && (
                   <>

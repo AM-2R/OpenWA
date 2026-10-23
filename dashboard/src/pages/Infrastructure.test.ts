@@ -1808,6 +1808,49 @@ test('every setting a save writes names its variable beside its field when the e
   assert.equal(notes.length, Object.values(DETAIL_PINS).flat().length, 'one note per pinned variable');
 });
 
+// Use Built-in hides the detail fields while the save writes the bundled port, user, database, schema, TLS, password,
+// bucket, region and keys for them; a pinned one still wins at boot, so its note moves under the toggle.
+test('under Use Built-in every pinned setting the save writes is named under the toggle', async () => {
+  const { screen, fireEvent } = rtl;
+  resetFetchCalls();
+  overrides = {
+    status: { ...RUNNING_EXTERNAL_ALL, envPinned: Object.values(DETAIL_PINS).flat() },
+    saved: SAVED_EXTERNAL_ALL,
+  };
+  const { container } = renderInfrastructure();
+
+  await screen.findByText('Database Configuration');
+  await awaitSeeded(container);
+  const db = infraCard(container, 'Database Configuration');
+  const redis = infraCard(container, 'Redis');
+  const storage = infraCard(container, 'Storage Configuration');
+  const toggleRow = (card: HTMLElement, label: string) => toggleInput(card, label).closest('.toggle-row');
+  for (const [card, label] of [
+    [db, 'Use Built-in PostgreSQL Container'],
+    [redis, 'Use Built-in Redis Container'],
+    [storage, 'Use Built-in MinIO Container'],
+  ] as const) {
+    fireEvent.click(toggleInput(card, label));
+  }
+
+  assert.deepEqual(
+    {
+      database: pinNamesAfter(toggleRow(db, 'Use Built-in PostgreSQL Container')),
+      redis: pinNamesAfter(toggleRow(redis, 'Use Built-in Redis Container')),
+      queue: pinNamesAfter(toggleRow(redis, 'Enable BullMQ Queue System')),
+      storage: pinNamesAfter(toggleRow(storage, 'Use Built-in MinIO Container')),
+    },
+    {
+      database: DETAIL_PINS.database,
+      redis: DETAIL_PINS.redis.filter(key => key !== 'QUEUE_ENABLED'),
+      queue: ['QUEUE_ENABLED'],
+      storage: DETAIL_PINS.storage,
+    },
+  );
+  const notes = Array.from(container.querySelectorAll('.env-pin-note')).map(note => note.textContent?.trim() ?? '');
+  assert.equal(notes.length, Object.values(DETAIL_PINS).flat().length, 'one note per pinned variable');
+});
+
 test('without a reported pin the settings a save writes show no pin note', async () => {
   const { screen } = rtl;
   resetFetchCalls();
