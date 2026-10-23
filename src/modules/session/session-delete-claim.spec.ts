@@ -1123,6 +1123,28 @@ describe('A session deleted on one node while a peer shares the database', () =>
     expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).not.toBeNull();
   });
 
+  // The session was stopped, so the delete's record changes nothing the start could read, and the failed delete
+  // has dropped its stop mark by the time the start goes on.
+  it('keeps a start from launching into a stopped session that a delete sent after it began removing', async () => {
+    const id = await seed({ status: SessionStatus.DISCONNECTED, desiredState: 'stopped' });
+    const fenced = deferred();
+    const go = deferred();
+    jest.spyOn(SessionLifecycleFences.prototype, 'awaitPendingTeardown').mockImplementationOnce(async () => {
+      fenced.resolve();
+      await go.promise;
+    });
+    const starting = a.service.start(id, { explicit: true });
+    await fenced.promise;
+    jest.spyOn(a.db, 'transaction').mockRejectedValueOnce(new Error('transaction timed out'));
+    await expect(a.service.delete(id)).rejects.toThrow('transaction timed out');
+    go.resolve();
+
+    await expect(starting).rejects.toBeInstanceOf(SessionStoppedException);
+
+    expect(a.engines).toHaveLength(0);
+    expect((await a.db.getRepository(Session).findOneByOrFail({ id })).desiredState).not.toBeNull();
+  });
+
   it('refuses the delete and removes nothing when the claim cannot be written', async () => {
     const id = await seed({ status: SessionStatus.DISCONNECTED });
     await a.service.start(id, { explicit: true });

@@ -928,8 +928,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
     // Shutdown may have begun while the claim was pending; the stop clear and the hook must not run.
     this.refuseIfShuttingDown();
+    const stoppedSince = (): boolean => this.stoppedSince(id, stopRequestsBefore);
     try {
-      return await this.engineLifecycle.start(id, { explicit });
+      return await this.engineLifecycle.start(id, { explicit, stoppedSince });
     } catch (error) {
       if (!isTransientLaunchFailure(error)) throw error;
       this.logger.warn(`Transient launch failure for session ${id}; retrying once`, {
@@ -961,7 +962,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
         // And shutdown may have begun during the re-claim; the stop clear and the hook must not run.
         this.refuseIfShuttingDown();
-        return await this.engineLifecycle.start(id, { explicit });
+        return await this.engineLifecycle.start(id, { explicit, stoppedSince });
       } catch (retryError) {
         // The first attempt may have left FAILED, which the boot reset, auto-start and the takeover
         // sweep all skip, and shutdown refused the retry that would have overwritten it. Handed back

@@ -300,8 +300,13 @@ export class SessionEngineControls {
    * `explicit` marks an operator's POST /start, the only start that may clear an operator's stop
    * (desiredState), and only a stop that was already on the row when it began. It clears it only
    * once past every refusal below, so a refused start leaves the stop exactly as it found it.
+   * `stoppedSince` answers whether a stop or delete of the session issued after the caller's start
+   * began still stands; the start yields to one, also when its mark is already gone.
    */
-  async start(id: string, { explicit = false }: { explicit?: boolean } = {}): Promise<Session> {
+  async start(
+    id: string,
+    { explicit = false, stoppedSince }: { explicit?: boolean; stoppedSince?: () => boolean } = {},
+  ): Promise<Session> {
     // Reserve the slot SYNCHRONOUSLY at entry — before even the requireSession await. Two
     // near-simultaneous start() calls must not both pass the check and orphan an engine (the has()
     // -> engines.set() window spans the awaited hook below), and the infra import pre-flight
@@ -386,9 +391,10 @@ export class SessionEngineControls {
       // but its record is on the row: only a POST /start sent to an already stopped session clears
       // it, and any other start yields to it with the mark put back. A stop from here on sets the
       // mark again and retires this start after its init. A launch that fails after the clear still
-      // counts as the start the operator asked for.
+      // counts as the start the operator asked for. A delete issued since this start began that failed once it
+      // began removing has dropped its mark and left a record this start may have read too: it still stands.
       const { desiredState } = await this.requireSession(id);
-      if (desiredState && (!explicit || !session.desiredState)) {
+      if ((desiredState && (!explicit || !session.desiredState)) || stoppedSince?.()) {
         this.stoppingSessions.add(id);
         throw new SessionStoppedException(`Session ${id} was stopped`);
       }

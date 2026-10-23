@@ -457,7 +457,7 @@ export class SessionEngineLifecycle {
   // settlement profile the inline methods had (the Task-1 delegate rule above).
 
   /** Delegate: SessionEngineControls.start. */
-  start(id: string, options?: { explicit?: boolean }): Promise<Session> {
+  start(id: string, options?: { explicit?: boolean; stoppedSince?: () => boolean }): Promise<Session> {
     return this.controls.start(id, options);
   }
 
