@@ -748,10 +748,18 @@ On one Docker daemon, the built-in datastores Dashboard > Infrastructure starts 
 instance: their container names (`openwa-postgres`, `openwa-redis`, `openwa-minio`), their volumes and
 the `openwa-network` network are fixed, so a second instance that turns on Use Built-in attaches to the
 first instance's container and data. Let at most one instance on a daemon use them, and point the
-others at datastores of their own with their Use Built-in toggles off. A restart from the dashboard
-stops a bundled container only when that instance's own configuration uses it or set it up (its
-`*_BUILTIN` flag), so an instance that never chose the built-in and dials its own servers leaves the
-other one's containers running.
+others at datastores of their own with their Use Built-in toggles off.
+
+Each instance finds a bundled container by its `com.openwa.service` label anywhere on the daemon. Its
+status reads a running one as the datastore it uses whenever its own host for that datastore is spelled
+like the bundled one: `postgres`, `redis`, `minio` or the container name, in any letter case, with or
+without a trailing dot. A dashboard restart that then switches that datastore off or to another host
+stops the first container on the daemon with that label, which can be the other instance's. So give the
+other instances' datastores host names of their own and no `com.openwa.*` labels; a second copy of the
+shipped compose file needs its own project name and container names, and its app must reach its
+datastores under names other than `postgres`, `redis` and `minio`. An instance set up that way whose
+`*_BUILTIN` flags are not `true` leaves the other instance's containers running: its dashboard counts
+a container OpenWA created as its own only beside its own flag, and asks to stop none of them.
 
 | Metric                            | Threshold  | Action                                                                                                     |
 | --------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |

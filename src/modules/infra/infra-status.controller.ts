@@ -197,7 +197,9 @@ export class InfraStatusController {
     // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
     // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
     // pointed at the bundled service. Fall back to the saved *_BUILTIN flag (the environment's first) when
-    // Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
+    // Docker is unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488) The labelled
+    // container may be another instance's on the same daemon: it counts whenever this one's host is spelled like the
+    // bundled one (docs/13, Scaling Guidelines).
     // `running` names a container OpenWA created beside this instance's own built-in flag only: the container names
     // are fixed per daemon, so a second instance there sees the first one's containers, which are not its to stop.
     const s3Endpoint = this.configService.get<string>('storage.s3.endpoint');
