@@ -178,6 +178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- `body-parser` 2.3.0 to 2.4.0 for safe compressed-request error handling in the HTTP server.
 - `i18next` 26.4.2 to 26.4.4 in the dashboard tree, closing a regular-expression denial of service in its nested-translation parser. It ships in the dashboard bundle.
 - The image's Node.js 22.23.3 to 22.23.4, a security release for the `http`, `dns`, `tls`, `permission` and `crypto` modules.
 - The image's npm CLI 12.1.0 to 12.2.1, clearing CVE-2026-102276, CVE-2026-102278 (brace-expansion) and CVE-2026-19534 (undici) in its own bundled tree; npm only runs for the documented migration commands, and the three Trivy exceptions for them are gone.
