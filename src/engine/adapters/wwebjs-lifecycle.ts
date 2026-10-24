@@ -909,10 +909,10 @@ export class WwebjsLifecycle {
   /** Whether puppeteer itself reports the page closed or the browser disconnected (not an error's text). */
   private isPageGone(): boolean {
     const { pupBrowser, pupPage } = (this.client ?? {}) as unknown as {
-      pupBrowser?: { isConnected?: () => boolean };
+      pupBrowser?: { connected?: boolean };
       pupPage?: { isClosed?: () => boolean };
     };
-    return pupPage?.isClosed?.() === true || pupBrowser?.isConnected?.() === false;
+    return pupPage?.isClosed?.() === true || pupBrowser?.connected === false;
   }
 
   markReadyFromClientInfo(): void {

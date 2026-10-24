@@ -774,12 +774,12 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   block/unblock refusing every id, a status media send that never arrives, a group description that
   cannot be set, an app-state resync that never settles
 
-**Cause:** OpenWA applies twelve exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies thirteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
-cannot recognise fails the image build. A source install runs them through `scripts/postinstall.js`
-with `--best-effort`, where a patcher that cannot apply prints one line into a long `npm install`
-transcript and the install still succeeds. The usual causes are `npm install --ignore-scripts` and
-an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
+cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
+without best-effort too, because browser teardown depends on it. The other transforms use
+`--best-effort`, where a refusal prints one line into the install transcript and installation continues.
+The usual causes are `npm install --ignore-scripts` and an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
 patches as it starts and names the ones that did not land, so the report arrives on the machine that
 is actually affected rather than in an install log nobody kept.
 

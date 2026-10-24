@@ -410,7 +410,7 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
     const destination = { fetchMessages: () => Promise.reject(new Error(message)) };
     const { adapter } = readyAdapter({
       pupPage: { isClosed: () => false },
-      pupBrowser: { isConnected: () => true },
+      pupBrowser: { connected: true },
       getNumberId: () => Promise.resolve(found(CHAT)),
       getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
     });
@@ -436,7 +436,7 @@ describe('whatsapp-web.js operations that race a session teardown', () => {
     let closed = false;
     const { adapter } = readyAdapter({
       pupPage: { isClosed: () => closed },
-      pupBrowser: { isConnected: () => true },
+      pupBrowser: { connected: true },
       getNumberId: () => Promise.resolve(found(CHAT)),
       getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
     });
@@ -556,7 +556,7 @@ const DEATH_CASES: DeathCase[] = [
       return {
         client: {
           pupPage: { isClosed: () => false },
-          pupBrowser: { isConnected: () => false },
+          pupBrowser: { connected: false },
           getNumberId: () => Promise.resolve(found(CHAT)),
           getChatById: (id: string) => Promise.resolve(id === 'src@c.us' ? source : destination),
         },

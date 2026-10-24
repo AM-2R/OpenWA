@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgrade Puppeteer to 25.16.0 with Zod 4, preserving whatsapp-web.js browser teardown.
+- Update fast-uri to 3.1.9 and ip-address to 10.7.4.
 - Update dashboard validation tooling to Zod 4.6.7.
 - Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility, from PHP SDK 0.7.0 (#1870).
 - Reject empty PHP SDK `defaultHeaders` lists before sending requests, from PHP SDK 0.7.0; use `''` for an empty header value (#1870).
@@ -54,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Update multer to 2.5.0 and undici to 8.12.3 to prevent request teardown and response decoding failures.
 - Keep deleted sessions free of late message, status and bulk writes, and of the `message:failed` event of a bulk item whose session was deleted before it was sent.
 - Retain sending limits while hooks or preparation are pending, including across UTC midnight.
 - Preserve whatsapp-web.js readiness when an earlier QR render completes.
@@ -186,6 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes (behavior changes)
 
+- Source installs using Puppeteer's downloaded browser move from Chrome 146 to 156; back up `SESSION_DATA_PATH` (default `data/sessions/`) before starting and restore it before downgrading Chrome. An explicit `PUPPETEER_EXECUTABLE_PATH` keeps selecting that browser.
 - ⚠️ **Breaking (config).** A production boot refuses a `METRICS_TOKEN` that is the `.env.example` placeholder or a known weak value such as `test` or `change-me`, since the scrape endpoint is public; set a long random token, or leave it unset to keep the endpoint disabled.
 - The HTTP port now opens after at most 60 s of plugin restore. Until a plugin still restoring is up, the hooks it owns (a send moderation veto, for one) do not run, an enable, disable, update, uninstall or reinstall of it answers `409`, an ingress route with a response contract answers `503` with `Retry-After`, and other ingress deliveries are held and dispatched once it is up (with the queue off, by the reconciler after `INGRESS_RECONCILE_GRACE_MS`); do not rely on a plugin veto for requests in the first minute after a boot with slow plugins.
 - An explicit `null` for a secret field of a plugin config removes the stored secret, where 0.25.0 kept it; a client that sends `null` for "not provided" must leave the key out.
