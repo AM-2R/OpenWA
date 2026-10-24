@@ -234,7 +234,16 @@ RUN npm ci --omit=dev --ignore-scripts \
 # Deliberately AFTER `npm ci`, so the application tree is still resolved by the npm the lockfile
 # was generated with and only the global CLI is swapped. Pinned to the exact patch release —
 # a floating npm@12 would make the image's bundled npm tree depend on when the build happened.
-RUN npm install -g npm@12.2.1 && npm cache clean --force
+# npm 12.2.1 still bundles Undici 6.29.0. Replace only that package with its compatible patch;
+# npm's bundled private packages prevent reinstalling its dependency tree from the registry.
+RUN npm install -g npm@12.2.1 && \
+    node -e "if (require('/usr/local/lib/node_modules/npm/node_modules/undici/package.json').version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" && \
+    npm_http_patch_dir=$(mktemp -d) && \
+    npm install --prefix "$npm_http_patch_dir" --no-save --package-lock=false --ignore-scripts --no-audit --fund=false undici@6.29.1 && \
+    rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
+    mv "$npm_http_patch_dir/node_modules/undici" /usr/local/lib/node_modules/npm/node_modules/undici && \
+    rm -rf "$npm_http_patch_dir" && \
+    npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
 # arm64: use Debian's chromium installed above (a choice; see the note at that install).

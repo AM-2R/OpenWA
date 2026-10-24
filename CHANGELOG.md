@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Update multer to 2.5.0 and undici to 8.12.3 to prevent request teardown and response decoding failures.
+- Patch npm's bundled Undici to 6.29.1 in the production image and JavaScript SDK publishing toolchain.
 - Keep deleted sessions free of late message, status and bulk writes, and of the `message:failed` event of a bulk item whose session was deleted before it was sent.
 - Retain sending limits while hooks or preparation are pending, including across UTC midnight.
 - Preserve whatsapp-web.js readiness when an earlier QR render completes.
