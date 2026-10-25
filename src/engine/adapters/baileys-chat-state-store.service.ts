@@ -44,7 +44,8 @@ export interface ChatStateStore {
    * Like {@link remember}, but first folds the rows filed under `twins` (other spellings of the chat)
    * onto `chatId`: all the rows, read from the table and merged by {@link mergeTwinStates}, are the
    * merge base, and the twin rows are deleted once the result is written. `create` applies as in
-   * {@link remember} when no twin row is found.
+   * {@link remember} when no twin row is found. Writes of the twins wait for it, so none can land between
+   * the read of a twin row and its delete.
    */
   fold(
     sessionId: string,
@@ -157,8 +158,26 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private readonly sessionWrites = new Map<string, SessionWrites>();
   private warnedEviction = false;
   private readonly maxEntries: number;
-  /** One write chain per chat, so each remember() merges onto the state the previous one left. */
+  /**
+   * One write chain per chat, so each remember() merges onto the state the previous one left. A fold
+   * holds the chains of its twins as well (see {@link enqueue}).
+   */
   private readonly writes = new KeyedMutationQueue();
+  /**
+   * A load (reload, refreshSession, a read-through) reads the table while writes go on, so its rows can
+   * be older than a change made after the read began. `inFlight` counts a chat's writes and forgets
+   * queued or running. Each one, as it settles, and every unlink of a session takes the next `touchSeq`
+   * and is recorded in `touched` under the chat's key (the session's prefix, for an unlink). A load
+   * notes `touchSeq` before it reads and, when the answer comes, skips any row {@link changedSince}
+   * flags. `touched` is bounded by the cache cap: when full it is dropped and `touchedFloor` makes every
+   * load begun before then distrust all of its rows, which only costs those chats another read.
+   */
+  private readonly inFlight = new Map<string, number>();
+  private touchSeq = 0;
+  private touchedFloor = 0;
+  private readonly touched = new Map<string, number>();
+  /** The `updatedAt` of the last write, so the next one never shares it (see {@link stamp}). */
+  private lastStamp = 0;
 
   constructor(
     @InjectRepository(ChatState, 'data')
@@ -174,6 +193,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   async reload(): Promise<void> {
     const seq = this.writeSeq;
     const idle = this.writes.size === 0;
+    const since = this.touchSeq;
     // Dropped before the read, as refreshSession does: a restore may have replaced the table, so if
     // the read fails, every chat not cached must read through rather than trust a stale mark.
     this.completeSessions.clear();
@@ -188,10 +208,13 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       this.completeSessions.clear();
       // Oldest first, so the newest row ends at the most-recent end of the LRU rather than the first
       // one evicted (the query is DESC only so `take` keeps the newest rows).
+      let skipped = false;
       for (const row of [...rows].reverse()) {
-        this.index(this.key(row.sessionId, row.chatId), fromRow(row));
+        const k = this.key(row.sessionId, row.chatId);
+        if (this.changedSince(k, since)) skipped = true;
+        else this.index(k, fromRow(row));
       }
-      if (this.loadWasWhole(rows.length, idle && this.writeSeq === seq && this.writes.size === 0)) {
+      if (this.loadWasWhole(rows.length, idle && this.writeSeq === seq && this.writes.size === 0 && !skipped)) {
         for (const row of rows) this.completeSessions.add(row.sessionId);
       }
       this.logger.log(
@@ -226,7 +249,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   remember(sessionId: string, chatId: string, patch: Partial<ChatStateValue>, create = true): Promise<void> {
     const k = this.key(sessionId, chatId);
     const generation = this.writesOf(sessionId).generation;
-    return this.enqueue(sessionId, k, async () => {
+    return this.enqueue(sessionId, [k], async () => {
       await this.applyPatch(k, sessionId, chatId, patch, generation, create);
     });
   }
@@ -240,17 +263,56 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   ): Promise<void> {
     const k = this.key(sessionId, chatId);
     const generation = this.writesOf(sessionId).generation;
-    return this.enqueue(sessionId, k, () => this.applyFold(k, sessionId, chatId, twins, patch, generation, create));
+    const keys = [...new Set([k, ...twins.map(twin => this.key(sessionId, twin))])];
+    return this.enqueue(sessionId, keys, () => this.applyFold(k, sessionId, chatId, twins, patch, generation, create));
   }
 
-  /** Queues work on the chat's write chain and counts it under the session until it settles. */
-  private enqueue(sessionId: string, k: string, work: () => Promise<void>): Promise<void> {
+  /**
+   * Queues work on the write chain of each key and counts it under the session until it settles. The
+   * work starts once it is first in line on all of them and holds them until it ends. Every chain is
+   * joined in this one synchronous step, so they all order their work alike and two works sharing
+   * chains can never each wait for the other; the work itself must not queue on a chain it holds.
+   */
+  private enqueue(sessionId: string, keys: string[], work: () => Promise<void>): Promise<void> {
     const { pending } = this.writesOf(sessionId);
-    const done = new Promise<void>((resolve, reject) => this.writes.enqueue(k, () => work().then(resolve, reject)));
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    const turns = keys.map(k => {
+      this.inFlight.set(k, (this.inFlight.get(k) ?? 0) + 1);
+      return new Promise<void>(turn =>
+        this.writes.enqueue(k, () => {
+          turn();
+          return held;
+        }),
+      );
+    });
+    // Settled inside the chains, before the work counts as done, so a load never sees the chat idle
+    // without also seeing the change.
+    const done = Promise.all(turns).then(() =>
+      work().finally(() => {
+        for (const k of keys) this.settled(k);
+        release();
+      }),
+    );
     pending.add(done);
     const settle = () => pending.delete(done);
     done.then(settle, settle);
     return done;
+  }
+
+  /**
+   * The `updatedAt` of a write: the clock, or one millisecond past the previous write when the clock has
+   * not moved past it. Twin rows rank by it and a tie goes to the phone row, so a write of a twin made in
+   * the same millisecond as one of the phone row would rank older however late it came. A burst of
+   * writes runs it ahead of the clock by its writes beyond one per millisecond, until the clock catches up.
+   * A lead of more than a minute is no burst (5000 writes at once lead by about 4 s) but the clock set
+   * back, and the stamp follows the clock again: kept, it would date every later write up to that far
+   * ahead, past a twin row a restarted process or another node writes in the meantime.
+   */
+  private stamp(): Date {
+    const now = Date.now();
+    this.lastStamp = this.lastStamp - now > 60_000 ? now : Math.max(now, this.lastStamp + 1);
+    return new Date(this.lastStamp);
   }
 
   private writesOf(sessionId: string): SessionWrites {
@@ -270,6 +332,33 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private bumpWriteSeq(sessionId: string): void {
     this.writeSeq++;
     this.writesOf(sessionId).seq++;
+  }
+
+  /** One write or forget of the chat is over: it no longer counts as in flight, and the chat has changed. */
+  private settled(k: string): void {
+    const left = (this.inFlight.get(k) ?? 1) - 1;
+    if (left > 0) this.inFlight.set(k, left);
+    else this.inFlight.delete(k);
+    this.touch(k);
+  }
+
+  /** Records a change to the chat `key`, or to a whole session when it is the session's prefix. */
+  private touch(key: string): void {
+    if (this.maxEntries && this.touched.size >= this.maxEntries) {
+      this.touched.clear();
+      this.touchedFloor = this.touchSeq;
+    }
+    this.touched.set(key, ++this.touchSeq);
+  }
+
+  /**
+   * Whether the row a load read for chat `k` may be older than the chat's state: a write or forget of
+   * it is under way, or it, or its session, changed after the load began at `since`.
+   */
+  private changedSince(k: string, since: number): boolean {
+    if (this.inFlight.has(k)) return true;
+    const last = (key: string): number => this.touched.get(key) ?? this.touchedFloor;
+    return last(k) > since || last(k.slice(0, k.indexOf(SEP) + 1)) > since;
   }
 
   /**
@@ -310,16 +399,28 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     const merged = mergeTwinStates(rows)!;
     const base = Object.fromEntries(FIELDS.filter(f => saw(merged, f)).map(f => [f, merged[f]]));
     if (await this.applyPatch(k, sessionId, chatId, { ...base, ...patch }, generation)) {
-      await this.forget(sessionId, found);
+      // Deleted here, not through forget(), which would queue behind this fold on the chains it holds.
+      await Promise.all(
+        found.map(twin => {
+          const tk = this.key(sessionId, twin);
+          this.states.delete(tk);
+          this.markAbsent(tk);
+          return this.drop(sessionId, twin);
+        }),
+      );
     }
   }
 
-  /** The row as the table holds it: the cache when it has the key or knows it absent, else a query. */
+  /**
+   * The row as the table holds it: the cache when it has the key or knows it absent, else a query. The
+   * fold holds the chain of every key it reads, so no write or forget of the chat lands between the read
+   * and its answer, and a miss is recorded like a listing's, or every fold of a lid-addressed chat would
+   * query its twin again.
+   */
   private async peek(k: string, sessionId: string, chatId: string): Promise<ChatStateValue | undefined> {
     const cached = this.states.get(k);
     if (cached || this.completeSessions.has(sessionId) || this.absent.has(k)) return cached;
     const row = await this.repo.findOne({ where: { sessionId, chatId } });
-    // Recorded like a listing's miss, or every fold of a lid-addressed chat queries its twin again.
     if (!row && !this.states.has(k)) this.markAbsent(k);
     return row ? fromRow(row) : undefined;
   }
@@ -381,7 +482,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       this.index(k, next); // warm the cache even on a no-op so the next read is a hit
       return true; // nothing changed against the current state; skip the write that would just churn updatedAt
     }
-    const at = new Date();
+    const at = this.stamp();
     next.updatedAt = at.getTime();
     this.bumpWriteSeq(sessionId);
     this.index(k, next);
@@ -392,7 +493,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     sessionId: string,
     chatId: string,
     values: Partial<ChatStateValue>,
-    at = new Date(),
+    at: Date,
   ): Promise<boolean> {
     const columns: Record<string, unknown> = { ...values, observed: values.observed?.join(',') };
     delete columns.updatedAt;
@@ -420,7 +521,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   ): Promise<boolean> {
     const carried = FIELDS.filter(f => Object.hasOwn(patch, f));
     const columns = Object.fromEntries(carried.map(f => [f, patch[f]]));
-    const updatedAt = new Date();
+    const updatedAt = this.stamp();
     try {
       if (create) {
         await this.repo
@@ -455,6 +556,8 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     for (const k of [...this.states.keys()]) {
       if (k.startsWith(prefix)) this.states.delete(k);
     }
+    // And noted, for a load whose read ran before the delete and is answered after these entries go.
+    this.touch(prefix);
   }
 
   /**
@@ -468,19 +571,23 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
         const k = this.key(sessionId, chatId);
         this.states.delete(k);
         this.markAbsent(k);
-        return this.enqueue(sessionId, k, async () => {
-          try {
-            await this.repo.delete({ sessionId, chatId });
-            this.markAbsent(k);
-          } catch (err) {
-            this.logger.warn(
-              `Failed to forget chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          this.states.delete(k);
-        });
+        return this.enqueue(sessionId, [k], () => this.drop(sessionId, chatId));
       }),
     );
+  }
+
+  /** Deletes the chat's row; run with the chat's write chain held. */
+  private async drop(sessionId: string, chatId: string): Promise<void> {
+    const k = this.key(sessionId, chatId);
+    try {
+      await this.repo.delete({ sessionId, chatId });
+      this.markAbsent(k);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to forget chat state for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    this.states.delete(k);
   }
 
   /**
@@ -496,6 +603,7 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     const writes = this.writesOf(sessionId);
     const seq = writes.seq;
     const idle = writes.pending.size === 0;
+    const since = this.touchSeq;
     this.completeSessions.delete(sessionId);
     let rows: ChatState[] | undefined;
     try {
@@ -513,24 +621,31 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
       if (k.startsWith(prefix)) this.absent.delete(k);
     }
     if (!rows) return;
+    // Dropped again here, as reload does: a refresh begun later may have marked the session complete
+    // while this read was out, and dropping the entries below leaves the cache short of its rows.
+    this.completeSessions.delete(sessionId);
     for (const k of [...this.states.keys()]) {
       if (k.startsWith(prefix)) this.states.delete(k);
     }
+    let skipped = false;
     for (const row of [...rows].reverse()) {
       // Oldest first, as in reload.
-      this.index(this.key(sessionId, row.chatId), fromRow(row));
+      const k = this.key(sessionId, row.chatId);
+      if (this.changedSince(k, since)) skipped = true;
+      else this.index(k, fromRow(row));
     }
     // Marked after the loop: indexing these rows can evict other sessions' keys, never this one's.
     // Only this session's writes can leave its keys out of the load, so another session's do not count.
-    if (this.loadWasWhole(rows.length, idle && writes.seq === seq && writes.pending.size === 0)) {
+    if (this.loadWasWhole(rows.length, idle && writes.seq === seq && writes.pending.size === 0 && !skipped)) {
       this.completeSessions.add(sessionId);
     }
   }
 
   /**
    * True when a load holds every row it asked for and no write was in flight from the start of its read
-   * to the end (`quiet`). A write in flight during the read may be missing from `rows` while its key was
-   * just dropped from the cache, even one that finished before the read did, so the session cannot be
+   * to the end, and it set none of its rows aside as older than a change (`quiet`). A write in flight
+   * during the read may be missing from `rows` while its key was just dropped from the cache, even one
+   * that finished before the read did, and a row set aside is not cached, so the session cannot be
    * vouched for; skipping the mark only keeps the read-through path.
    */
   private loadWasWhole(count: number, quiet: boolean): boolean {
@@ -541,10 +656,13 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
   private warmFromTable(k: string, sessionId: string, chatId: string): void {
     if (this.pendingLookups.has(k)) return;
     this.pendingLookups.add(k);
+    const since = this.touchSeq;
     void this.repo
       .findOne({ where: { sessionId, chatId } })
       .then(row => {
-        if (this.states.has(k)) return;
+        // An answer older than a change to the chat is dropped, not cached and not read as "no row": the
+        // next read asks again.
+        if (this.states.has(k) || this.changedSince(k, since)) return;
         if (row) this.index(k, fromRow(row));
         else this.markAbsent(k);
       })

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePhoneFromJid, formatPhoneForDisplay } from './formatPhone.ts';
+import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber } from './formatPhone.ts';
 
 test('parsePhoneFromJid extracts digits from a personal @c.us JID', () => {
   assert.equal(parsePhoneFromJid('628123456789@c.us'), '628123456789');
@@ -64,4 +64,10 @@ test('formatPhoneForDisplay picks the country code by its ITU prefix: 3 digits, 
   assert.equal(formatPhoneForDisplay('8801712345678'), '+880 171 234 5678');
   assert.equal(formatPhoneForDisplay('79161234567'), '+7 916 123 4567');
   assert.equal(formatPhoneForDisplay('447911123456'), '+44 791 112 3456');
+});
+
+test('isolateNumber keeps a number one left-to-right run inside a right-to-left sentence', () => {
+  const lri = String.fromCodePoint(0x2066);
+  const pdi = String.fromCodePoint(0x2069);
+  assert.equal(isolateNumber('+49 170 123 4 5678'), `${lri}+49 170 123 4 5678${pdi}`);
 });

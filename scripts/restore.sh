@@ -29,7 +29,11 @@
 #   PLUGIN_STATE_DIR  root whose plugins/ holds the plugin registry and ctx.storage (default: the
 #                     data dir)
 #   BOOTSTRAP_KEY_FILE  where the plaintext admin key goes (default: <data dir>/.api-key)
-#                     These paths resolve through the same layers as the databases.
+#                     These paths resolve through the same layers as the databases. One that
+#                     comes from the archive's .env.generated has to stay in the data dir, unless it
+#                     is the default: the restore stops at one that leads elsewhere, naming the key,
+#                     before it copies anything. Set the key in the environment or ./.env to restore
+#                     outside the data dir.
 #   OPENWA_RESTORE_SNAPSHOT_DIR
 #                     where the safety snapshots go (default: next to the data dir, and next to
 #                     each target outside it); needed when a parent is read-only, as in the
@@ -79,22 +83,36 @@ DATA_DIR="${OPENWA_DATA_DIR:-./data}"
 RESTORE_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RESOLVED_CWD="$(pwd -P)"
 
-# Resolve symlinks in the nearest existing ancestor as well as lexical '..' segments. This matters for
-# destructive targets such as /mount-link/sessions: path.resolve alone would not reveal that mount-link
-# points at the workspace, home directory, or another broad protected target.
+# Resolve a path the way the kernel does: left to right, following every symlink and applying each '..' to
+# the physical directory reached so far. Folding '..' lexically first would read <link to />/.. as the link's
+# parent directory when the kernel resolves it to /, and a guard on that value would pass what it must refuse.
+# Each step is the kernel's own realpath (fs.realpathSync.native). The JavaScript one folds a '..' inside a
+# link's target lexically, so a link to <link to />/.. would read as the directory holding it, and it keeps
+# the case and Unicode form as typed on a filesystem that ignores both. The part past the first component
+# that does not exist cannot hold a link, so '..' there is plain text. This matters for destructive targets
+# such as /mount-link/sessions: path.resolve alone would not reveal that mount-link points at the
+# workspace, home directory, or another broad protected target.
 resolve_path() {
   node -e '
     const fs = require("fs");
     const path = require("path");
-    let current = path.resolve(process.argv[1]);
+    const raw = process.argv[1];
+    const absolute = raw.startsWith("/") ? raw : process.cwd() + "/" + raw;
+    let physical = "/";
     const missing = [];
-    while (!fs.existsSync(current)) {
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      missing.unshift(path.basename(current));
-      current = parent;
+    for (const segment of absolute.split("/")) {
+      if (segment === "" || segment === ".") continue;
+      if (missing.length > 0) {
+        if (segment === "..") missing.pop();
+        else missing.push(segment);
+      } else if (segment === "..") {
+        physical = path.dirname(physical);
+      } else {
+        const next = path.join(physical, segment);
+        if (fs.existsSync(next)) physical = fs.realpathSync.native(next);
+        else missing.push(segment);
+      }
     }
-    const physical = fs.existsSync(current) ? fs.realpathSync(current) : current;
     console.log(path.join(physical, ...missing));
   ' "$1"
 }
@@ -110,22 +128,58 @@ case "$DATA_DIR" in
     exit 1
     ;;
 esac
+# The trailing / comes off the prefix wherever a resolved directory is matched as one: the root resolves to
+# "/", "$dir"/* is then //*, which no path matches, and every spelling of / that the list above misses
+# (//, /., /./, /.. or a link to /) would be taken for a directory the workspace is not under. Trimmed, the
+# pattern is /*, so the root is refused here as a parent of the workspace. The / is kept inside the quotes:
+# bash 5 does not match "${dir%/}"/* against anything when the trim leaves nothing, and bash 3 does.
 case "$RESOLVED_CWD/" in
-  "$RESOLVED_DATA_DIR"/*)
+  "${RESOLVED_DATA_DIR%/}/"*)
     log "ERROR: OPENWA_DATA_DIR must not be the workspace or one of its parent directories: $DATA_DIR"
     exit 1
     ;;
 esac
-if [ "$RESOLVED_DATA_DIR" = "$RESOLVED_USER_HOME" ]; then
-  log "ERROR: OPENWA_DATA_DIR must not be the user home directory: $DATA_DIR"
+# The root directory under a name no path comparison recognises is refused by identity: a bind mount of /, or
+# a link whose name is not valid UTF-8, which node reads back with replacement characters so that the
+# resolution above misses it. test -ef compares device and inode, as the kernel does.
+if [ "$DATA_DIR" -ef / ]; then
+  log "ERROR: refusing unsafe OPENWA_DATA_DIR target: $DATA_DIR"
   exit 1
 fi
+# The home directory, or a parent of it, holds every other home under it as the workspace's parent holds the
+# workspace, so the data dir is refused when it is either.
+case "$RESOLVED_USER_HOME/" in
+  "${RESOLVED_DATA_DIR%/}/"*)
+    log "ERROR: OPENWA_DATA_DIR must not be the user home directory or one of its parent directories: $DATA_DIR"
+    exit 1
+    ;;
+esac
 
 # refuse_unwritable <path> <label>: stop in the snapshot phase, before the first database is replaced.
 refuse_unwritable() {
   log "ERROR: cannot write the $2 target: $1"
   log "       nothing has been restored yet; fix its permissions or point the setting at a writable path, then re-run"
   exit 1
+}
+
+# refuse_root_target <path> <label>: a database or key file that resolves to / (//, /., a link to /) is
+# snapshotted with cp -pRH, which copies the whole filesystem into a directory inside it, and a root user can
+# write there. Checked first in the snapshot phase, ahead of the writability test a non-root user stops at.
+refuse_root_target() {
+  if [ "$(resolve_path "$1")" = / ] || [ "$1" -ef / ]; then
+    log "ERROR: refusing to replace broad $2 target: $1"
+    exit 1
+  fi
+}
+
+# refuse_directory_target <path> <label>: a database or key file is a file. Given a directory (the workspace's
+# parent, say, from a typo in a path) the restore copied it whole into the safety snapshot, wrote the file
+# inside it, and then took the search bit off it with the chmod 0600 that follows a database or key file.
+refuse_directory_target() {
+  if [ -d "$1" ]; then
+    log "ERROR: refusing to replace $2 target that is a directory: $1"
+    exit 1
+  fi
 }
 
 replace_tree() {
@@ -139,19 +193,25 @@ replace_tree() {
       ;;
   esac
   resolved_target="$(resolve_path "$target_dir")"
-  if [ "$resolved_target" = "/" ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
+  if [ "$resolved_target" = "/" ] || [ "$target_dir" -ef / ] || [ "$resolved_target" = "$RESOLVED_CWD" ] || [ "$resolved_target" = "$RESOLVED_DATA_DIR" ] || [ "$resolved_target" = "$RESOLVED_USER_HOME" ]; then
     log "ERROR: refusing to replace broad $label target: $target_dir"
     exit 1
   fi
   case "$RESOLVED_CWD/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the workspace: $target_dir"
       exit 1
       ;;
   esac
   case "$RESOLVED_DATA_DIR/" in
-    "$resolved_target"/*)
+    "${resolved_target%/}/"*)
       log "ERROR: refusing to replace $label target that contains the data directory: $target_dir"
+      exit 1
+      ;;
+  esac
+  case "$RESOLVED_USER_HOME/" in
+    "${resolved_target%/}/"*)
+      log "ERROR: refusing to replace $label target that contains the user home directory: $target_dir"
       exit 1
       ;;
   esac
@@ -190,7 +250,7 @@ snapshot_external() {
   target="$1"
   external_snapshot=""
   case "$(resolve_path "$target")" in
-    "$RESOLVED_DATA_DIR"/*) return 0 ;;
+    "${RESOLVED_DATA_DIR%/}/"*) return 0 ;;
   esac
   [ -e "$target" ] || return 0
   snapshot_dir="${OPENWA_RESTORE_SNAPSHOT_DIR:-$(dirname "$target")}"
@@ -217,6 +277,8 @@ snapshot_external() {
 restore_db() {
   resolved_db="$(resolve_path "$2")"
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$2" "$3"
+    refuse_directory_target "$2" "$3"
     openwa_writable "$2" || refuse_unwritable "$2" "$3"
     for db in "$2" "$resolved_db"; do
       for sfx in -wal -shm -journal; do
@@ -283,7 +345,9 @@ trap 'rm -rf "$STAGE"' EXIT
 
 log "Extracting $ARCHIVE"
 # Refuse archive path names that could escape STAGE. This restore command accepts archives produced by
-# backup.sh; path validation is an additional traversal guard, not a general untrusted-tar verifier.
+# backup.sh and installs their keys, plugins and configuration as they are; it is not a general
+# untrusted-tar verifier. Where it writes does not rest on the archive, though: a member name that could
+# escape STAGE is refused here, and a path from its .env.generated that leads out of the data dir below.
 while IFS= read -r entry; do
   case "$entry" in
     /* | ../* | */../* | */..)
@@ -296,10 +360,10 @@ tar -xzf "$ARCHIVE" -C "$STAGE"
 
 # Targets resolve exactly like the app: an explicit environment value, then ./.env, then the
 # dashboard's .env.generated, else the app's ./data defaults under OPENWA_DATA_DIR. They may
-# legitimately live outside it. The archive's .env.generated replaces the target's further down, so
-# when it carries one, that copy is the third layer: the restored app reads its paths, and state
-# placed where the replaced file pointed would never be opened. Resolved before anything is
-# validated or written.
+# legitimately live outside it, where the environment or ./.env says so (see archive_target). The
+# archive's .env.generated replaces the target's further down, so when it carries one, that copy is
+# the third layer: the restored app reads its paths, and state placed where the replaced file
+# pointed would never be opened. Resolved before anything is validated or written.
 if [ -f "$STAGE/.env.generated" ]; then
   OPENWA_GENERATED_ENV="$STAGE/.env.generated"
   log "Paths not set in the environment or ./.env come from the archive's .env.generated."
@@ -337,6 +401,100 @@ for member in sessions baileys media plugin-packages plugin-state; do
     log "       re-take the backup with this version of backup.sh, or extract the archive and restore by hand"
     exit 1
   fi
+done
+
+# The environment and ./.env are the operator's own; the archive's .env.generated is not, yet the paths it names
+# are where the restore empties directories and writes files. Such a path has to lie inside the data dir as the
+# kernel resolves it, unless it is where the app goes without it (a default, which the operator's own links may
+# lead elsewhere). Inside the data dir, two ways out remain closed: a link that does not resolve, which a copy
+# follows wherever it points, and a target inside or around a directory refilled from the archive, whose links
+# are in place before the other target is written. Setting the key in the environment or ./.env lifts this.
+from_archive() {
+  [ "$OPENWA_GENERATED_ENV" = "$STAGE/.env.generated" ] && [ -z "$(printenv "$1" 2>/dev/null || true)" ] &&
+    ! openwa_env_file_value ./.env "$1" >/dev/null 2>&1 &&
+    openwa_env_file_value "$OPENWA_GENERATED_ENV" "$1" >/dev/null 2>&1
+}
+
+refuse_archive_path() {
+  log "ERROR: $1 from the archive's .env.generated $3: $2"
+  log "       nothing has been restored yet; to restore there, set $1 in the environment or ./.env and re-run"
+  exit 1
+}
+
+TARGET_KEYS=()
+TARGET_PATHS=()
+TARGET_KINDS=()
+TARGET_CHOSEN=()
+# archive_target <key> <path> <file|dir> <default>...: note a target the restore replaces, refusing it when the
+# archive's .env.generated chose it and it leads out of the data dir.
+archive_target() {
+  local key="$1" path="$2" kind="$3" resolved chosen=0 p
+  shift 3
+  resolved="$(resolve_path "$path")"
+  if from_archive "$key"; then
+    chosen=1
+    for p in "$@"; do
+      [ "$resolved" != "$(resolve_path "$p")" ] || chosen=0
+    done
+  fi
+  if [ "$chosen" -eq 1 ]; then
+    case "$resolved" in
+      "${RESOLVED_DATA_DIR%/}/"?*) ;;
+      *) refuse_archive_path "$key" "$path" "is not inside the data directory" ;;
+    esac
+    p="$path"
+    while [ ! -e "$p" ]; do
+      [ ! -L "$p" ] || refuse_archive_path "$key" "$path" "goes through a link that does not resolve ($p)"
+      p="$(dirname "$p")"
+    done
+  fi
+  TARGET_KEYS+=("$key")
+  TARGET_PATHS+=("$resolved")
+  TARGET_KINDS+=("$kind")
+  TARGET_CHOSEN+=("$chosen")
+}
+if [ -f "$STAGE/main.sqlite" ]; then
+  archive_target MAIN_DATABASE_NAME "$MAIN_DB" file "${DATA_DIR%/}/main.sqlite"
+fi
+if [ -f "$STAGE/openwa.sqlite" ]; then
+  archive_target DATABASE_NAME "$DATA_DB" file "${DATA_DIR%/}/openwa.sqlite"
+fi
+if [ -d "$STAGE/sessions" ]; then
+  archive_target SESSION_DATA_PATH "$SESSIONS_DIR" dir "$DATA_DIR/sessions"
+fi
+if [ -d "$STAGE/baileys" ]; then
+  archive_target BAILEYS_AUTH_DIR "$BAILEYS_DIR" dir "$DATA_DIR/baileys"
+fi
+# A leftover ./uploads stays where the app itself keeps media (openwa_media_dir), so it counts as a default.
+if [ -d "$STAGE/media" ]; then
+  archive_target STORAGE_LOCAL_PATH "$MEDIA_DIR" dir "$DATA_DIR/media" ./uploads
+fi
+if [ -d "$STAGE/plugin-packages" ]; then
+  archive_target PLUGINS_DIR "$PLUGIN_PACKAGES_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -d "$STAGE/plugin-state" ]; then
+  archive_target PLUGIN_STATE_DIR "$PLUGIN_STATE_DIR" dir "$DATA_DIR/plugins"
+fi
+if [ -f "$STAGE/.api-key" ]; then
+  archive_target BOOTSTRAP_KEY_FILE "$ADMIN_KEY_FILE" file "$DATA_DIR/.api-key"
+fi
+i=0
+while [ "$i" -lt "${#TARGET_KEYS[@]}" ]; do
+  j=0
+  while [ "$j" -lt "${#TARGET_KEYS[@]}" ]; do
+    if [ "${TARGET_KINDS[j]}" = dir ] && [ "${TARGET_CHOSEN[i]}${TARGET_CHOSEN[j]}" != 00 ]; then
+      case "${TARGET_PATHS[i]}" in
+        "${TARGET_PATHS[j]%/}/"?*)
+          key="${TARGET_KEYS[i]}"
+          [ "${TARGET_CHOSEN[i]}" -eq 1 ] || key="${TARGET_KEYS[j]}"
+          refuse_archive_path "$key" "${TARGET_PATHS[i]}" \
+            "puts the ${TARGET_KEYS[i]} target inside the ${TARGET_KEYS[j]} directory, which is refilled from the archive"
+          ;;
+      esac
+    fi
+    j=$((j + 1))
+  done
+  i=$((i + 1))
 done
 
 # A backup taken without sqlite3 .backup carries this marker: the database snapshots were
@@ -445,6 +603,8 @@ restore_targets() {
 # with the other targets: it may be the only plaintext copy of a key the replaced main.sqlite accepts.
 restore_admin_key() {
   if [ "$PHASE" = snapshot ]; then
+    refuse_root_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
+    refuse_directory_target "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     openwa_writable "$ADMIN_KEY_FILE" || refuse_unwritable "$ADMIN_KEY_FILE" "admin key (BOOTSTRAP_KEY_FILE)"
     snapshot_external "$ADMIN_KEY_FILE"
     return

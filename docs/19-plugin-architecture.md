@@ -565,8 +565,15 @@ decision across a restart; the decision is persisted separately as `enabledByOpe
 `onApplicationBootstrap` — after the rest of the app is wired — the loader re-enables every non-built-in
 plugin carrying that flag, so an upgrade, host reboot or container restart no longer silently switches
 off every extension ([#856](https://github.com/rmyndharis/OpenWA/issues/856)). Restoring is best-effort
-and sequential: a plugin that fails is logged (`plugin_restore_failed`), left in `ERROR`, and never
+and sequential: a plugin that fails is logged (`plugin_restore_failed`) and left in `ERROR`; that failure never
 holds up startup. Built-ins are skipped — `EngineFactory` enables the engine named by `engine.type`.
+
+A slow restore can hold startup up, but only for 60 s: after that the loader logs
+`plugin_restore_deferred`, the HTTP port opens, and the plugins not yet restored keep coming up in
+order in the background. Until a plugin is up its hooks do not run, so a request that arrives in that
+window is not seen by them (a send moderation veto, for one); enabling, disabling, updating or
+uninstalling it answers `409` until the restore is done with it; and an ingress delivery for it is
+refused or held as described in section 25.7 of [25 - Integration Fabric](./25-integration-fabric.md).
 
 > The flag is written **only** by the operator-facing enable/disable, never by the loader.
 > `onModuleDestroy` disables every running plugin during a graceful shutdown, so a loader-side write

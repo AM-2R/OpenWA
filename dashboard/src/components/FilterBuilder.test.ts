@@ -100,3 +100,26 @@ test('removing a row does not hand its unsent chip text to the row below', () =>
   assert.deepEqual(latest, { conditions: [{ field: 'chatId', operator: 'is', value: ['2@c.us', '62813@c.us'] }] });
   assert.equal(container.querySelector('.chips-text'), left);
 });
+
+// A contact typed as a number is turned into its chat id from the digits; those may be native-script or full-width.
+for (const [script, zero] of [
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a contact typed in ${script} digits is added as an ASCII chat id`, () => {
+    const changes: (WebhookFilters | null)[] = [];
+    const { container } = rtl.render(
+      createElement(FilterBuilder, {
+        filters: { conditions: [{ field: 'sender', operator: 'is', value: [] }] },
+        onChange: next => changes.push(next),
+        chats: [],
+      }),
+    );
+    const input = container.querySelector<HTMLInputElement>('.chips-text');
+    assert.ok(input, 'expected the contact input');
+    const typed = [...'628123456789'].map(d => String.fromCharCode(zero + Number(d))).join('');
+    rtl.fireEvent.change(input, { target: { value: typed } });
+    rtl.fireEvent.keyDown(input, { key: 'Enter' });
+    assert.deepEqual(changes.at(-1)?.conditions?.[0].value, ['628123456789@c.us']);
+  });
+}

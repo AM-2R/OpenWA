@@ -184,6 +184,48 @@ test('a create sends the IP allow-list, chats and expiry only when filled in', a
   });
 });
 
+// The gateway takes ASCII digits only; a number typed with an Arabic or Persian keyboard is sent as the same number.
+test('a create folds native digits in the chat list and sends the ASCII chat id', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: {
+      value: '\u0666\u0662\u0668\u0661\u0662\u0663\u0664\n\u06f1\u06f2\u06f0\u06f3\u06f6\u06f3\u06f0\u06f0\u06f0@g.us',
+    },
+  });
+  assert.equal(screen.queryByText(/Not a chat ID or phone number/) === null, true);
+  assert.equal(create.disabled, false);
+  fireEvent.click(create);
+  await waitFor(() => assert.ok(createBody));
+  assert.deepEqual(createBody, {
+    name: 'crm-bot',
+    role: 'operator',
+    allowedSessions: [],
+    allowedChats: ['6281234@c.us', '120363000@g.us'],
+  });
+});
+
+test('a native digit entry that is no chat id is still refused and names the folded value', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: '\u0661\u0662\u0663\u0664' } });
+  assert.equal(create.disabled, true);
+  screen.getByText('Not a chat ID or phone number: 1234');
+});
+
+test('an edit in native digits for the chat already stored sends nothing', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const save = await openEdit({ ...billingBot, allowedChats: ['6281234@c.us'] });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: { value: '\u0666\u0662\u0668\u0661\u0662\u0663\u0664' },
+  });
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(screen.queryByRole('button', { name: 'Save' }) === null, true));
+  assert.deepEqual(updateBodies, []);
+});
+
 // The key exists once the request lands; a modal closed meanwhile would leave its one-time secret
 // unseen and pop it up on the next Create API Key click.
 test('the create modal stays open until the request settles and then shows the secret', async () => {
@@ -203,6 +245,22 @@ test('the create modal stays open until the request settles and then shows the s
   screen.getByRole('dialog');
   release();
   await screen.findByText('owa_k1_new');
+});
+
+// The secret is shown once: closing the dialog that shows it drops it, and the next Create opens the form.
+test('closing the dialog that shows a new key drops the secret, and Create opens the form again', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.click(create);
+  await screen.findByText('owa_k1_new');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  assert.equal(screen.queryByRole('dialog') === null, true, 'the dialog stayed open');
+  fireEvent.click(screen.getByRole('button', { name: 'Create API Key' }));
+  assert.equal(screen.queryByText('owa_k1_new') === null, true, 'the previous secret is shown again');
+  assert.equal(screen.getByLabelText<HTMLInputElement>('Name').value, '');
+  assert.ok(screen.getByRole('button', { name: 'Create' }));
 });
 
 // The gateway counts an emoji, with or without its presentation selector, as one character.

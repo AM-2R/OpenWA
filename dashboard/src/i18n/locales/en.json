@@ -171,6 +171,16 @@
       "backgroundColor": "Background color",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "System",
+        "systemText": "System text",
+        "script": "Script",
+        "bold": "Bold",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "or",
       "post": "Post",
       "posted": "Status posted",
@@ -670,7 +680,7 @@
       "call.rejected": "When a call is declined",
       "call.missed": "When a call goes unanswered",
       "status.received": "When a contact posts a status",
-      "all": "All events"
+      "all": "All events except message.receipt, which must be named explicitly"
     },
     "auth": {
       "title": "Delivery authentication",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} sent",
     "groupSendCancelled": "{{count}}, cancelled",
     "groupSendStopped": "{{count}}, stopped after HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, stopped: the gateway did not answer",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "Message ID",
@@ -1045,7 +1056,7 @@
       "copy": "Copy",
       "copied": "Copied",
       "checkedAt": "Checked At",
-      "openTester": "Open in Message Tester"
+      "openTester": "Go to Message Tester"
     },
     "recent": {
       "title": "Recent Checks",
@@ -1082,6 +1093,7 @@
       "start": "Start Batch Check",
       "stop": "Stop Checking",
       "export": "Export Results (CSV)",
+      "exportHint": "The file holds every digit. A spreadsheet may show long numbers as 9.19612E+11 or drop a leading zero; import the file and set the Phone Number column to Text to keep them unchanged.",
       "stoppedTitle": "Batch stopped",
       "checked": "Checked",
       "remaining": "Remaining",
@@ -1094,6 +1106,7 @@
       "reasonOther": "The gateway refused a lookup",
       "partial": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} number was not sent. Try again later.",
       "partial_other": "{{reason}} (HTTP {{status}}). Stopped at number {{attempted}} of {{total}}; {{count}} numbers were not sent. Try again later.",
+      "noAnswer": "The gateway did not answer. Stopped at number {{attempted}} of {{total}}. Try again later.",
       "last": "{{reason}} (HTTP {{status}}). The last lookup failed. Try again later."
     },
     "toast": {
@@ -1192,7 +1205,10 @@
       "disabled": "Disabled"
     },
     "envPinNote": "Pinned by the environment variable {{name}} — this is the running value; dashboard changes won't apply until that variable is unset.",
+    "envPinFlagNote": "Pinned by the environment variable {{name}}: the built-in container still starts at every boot while it is set to true and this service is in use, even with this toggle off.",
     "pendingRestartNote": "Saved, but not applied yet — restart the server for this change to take effect.",
+    "pendingBuiltInNote": "Saved, but not applied yet: the server runs with an external service now, and a restart switches it to the built-in container.",
+    "pendingExternalNote": "Saved, but not applied yet: the server runs with the built-in container now, and a restart switches it to an external service.",
     "migration": {
       "title": "Heads up — this changes the data backend",
       "dbWarning": "The new database starts empty. Download a backup of your current data now (while still on the old database), then restore it after the restart.",
@@ -1218,6 +1234,7 @@
       "successTitle": "Server ready",
       "errorTitle": "Restart failed",
       "idleDesc": "Configuration has been saved to <code>.env.generated</code>.<br/>A server restart is required to apply the changes.",
+      "stopsContainers": "The restart also stops these built-in containers, which keep their data and are not deleted:",
       "later": "Restart Later",
       "now": "Restart Now",
       "restartingMsg": "Server restarting... {{count}}s",

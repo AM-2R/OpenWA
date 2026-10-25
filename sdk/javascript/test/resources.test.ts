@@ -540,3 +540,65 @@ describe('SearchResource — exact path and query forwarding', () => {
     expect(t.lastCall!.url).toBe('http://x/api/search?q=term&chatId=628%40c.us&direction=incoming');
   });
 });
+
+// Eleven routes no other test calls. Each row is written from the contract (openapi.json: verb, path,
+// query and request-body keys), not read off the client, so a changed verb or a renamed body key fails here.
+describe('routes with no other test: verb, path, query and body', () => {
+  type Row = [name: string, call: (c: OpenWAClient) => Promise<unknown>, method: string, url: string, body?: unknown];
+  const rows: Row[] = [
+    ['sessions.getConfig', c => c.sessions.getConfig('s1'), 'GET', 'http://x/api/sessions/s1/config'],
+    [
+      'sessions.updateConfig',
+      c =>
+        c.sessions.updateConfig('s1', { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 2000 }),
+      'PATCH',
+      'http://x/api/sessions/s1/config',
+      { autoRejectCalls: true, maxReconnectAttempts: null, reconnectBaseDelay: 2000 },
+    ],
+    ['sessions.getProxy', c => c.sessions.getProxy('s1'), 'GET', 'http://x/api/sessions/s1/proxy'],
+    [
+      'sessions.updateProxy',
+      c => c.sessions.updateProxy('s1', { proxyUrl: null }),
+      'PATCH',
+      'http://x/api/sessions/s1/proxy',
+      { proxyUrl: null },
+    ],
+    [
+      'webhooks.listAll',
+      c => c.webhooks.listAll({ limit: 5, offset: 10 }),
+      'GET',
+      'http://x/api/webhooks?limit=5&offset=10',
+    ],
+    [
+      'webhooks.deliveryFailures',
+      c => c.webhooks.deliveryFailures({ sessionId: 's1', limit: 5, offset: 10 }),
+      'GET',
+      'http://x/api/webhooks/delivery-failures?sessionId=s1&limit=5&offset=10',
+    ],
+    [
+      'chats.subscribePresence',
+      c => c.chats.subscribePresence('s1', { chatId: 'a@c.us' }),
+      'POST',
+      'http://x/api/sessions/s1/presence/subscribe',
+      { chatId: 'a@c.us' },
+    ],
+    ['chats.getPresence', c => c.chats.getPresence('s1', 'a@c.us'), 'GET', 'http://x/api/sessions/s1/presence/a@c.us'],
+    ['status.fromContact', c => c.status.fromContact('s1', 'a@c.us'), 'GET', 'http://x/api/sessions/s1/status/a@c.us'],
+    ['labels.chats', c => c.labels.chats('s1', 'l1'), 'GET', 'http://x/api/sessions/s1/labels/l1/chats'],
+    [
+      'groups.joinInfo',
+      c => c.groups.joinInfo('s1', 'INVITE'),
+      'GET',
+      'http://x/api/sessions/s1/groups/join-info?code=INVITE',
+    ],
+  ];
+
+  it.each(rows)('%s', async (_name, call, method, url, body) => {
+    const t = new MockTransport().passthrough({ status: 200, body: {} });
+    await call(client(t));
+    expect(t.calls).toHaveLength(1);
+    expect(t.lastCall!.method).toBe(method);
+    expect(t.lastCall!.url).toBe(url);
+    expect(t.lastCall!.body).toEqual(body);
+  });
+});

@@ -53,6 +53,11 @@ const allNavItems = [
 
 const themeIcons = { light: Sun, dark: Moon, system: Monitor };
 
+// The phone layout switches on the query the phone styles in Layout.css sit under. A width test in script disagreed
+// with them at a fractional width: at 110% zoom the window width rounds 767.3 CSS px to 767, which the query does
+// not match, so the desktop sidebar was drawn and made inert.
+const MOBILE_QUERY = '(max-width: 767px)';
+
 export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
   const { theme, toggleTheme } = useTheme();
@@ -70,7 +75,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+  // Collapsing is a desktop preference: the phone drawer has no collapse control, so it never renders collapsed,
+  // and the flag stays as it was for when the window widens again.
+  const collapsed = isCollapsed && !isMobile;
   // Show the build-time version immediately, then replace it with the live running version from the
   // backend so a stale-built bundle can't display the wrong number. Falls back silently on error.
   const [version, setVersion] = useState(__APP_VERSION__);
@@ -79,15 +87,16 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [update, setUpdate] = useState<{ latest: string; url: string } | null>(null);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const languageMenuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (!mobile) setIsMobileOpen(false);
+    const phone = window.matchMedia(MOBILE_QUERY);
+    const handleChange = () => {
+      setIsMobile(phone.matches);
+      if (!phone.matches) setIsMobileOpen(false);
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    phone.addEventListener('change', handleChange);
+    return () => phone.removeEventListener('change', handleChange);
   }, []);
 
   useEffect(() => {
@@ -134,6 +143,27 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     };
   }, [isMobileOpen]);
 
+  // Escape dismisses the innermost overlay: while the language menu is open it takes the key, then the drawer does.
+  // The drawer covers the page, so it takes the key before the page's own Escape handlers (on window, in the capture
+  // phase) and keeps it from them: one press closed the drawer and the chat open behind it. A dialog renders above
+  // the drawer and keeps its own Escape, and so does a composition being committed by an IME.
+  useEffect(() => {
+    if (!isMobileOpen || isLanguageMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsMobileOpen(false);
+      // The focused link is about to slide off screen, so hand focus back to the control that opened the drawer.
+      mobileMenuButtonRef.current?.focus();
+    };
+
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOnEscape, true);
+  }, [isMobileOpen, isLanguageMenuOpen]);
+
   useEffect(() => {
     if (!isLanguageMenuOpen) return;
 
@@ -169,7 +199,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     <div className="layout">
       {isMobile && (
         <header className="mobile-header">
-          <button className="mobile-menu-btn" onClick={toggleMobile} aria-label={t('common.expand')}>
+          <button
+            ref={mobileMenuButtonRef}
+            className="mobile-menu-btn"
+            onClick={toggleMobile}
+            aria-label={isMobileOpen ? t('common.close') : t('common.expand')}
+            aria-expanded={isMobileOpen}
+          >
             {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
           <div className="mobile-brand">
@@ -183,11 +219,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
       {isMobile && isMobileOpen && <div className="sidebar-overlay" onClick={() => setIsMobileOpen(false)} />}
 
       <aside
-        className={`sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        className={`sidebar ${collapsed ? 'collapsed' : ''} ${isMobile ? 'mobile' : ''} ${isMobileOpen ? 'open' : ''}`}
+        // Off screen is not out of reach: keep the closed drawer's links out of the tab order and the reading order.
+        inert={isMobile && !isMobileOpen}
       >
         <div className="sidebar-header">
           <img src="/openwa_logo.webp" alt="OpenWA" className="sidebar-logo" />
-          {!isCollapsed && (
+          {!collapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
               <span className="brand-version">v{version}</span>
@@ -231,10 +269,10 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                 end={to === '/'}
                 onClick={handleNavClick}
-                title={isCollapsed ? label : undefined}
+                title={collapsed ? label : undefined}
               >
                 <Icon size={20} />
-                {!isCollapsed && <span>{label}</span>}
+                {!collapsed && <span>{label}</span>}
               </NavLink>
             );
           })}
@@ -251,7 +289,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               aria-expanded={isLanguageMenuOpen}
             >
               <Languages size={18} />
-              {!isCollapsed && <span>{languageLabel}</span>}
+              {!collapsed && <span>{languageLabel}</span>}
             </button>
             {isLanguageMenuOpen && (
               <div className="language-menu-list" role="menu" aria-label={t('common.language')}>
@@ -279,17 +317,17 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               <span className="appearance-button-cue" aria-hidden="true">
                 <ThemeIcon size={16} />
               </span>
-              {!isCollapsed && <span>{themeLabel}</span>}
+              {!collapsed && <span>{themeLabel}</span>}
             </button>
           </div>
-          <button className="logout-btn" onClick={onLogout} title={isCollapsed ? t('common.logout') : undefined}>
+          <button className="logout-btn" onClick={onLogout} title={collapsed ? t('common.logout') : undefined}>
             <LogOut size={20} />
-            {!isCollapsed && <span>{t('common.logout')}</span>}
+            {!collapsed && <span>{t('common.logout')}</span>}
           </button>
         </div>
       </aside>
 
-      <main className={`main-content ${isCollapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
+      <main className={`main-content ${collapsed ? 'expanded' : ''} ${isMobile ? 'mobile' : ''}`}>
         <Outlet />
       </main>
     </div>

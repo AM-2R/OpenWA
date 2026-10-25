@@ -171,6 +171,16 @@
       "backgroundColor": "背景顏色",
       "font": "字型",
       "fontDefault": "預設",
+      "fonts": {
+        "system": "系統",
+        "systemText": "系統文字",
+        "script": "手寫體",
+        "bold": "粗體",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "或",
       "post": "發佈",
       "posted": "狀態已發佈",
@@ -670,7 +680,7 @@
       "call.rejected": "來電被拒接時",
       "call.missed": "來電未接聽時",
       "status.received": "聯絡人發佈狀態時",
-      "all": "所有事件"
+      "all": "除 message.receipt 外的所有事件（message.receipt 須明確指定）"
     },
     "auth": {
       "title": "傳送驗證",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "已傳送 {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}} 個，已取消",
     "groupSendStopped": "{{count}} 個，在 HTTP {{status}} 後停止",
+    "groupSendStoppedNoAnswer": "{{count}} 個，已停止：閘道沒有回應",
     "response": {
       "timestamp": "時間戳記",
       "messageId": "訊息 ID",
@@ -1045,7 +1056,7 @@
       "copy": "複製",
       "copied": "已複製",
       "checkedAt": "檢查時間",
-      "openTester": "在訊息測試器中開啟"
+      "openTester": "前往訊息測試器"
     },
     "recent": {
       "title": "最近檢查記錄",
@@ -1082,6 +1093,7 @@
       "start": "開始批量檢查",
       "stop": "停止檢查",
       "export": "匯出結果（CSV）",
+      "exportHint": "檔案包含每一位數字。試算表可能把長號碼顯示為 9.19612E+11，或去掉開頭的 0；請匯入該檔案，並將 Phone Number 欄設為文字，以保持原樣。",
       "stoppedTitle": "批量檢查已停止",
       "checked": "已檢查",
       "remaining": "剩餘",
@@ -1094,6 +1106,7 @@
       "reasonOther": "閘道拒絕了一次查詢",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個），其餘 {{count}} 個號碼未查詢。請稍後再試。",
+      "noAnswer": "閘道沒有回應。已在第 {{attempted}} 個號碼處停止（共 {{total}} 個）。請稍後再試。",
       "last": "{{reason}}（HTTP {{status}}）。最後一次查詢失敗。請稍後再試。"
     },
     "toast": {
@@ -1198,6 +1211,7 @@
       "successTitle": "✅ 伺服器就緒",
       "errorTitle": "❌ 重新啟動失敗",
       "idleDesc": "設定已儲存到 <code>.env.generated</code>。<br/>需要重新啟動伺服器才能套用變更。",
+      "stopsContainers": "重新啟動亦會停止以下內置容器，它們會連同數據一併保留，不會被刪除：",
       "later": "稍後重新啟動",
       "now": "立即重新啟動",
       "restartingMsg": "伺服器正在重新啟動... {{count}} 秒",
@@ -1212,7 +1226,10 @@
       "saveFailed": "儲存失敗"
     },
     "envPinNote": "已由環境變數 {{name}} 鎖定 — 這是正在運行的值；在取消設定該變數之前，儀表板的變更不會生效。",
+    "envPinFlagNote": "已由環境變數 {{name}} 鎖定：只要其值為 true 且此服務正在使用，即使此開關已關閉，內置容器仍會在每次伺服器啟動時啟動。",
     "pendingRestartNote": "已儲存，但尚未生效 — 請重新啟動伺服器以套用此變更。",
+    "pendingBuiltInNote": "已儲存，但尚未生效：伺服器目前使用外部服務，重新啟動後將切換為內置容器。",
+    "pendingExternalNote": "已儲存，但尚未生效：伺服器目前使用內置容器，重新啟動後將切換為外部服務。",
     "migration": {
       "title": "請注意 — 此操作會更改資料後端",
       "dbWarning": "新資料庫會以空白狀態啟動。請立即下載目前資料的備份（趁仍在舊資料庫時），然後在重新啟動後還原。",

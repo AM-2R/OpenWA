@@ -21,7 +21,7 @@ import { MAX_CONDITIONS } from '../filters/filter-types';
 import type { FilterOperator, WebhookFilters } from '../filters/filter-types';
 import { IsValidWebhookFilters } from '../filters/filter-validation';
 import { IsHeaderMap } from './is-header-map.validator';
-import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictArray, ToStrictBoolean, ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 
 /**
@@ -132,6 +132,7 @@ export class CreateWebhookDto {
     minItems: 1,
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
   // Must include '*' (wildcard subscribe-all) alongside the known events.
@@ -151,6 +152,7 @@ export class CreateWebhookDto {
     example: 'your-webhook-signing-secret',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   // A short secret signs webhooks badly: HMAC-SHA256 over a 4-char key is brute-forcible from one
   // observed signature. 16 is the floor, not a recommendation.
@@ -220,6 +222,7 @@ export class UpdateWebhookDto {
     minItems: 1,
   })
   @ValidateIf((_: UpdateWebhookDto, v: unknown) => v !== undefined)
+  @ToStrictArray()
   @IsArray()
   @ArrayMinSize(1)
   @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
@@ -240,6 +243,7 @@ export class UpdateWebhookDto {
     // here, where it costs a `400` to ignore rather than a silent downgrade.
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   // Same floor as create: a short secret is brute-forcible from one observed signature. The
   // floor is skipped only for the empty string, which this route treats as "clear the secret"
@@ -439,12 +443,14 @@ export class RedriveWebhookDeliveriesDto {
     example: 'my-session',
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(128)
   sessionId?: string;
 
   @ApiPropertyOptional({ description: 'Only rows of this webhook.', example: '0a941dac-a965-45e7-b318-74ae8be134f0' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   @MaxLength(128)
   webhookId?: string;
@@ -457,6 +463,7 @@ export class RedriveWebhookDeliveriesDto {
     items: { type: 'string', maxLength: 128 },
   })
   @IsOptional()
+  @ToStrictArray()
   @IsArray()
   @ArrayMaxSize(500)
   @IsString({ each: true })

@@ -93,7 +93,9 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
     const top = fitsBelow ? anchor.bottom + gap : Math.max(margin, anchor.top - gap - height);
     const start = rtl ? anchor.left : anchor.right - width;
     const left = Math.min(Math.max(margin, start), window.innerWidth - width - margin);
-    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, insetInlineEnd: 'auto' });
+    // Physical edges: the stylesheet pins the end edge, and releasing it as inset-inline-end would release `left`
+    // in a right-to-left page, throwing the computed position away.
+    Object.assign(popover.style, { position: 'fixed', top: `${top}px`, left: `${left}px`, right: 'auto' });
   }, [open]);
 
   // Closes on a press outside and on Escape, which it takes in the capture phase so the page leaves the
@@ -109,19 +111,21 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
       setOpen(false);
       triggerRef.current?.focus();
     };
-    // A fixed popover would drift from its row, so a scroll of the list or a resize closes it.
-    const onMove = (event: Event) => {
-      if (!popoverRef.current?.contains(event.target as Node)) setOpen(false);
+    // A fixed popover would drift from its row, so a resize closes it, and so does a scroll of anything the row
+    // sits in. The scroll of another element (the open thread following a live message) does not move the row.
+    const onScroll = (event: Event) => {
+      if ((event.target as Node).contains(rootRef.current)) setOpen(false);
     };
+    const onResize = () => setOpen(false);
     document.addEventListener('mousedown', onPress);
     document.addEventListener('keydown', onEscape, true);
-    document.addEventListener('scroll', onMove, true);
-    window.addEventListener('resize', onMove);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
     return () => {
       document.removeEventListener('mousedown', onPress);
       document.removeEventListener('keydown', onEscape, true);
-      document.removeEventListener('scroll', onMove, true);
-      window.removeEventListener('resize', onMove);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
     };
   }, [open]);
 
@@ -134,7 +138,10 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
         ref={triggerRef}
         type="button"
         className="chat-row-menu-trigger"
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          if (!open && chat.kind === 'individual') actions.onMenuOpen?.();
+          setOpen(value => !value);
+        }}
         aria-expanded={open}
         aria-label={t('chats.rowActions.actionsFor', { name: chat.name || chat.id.split('@')[0] })}
         title={t('chats.moreActions')}
@@ -147,7 +154,12 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
             chat={chat}
             items={items}
             groupClassName="chat-row-menu-group"
-            onPicked={() => setOpen(false)}
+            onPicked={() => {
+              // Focus moves to the chevron, which stays: the picked entry is about to unmount, and a dialog it
+              // opens restores focus to whatever holds it then.
+              setOpen(false);
+              triggerRef.current?.focus();
+            }}
           />
         </div>
       )}

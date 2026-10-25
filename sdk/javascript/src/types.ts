@@ -49,7 +49,9 @@ export interface ParticipantResult {
  * The group membership writes. A partial refusal does NOT fail the batch — the request answers 200
  * and reports the per-participant outcome here, so `success` alone hides a member that was rejected.
  */
-export interface ParticipantsResult extends SuccessResult {
+export interface ParticipantsResult {
+  success: boolean;
+  message: string;
   results: ParticipantResult[];
 }
 
@@ -171,6 +173,7 @@ export interface GroupJoinInfo {
  * server always reports a concrete `reconnectBaseDelay` and `autoRejectCalls`.
  */
 export interface SessionConfig {
+  /** Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there. */
   autoRejectCalls: boolean;
   maxReconnectAttempts: number | null;
   reconnectBaseDelay: number;
@@ -182,6 +185,7 @@ export interface SessionConfig {
  * number can express.
  */
 export interface UpdateSessionConfigRequest {
+  /** Baileys only: whatsapp-web.js stores the flag but cannot reject a call, so calls keep ringing there. */
   autoRejectCalls?: boolean | null;
   maxReconnectAttempts?: number | null;
   reconnectBaseDelay?: number | null;
@@ -232,7 +236,7 @@ export interface SessionStatsOverview {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
+  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 // ── Message ───────────────────────────────────────────────────────
@@ -753,25 +757,36 @@ export type BatchLifecycleStatus = 'pending' | 'processing' | 'completed' | 'fai
 
 export interface ContactRecord {
   id: Jid;
-  name?: string | null;
-  number?: string | null;
+  /** The name from the account's own addressbook. Absent for a contact that was never saved. */
+  name?: string;
+  /** MSISDN digits, without a leading + or any separators. */
+  number: string;
   /** The name the contact set on their own account. Both engines emit this as `pushName`. */
-  pushName?: string | null;
-  isMyContact?: boolean;
+  pushName?: string;
+  /** Whether the entry exists in the account's addressbook. */
+  isMyContact: boolean;
   /**
    * Whether the account has blocked this contact. Reflects the account's real blocklist on both
    * engines. When the blocklist query fails the field stays at its default rather than reporting
    * "nobody is blocked", and the gateway logs a warning — so a `false` is not proof the contact is
    * unblocked if the link is unhealthy.
    */
-  isBlocked?: boolean;
-  profilePicUrl?: string | null;
+  isBlocked: boolean;
+  /**
+   * A cached picture URL. Only Baileys can fill it (whatsapp-web.js never sets it) and it is often
+   * absent there too, so its absence does not say whether the contact has a picture.
+   */
+  profilePicUrl?: string;
 }
 
 export interface CheckNumberResponse {
   number: string;
   exists: boolean;
-  whatsappId?: string | null;
+  /**
+   * The chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines (it can
+   * differ from the digits supplied), or `null` when the number is not registered.
+   */
+  whatsappId: string | null;
 }
 
 export interface ProfilePictureResponse {
@@ -1217,7 +1232,10 @@ export interface SendTextStatusRequest {
   recipients?: string[];
   /** Hex background color, e.g. `#25D366`. */
   backgroundColor?: string;
-  /** WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10. */
+  /**
+   * WhatsApp status font family: 0 (default), 1, 2, 6 (bold), 7, 8, 9, 10. whatsapp-web.js honors only
+   * 0 to 7 and posts 8, 9 and 10 in the default font.
+   */
   font?: 0 | 1 | 2 | 6 | 7 | 8 | 9 | 10;
 }
 
@@ -1267,7 +1285,7 @@ export interface SendVoiceStatusRequest {
 
 export interface HealthResponse {
   status: string;
-  timestamp?: string;
+  timestamp: string;
   version?: string;
 }
 
@@ -1289,7 +1307,8 @@ export interface HealthReadyResponse {
 
 export interface AuthValidateResponse {
   valid: boolean;
-  role?: string;
+  /** The key's role; present only when the key is valid. */
+  role?: 'admin' | 'operator' | 'viewer';
   engineType?: string;
   scoped?: boolean;
 }
@@ -1364,7 +1383,7 @@ export interface ChannelMessageRecord {
 }
 
 export interface ChannelMessageQuery {
-  /** Max messages to return (default 50). */
+  /** Max messages to return (default 50, max 100: a larger value is cut to 100). */
   limit?: number;
 }
 
@@ -1378,7 +1397,8 @@ export interface SubscribeChannelRequest {
 export interface CatalogInfo {
   id: string;
   name: string;
-  description?: string | null;
+  description?: string;
+  /** Counts at most the first 51 products on Baileys. */
   productCount: number;
   url: string;
 }
@@ -1393,13 +1413,13 @@ export interface CatalogProductsQuery {
 export interface CatalogProduct {
   id: string;
   name: string;
-  description?: string | null;
+  description?: string;
   /** Absent when the product has no price. */
   price?: number;
   currency?: string;
   /** Absent when `price` is. */
   priceFormatted?: string;
-  imageUrl?: string | null;
+  imageUrl?: string;
   url: string;
   isAvailable: boolean;
   retailerId?: string;
@@ -1432,7 +1452,10 @@ export interface SendProductRequest {
 
 /** Query parameters for `GET /search`. Only `q` is required; all filters are optional. */
 export interface SearchParams {
-  /** Search term (required, non-empty — the server rejects empty/whitespace with 400). */
+  /**
+   * Search term (required, non-empty — the server rejects empty/whitespace with 400). At most 1000
+   * characters and 32 words, punctuation included; the server answers 400 above either.
+   */
   q: string;
   /** Restrict to a single session. */
   sessionId?: string;
@@ -1448,9 +1471,9 @@ export interface SearchParams {
   dateFrom?: number;
   /** Epoch-ms upper bound (inclusive). */
   dateTo?: number;
-  /** Max hits to return. */
+  /** Max hits to return (default 50; capped at the server's SEARCH_LIMIT_MAX, 100 by default). */
   limit?: number;
-  /** Pagination offset. */
+  /** Pagination offset (at most 100000; the server answers 400 above). */
   offset?: number;
 }
 

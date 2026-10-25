@@ -32,12 +32,12 @@
 
 **OpenWA** is a free, open-source WhatsApp API Gateway designed for developers who need full control over their messaging infrastructure—without vendor lock-in or hidden paywalls.
 
-Built on a **pluggable architecture**, OpenWA lets you select database engines (SQLite/PostgreSQL), media storage backends (Local/S3), and cache layers (disabled/Redis) through configuration rather than application-code changes. The storage backend is the live store for status media and, when chat-media archiving is enabled, archived chat media; other message media is returned inline to API and webhook consumers. Of the media, `scripts/backup.sh` archives only the local media directory, so an S3 bucket needs a backup of its own.
+Built on a **pluggable architecture**, OpenWA lets you select database engines (SQLite/PostgreSQL), media storage backends (Local/S3), and an optional Redis (queue, rate limits, WebSocket fan-out) through configuration rather than application-code changes. The storage backend is the live store for status media and, when chat-media archiving is enabled, archived chat media; other message media is returned inline to API and webhook consumers. Of the media, `scripts/backup.sh` archives only the local media directory, so an S3 bucket needs a backup of its own.
 
 |                               |                                                                                                                                          |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 🔓 **100% Open Source**       | No licensing fees, no feature locks, full source code access                                                                             |
-| 🏗️ **Pluggable Architecture** | Swap adapters for database, storage, and cache via config                                                                                |
+| 🏗️ **Pluggable Architecture** | Swap adapters for database and storage via config                                                                                        |
 | 🖥️ **Full Dashboard**         | Modern React UI for session, webhook, and API key management                                                                             |
 | 🔹 **Multi-Session Ready**    | Run multiple WhatsApp sessions concurrently on one instance                                                                              |
 | 🐳 **Docker Native**          | Production-ready with zero configuration                                                                                                 |
@@ -157,7 +157,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | Rate Limiting       | ✅     | Configurable request limits                                                                                                                                                  |
 | CIDR Whitelisting   | ✅     | IP-based access control                                                                                                                                                      |
 | Chat Scoping        | ✅     | Per-key `allowedChats` allowlist (groups and contacts): a key reaches only those chats, and routes not marked safe for it refuse it                                          |
-| Audit Logging       | ✅     | Audit trail for API-key, session, integration-instance, and infra admin operations (message sends and webhook deliveries are tracked in their own tables, not the audit log) |
+| Audit Logging       | ✅     | Audit trail for API-key, session, integration-instance, plugin and infra admin operations (message sends and webhook deliveries have tables of their own, not the audit log) |
 
 ### Infrastructure
 
@@ -165,7 +165,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | ---------------- | ------ | ------------------------------------------------ |
 | SQLite           | ✅     | Zero-config embedded database                    |
 | PostgreSQL       | ✅     | Production-grade database                        |
-| Redis Cache      | ✅     | Optional performance caching                     |
+| Redis            | ✅     | Opt-in queue, rate limits, WebSocket fan-out     |
 | S3/MinIO Storage | ✅     | Live media store (statuses, archived chat media) |
 | Docker           | ✅     | One-command deployment                           |
 | Health Checks    | ✅     | Kubernetes-ready probes                          |
@@ -283,7 +283,7 @@ docker compose --profile full up -d
 | Profile    | Services                                        |
 | ---------- | ----------------------------------------------- |
 | `postgres` | PostgreSQL database                             |
-| `redis`    | Redis cache                                     |
+| `redis`    | Redis (queue, rate limits, WebSocket fan-out)   |
 | `minio`    | S3-compatible storage (MinIO fork `pgsty/silo`) |
 | `full`     | All services above                              |
 
@@ -454,7 +454,7 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 | **Language**  | TypeScript 6.x                                          |
 | **WA Engine** | whatsapp-web.js (default) / baileys — set `ENGINE_TYPE` |
 | **Database**  | SQLite / PostgreSQL                                     |
-| **Cache**     | Redis (optional)                                        |
+| **Redis**     | Queue, rate limits, WebSocket fan-out (optional)        |
 | **Storage**   | Local / S3 / MinIO                                      |
 | **ORM**       | TypeORM                                                 |
 | **Container** | Docker + Docker Compose                                 |
@@ -470,7 +470,7 @@ openwa/
 │   ├── app.module.ts           # Root module
 │   ├── config/                 # Configuration
 │   ├── common/                 # Shared utilities
-│   │   ├── cache/              # Redis caching
+│   │   ├── cache/              # Redis client (infra status probe)
 │   │   └── storage/            # File storage (Local/S3)
 │   ├── core/                   # Core systems
 │   │   ├── hooks/              # Plugin hooks

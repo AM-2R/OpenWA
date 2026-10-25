@@ -3,10 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Check, Loader2, Phone, Search, Users, X } from 'lucide-react';
 import { contactApi, sessionApi, type Chat, type Contact } from '../../services/api';
-import { formatPhoneForDisplay } from '../../utils/formatPhone';
+import { formatPhoneForDisplay, isolateNumber } from '../../utils/formatPhone';
 import { useRole } from '../../hooks/useRole';
 import { useToast } from '../../hooks/useToast';
 import ChatAvatar from './ChatAvatar';
+import { normalizePhoneText } from '../../utils/phone';
 
 type Mode = 'chat' | 'group';
 
@@ -22,6 +23,11 @@ interface NewChatPanelProps {
    * the chat was found through, for the page to check it is still the one selected.
    */
   onOpenChat: (chat: Chat, sessionId: string) => void;
+  /**
+   * The id the chat list holds a phone-based id's conversation under when that is another id of the same contact
+   * (one that moved to privacy-id addressing keeps its chat under its @lid), or null when the list has none.
+   */
+  findListedChat?: (phoneId: string) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -31,12 +37,12 @@ const GROUP_NAME_MAX_LENGTH = 100;
 /**
  * Digits of a number typed with its country code, or null. The engine resolves digits as they are, so
  * a national "0170…" would silently reach a different country; only "+49…", "0049…" or bare
- * international digits are taken. 7–15 digits covers E.164.
+ * international digits are taken. 7-15 digits covers E.164.
  */
 const toInternationalDigits = (input: string): string | null => {
   const trimmed = input.trim();
   if (!trimmed || /[a-z]/i.test(trimmed)) return null;
-  let digits = trimmed.replace(/\D/g, '');
+  let digits = normalizePhoneText(trimmed).replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   else if (!trimmed.startsWith('+') && digits.startsWith('0')) return null;
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
@@ -64,7 +70,7 @@ const draftChat = (id: string, name: string, kind: Chat['kind'], timestamp = 0):
  * Sidebar sub-view for starting a 1:1 chat or creating a group. The page mounts it only for a key that
  * can write; group creation is offered on Baileys only, since whatsapp-web.js answers it with 501.
  */
-function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
+function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewChatPanelProps) {
   const { t } = useTranslation();
   const { error: showErrorToast, success: showSuccessToast } = useToast();
   const { engineType } = useRole();
@@ -80,6 +86,7 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
   // unmounts it). Its result then belongs to nothing on screen and is dropped. Setup sets the flag again:
   // StrictMode replays setup after a cleanup on a panel that stays mounted.
   const openRef = useRef(true);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     openRef.current = true;
     return () => {
@@ -111,7 +118,7 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
   }, [contactsQuery.data]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const queryDigits = query.replace(/\D/g, '');
+  const queryDigits = normalizePhoneText(query).replace(/\D/g, '');
   const visibleContacts = normalizedQuery
     ? contacts.filter(
         c =>
@@ -121,13 +128,19 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
     : contacts;
 
   const typedNumber = toInternationalDigits(query);
-  const typedNumberLabel = typedNumber ? (formatPhoneForDisplay(typedNumber) ?? `+${typedNumber}`) : '';
-  const showNumberHint = Boolean(query.trim()) && !typedNumber && /^[\d\s+()-]+$/.test(query.trim());
+  // Placed in sentences (the start and add buttons, the not-registered toast), so it goes in as an isolate.
+  const typedNumberLabel = typedNumber ? isolateNumber(formatPhoneForDisplay(typedNumber) ?? `+${typedNumber}`) : '';
+  const showNumberHint =
+    Boolean(query.trim()) && !typedNumber && /^[\d\s+()-]+$/.test(normalizePhoneText(query).trim());
 
   // Resolve a typed number to its canonical WhatsApp id. The send routes accept an unregistered number
   // without an error, so this check is the only thing that keeps a chat from going nowhere. An answer
   // that arrives after the panel was closed is dropped, toasts included: nothing on screen asked for it.
-  const resolveNumber = async (digits: string, label: string): Promise<string | null> => {
+  const resolveNumber = async (
+    digits: string,
+    label: string,
+    listedAs?: (phoneId: string) => Promise<string | null>,
+  ): Promise<string | null> => {
     setChecking(true);
     try {
       const res = await contactApi.checkNumber(sessionId, digits);
@@ -136,7 +149,10 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
         showErrorToast(t('chats.newChat.notOnWhatsApp', { number: label }));
         return null;
       }
-      return res.whatsappId;
+      // A conversation the list keeps under another id of the same contact is the one to open. Failing to
+      // find it is no reason to fail the number, which opens a new chat as it would for any other.
+      const listed = listedAs ? await listedAs(res.whatsappId).catch(() => null) : null;
+      return listed ?? res.whatsappId;
     } catch (err) {
       if (openRef.current) {
         showErrorToast(t('chats.newChat.checkFailed'), err instanceof Error ? err.message : undefined);
@@ -149,7 +165,7 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
 
   const handleStartWithNumber = async () => {
     if (!typedNumber) return;
-    const id = await resolveNumber(typedNumber, typedNumberLabel);
+    const id = await resolveNumber(typedNumber, typedNumberLabel, findListedChat);
     if (id && openRef.current) onOpenChat(draftChat(id, '', 'individual'), sessionId);
   };
 
@@ -245,6 +261,7 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
       <div className="chat-search-input new-chat-search">
         <Search size={18} />
         <input
+          ref={searchRef}
           type="text"
           placeholder={isGroupMode ? t('chats.newGroup.participantsPlaceholder') : t('chats.newChat.searchPlaceholder')}
           aria-label={isGroupMode ? t('chats.newGroup.participantsPlaceholder') : t('chats.newChat.searchPlaceholder')}
@@ -262,7 +279,11 @@ function NewChatPanel({ sessionId, onOpenChat, onClose }: NewChatPanelProps) {
           <button
             type="button"
             className="search-clear"
-            onClick={() => setQuery('')}
+            onClick={() => {
+              setQuery('');
+              // The button leaves the page with the text, and focus would go with it.
+              searchRef.current?.focus();
+            }}
             aria-label={t('chats.clearSearch')}
             title={t('chats.clearSearch')}
           >

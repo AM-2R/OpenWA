@@ -540,6 +540,12 @@ export class BaileysLifecycle {
         event: 'update',
         count: updates?.length ?? 0,
       });
+      // A disappearing-messages timer changed on the phone (or turned off, which reads null) reaches us as a
+      // chat update only, and the cached list's timer is what a group send stamps on its stanza. The same
+      // own key makes upsertChats take the new timer.
+      for (const update of updates ?? []) {
+        if (Object.hasOwn(update, 'ephemeralExpiration')) this.groupMetadata.invalidate(update.id);
+      }
       this.host.upsertChats(updates);
     });
     sock.ev.on('chats.delete', ids => {
@@ -550,8 +556,8 @@ export class BaileysLifecycle {
       });
       this.host.removeChats(ids);
     });
-    // The same events keep the group metadata cache honest: a membership change or a (re)join drops that
-    // group, a whole-metadata snapshot refreshes it, and any other change makes it read again.
+    // The same events keep the group metadata cache honest: a membership change, a (re)join, a settings
+    // change or a whole-metadata snapshot drops that group, so the next send reads it again.
     sock.ev.on('group-participants.update', event => {
       this.groupMetadata.invalidate(event.id);
       this.host.handleGroupParticipantsUpdate(event);
@@ -1043,8 +1049,7 @@ export class BaileysLifecycle {
    *
    * The status/socket/live-call teardown happens SYNCHRONOUSLY before any await so the session
    * watchdog never processes a READY socket that is already dead. The strict auth removal is then
-   * awaited as a tracked cleanup (Task 5's onCredentialTeardownStarted registers it under the session
-   * NAME). On success the engine reports DISCONNECTED + onDisconnected('logged out'); on failure it
+   * awaited as a tracked cleanup (onCredentialTeardownStarted registers it under the session NAME). On success the engine reports DISCONNECTED + onDisconnected('logged out'); on failure it
    * reports FAILED + onError (terminal — a reconnect with known-invalid auth would loop forever).
    */
   private async handleRemoteLoggedOut(): Promise<void> {

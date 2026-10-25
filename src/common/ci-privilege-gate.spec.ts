@@ -553,7 +553,17 @@ describe('a job that can mint a publish credential pins global npm installs and 
     { uses: 'actions/setup-node', with: { 'node-version': /^\d+$/ } },
     {
       name: 'Use an npm that supports trusted publishing',
-      run: [/^npm install -g npm@\d+\.\d+\.\d+$/, 'npm --version'],
+      run: [
+        /^npm install -g npm@\d+\.\d+\.\d+$/,
+        'npm_bundle_dir="$(npm root --global)/npm/node_modules"',
+        `node -e "if (require(process.argv[1]).version !== '6.29.0') throw new Error('Recheck npm Undici replacement');" "$npm_bundle_dir/undici/package.json"`,
+        'npm_http_patch_dir=$(mktemp -d)',
+        'npm install --prefix "$npm_http_patch_dir" --no-save --package-lock=false --ignore-scripts --no-audit --fund=false undici@6.29.1',
+        'rm -rf "$npm_bundle_dir/undici"',
+        'mv "$npm_http_patch_dir/node_modules/undici" "$npm_bundle_dir/undici"',
+        'rm -rf "$npm_http_patch_dir"',
+        'npm --version',
+      ],
     },
     { uses: 'actions/download-artifact', with: { name: 'js-sdk-package', path: 'package/' } },
     {
@@ -873,7 +883,12 @@ describe('a job that can mint a publish credential pins global npm installs and 
       oidcJobRuns('js-sdk-release.yml', executableLinesConservative).some(({ run }) => /^npm publish\b/m.test(run)),
     ).toBe(true);
     expect(outsideAllowList('js-sdk-release.yml')).toEqual([]);
-    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
+    // The workflow says it installs the npm the image does; nothing else holds the two pins together.
+    const imageNpm = /^RUN npm install -g (npm@\d+\.\d+\.\d+) /m.exec(
+      fs.readFileSync(path.join(__dirname, '..', '..', 'Dockerfile'), 'utf8'),
+    )?.[1];
+    expect(imageNpm).toBeDefined();
+    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: imageNpm }]);
   });
 
   // Every workflow is read against its own list, so an id-token job anywhere that has none (a new
@@ -1442,6 +1457,21 @@ describe('a job that can mint a publish credential pins global npm installs and 
     const lastNpm = show(npmRun[npmRun.length - 1]);
     const publishLine = show(scriptOf(JS_PUBLISH, publish)[0]);
     expectOutsideTemplate('js-sdk-release.yml', [
+      ...(
+        [
+          ['a floating HTTP client pin', 4, 'undici@6.29.1', 'undici@latest'],
+          ['HTTP client install scripts enabled', 4, ' --ignore-scripts', ''],
+          ['removal outside the HTTP client package', 5, '"$npm_bundle_dir/undici"', '"$npm_bundle_dir"'],
+        ] as const
+      ).map(([label, index, from, to]): TemplateCase => {
+        const original = show(npmRun[index]);
+        const changed = original.replace(from, to);
+        return [
+          label,
+          w => swap(steps(w)[npm], original, changed),
+          [`publish step ${npm + 1} "${NPM}": run line ${index + 1}: ${changed}, expected ${original}`],
+        ];
+      }),
       [
         'the publish ahead of the npm it needs',
         exchange('publish', npm, publish),

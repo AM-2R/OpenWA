@@ -144,9 +144,12 @@ function groupJsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+// How the first text send fails: an HTTP status, a fetch that never gets an answer, or a 201 with no message id.
+type FirstSendFailure = number | 'unreachable' | 'unconfirmed' | 'vetoed';
+
 function stubGroupGateway(
   groups: { id: string; name?: string }[],
-  refuseFirstWith?: number,
+  refuseFirstWith?: FirstSendFailure,
 ): { textSends: string[]; imageBodies: { chatId: string; url?: string; caption?: string }[] } {
   const previousFetch = globalThis.fetch;
   restoreFetch = () => {
@@ -168,7 +171,15 @@ function stubGroupGateway(
       const { chatId } = JSON.parse(String(init?.body)) as { chatId: string };
       textSends.push(chatId);
       if (refuseFirstWith && textSends.length === 1) {
-        return Promise.resolve(groupJsonResponse({ message: 'Too many requests' }, refuseFirstWith));
+        if (refuseFirstWith === 'unreachable') return Promise.reject(new TypeError('Failed to fetch'));
+        if (refuseFirstWith === 'unconfirmed') return Promise.resolve(groupJsonResponse({ timestamp: 1 }, 201));
+        // A plugin that vetoes one chat's send: the gateway answers 400 for that chat alone.
+        if (refuseFirstWith === 'vetoed') {
+          return Promise.resolve(groupJsonResponse({ message: 'Message sending blocked by plugin' }, 400));
+        }
+        const message =
+          refuseFirstWith === 400 ? "Session 's1' is not active. Start the session first." : 'Too many requests';
+        return Promise.resolve(groupJsonResponse({ message }, refuseFirstWith));
       }
       return Promise.resolve(groupJsonResponse({ messageId: `m${textSends.length}`, timestamp: 1 }, 201));
     }
@@ -258,6 +269,120 @@ test('a 409 (engine not ready) stops the run, since every group would fail alike
 
   await rtl.screen.findByText('1, stopped after HTTP 409');
   assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+test('a 400 (the session is not active) stops the run, since every group would fail alike', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    400,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 400');
+  assert.ok(rtl.screen.getByText(/is not active/, { selector: 'li' }));
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The same 400 status, but about one chat: that group fails by itself and the others are still sent.
+test('a 400 that blocks one group fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'vetoed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/blocked by plugin/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('a gateway that does not answer stops the run, and the notice says so', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unreachable',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped: the gateway did not answer');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The page's own "no message id" failure has no HTTP status either, but the gateway did answer.
+test('a send answered without a message id fails that group and the run goes on', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    'unconfirmed',
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  // The run waits 3 seconds between groups, so the second send comes after that.
+  await rtl.screen.findByText('1/2 sent', {}, { timeout: 8000 });
+  assert.deepEqual(gateway.textSends, ['g1@g.us', 'g2@g.us']);
+  assert.ok(rtl.screen.getByText(/Failed to send message/, { selector: 'li' }));
+  assert.equal(rtl.screen.queryByText(/stopped/) === null, true);
+});
+
+test('a 502 from a reverse proxy stops the run, since the gateway behind it is down', async () => {
+  const gateway = stubGroupGateway(
+    [
+      { id: 'g1@g.us', name: 'Family' },
+      { id: 'g2@g.us', name: 'Work' },
+    ],
+    502,
+  );
+  await renderGroupsAsWriter();
+  await sendTextToAllGroups();
+
+  await rtl.screen.findByText('1, stopped after HTTP 502');
+  assert.deepEqual(gateway.textSends, ['g1@g.us']);
+});
+
+// The list is read from a textarea that holds up to 2 MiB, so it is parsed when the list changes, not on every render.
+test('the recipient list is parsed when it changes, not on every other keystroke', async () => {
+  stubGroupGateway([]);
+  window.sessionStorage.setItem('openwa_user_role', 'admin');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+  const { container } = rtl.render(
+    createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+  );
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+
+  // Count the line splits of the list. Swapped by hand: the test runner does not restore a symbol-keyed method.
+  const list = '628111222333\n628222333444';
+  let parses = 0;
+  const split = RegExp.prototype[Symbol.split];
+  RegExp.prototype[Symbol.split] = function (this: RegExp, text: string, limit?: number) {
+    if (text === list) parses++;
+    return split.call(this, text, limit);
+  };
+  try {
+    type(container, '#mt-11', list);
+    const afterList = parses;
+    assert.ok(afterList >= 1, 'the list was not parsed');
+    for (const text of ['a', 'ab', 'abc']) type(container, '#mt-12', text);
+    assert.equal(parses, afterList);
+  } finally {
+    RegExp.prototype[Symbol.split] = split;
+  }
 });
 
 test('an empty message or a media type with no file or URL keeps Send disabled', async () => {
@@ -936,6 +1061,48 @@ for (const mode of ['text', 'forward'] as const) {
   }
 }
 
+// The recipient and a forward target are resolved through the number check, which takes ASCII digits only.
+for (const [script, zero] of [
+  ['Arabic-Indic', 0x0660],
+  ['full-width', 0xff10],
+] as const) {
+  test(`a recipient and a forward target typed in ${script} digits are looked up as ASCII digits`, async () => {
+    const checked: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/sessions')) return jsonResponse([{ id: 's1', name: 'Main', status: 'ready' }]);
+      if (path.includes('/contacts/check/')) {
+        const number = path.split('/contacts/check/')[1];
+        checked.push(number);
+        return jsonResponse({ number, exists: true, whatsappId: `${number}@c.us` });
+      }
+      if (path.includes('/messages/')) return jsonResponse({ messageId: 'sent', timestamp: 1 });
+      return jsonResponse([]);
+    }) as typeof fetch;
+    sessionStorage.setItem('openwa_api_key', 'original-key');
+    sessionStorage.setItem('openwa_user_role', 'operator');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1 } } });
+    const view = rtl.render(
+      createElement(QueryClientProvider, { client }, createElement(RoleProvider, null, createElement(MessageTester))),
+    );
+    try {
+      await rtl.screen.findByRole('option', { name: /Main/ });
+      const native = (ascii: string) => [...ascii].map(d => String.fromCharCode(zero + Number(d))).join('');
+      type(view.container, '#mt-13', native('15550000001'));
+      rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+      type(view.container, '#mt-9', native('15550000002'));
+      type(view.container, '#mt-10', 'original-message');
+      await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
+      rtl.fireEvent.click(sendButton());
+      await rtl.waitFor(() => assert.equal(checked.length, 2));
+      assert.deepEqual(checked, ['15550000001', '15550000002']);
+    } finally {
+      client.clear();
+      sessionStorage.removeItem('openwa_api_key');
+    }
+  });
+}
+
 test('an unchanged actor sends to canonical personal and forward destinations', async () => {
   const writes: { path: string; key: string | null; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1057,4 +1224,23 @@ test('an old lookup cannot complete a new operation after signing in with the sa
   assert.ok(rtl.screen.getByText('new-operation'));
   client.clear();
   sessionStorage.removeItem('openwa_api_key');
+});
+
+// A phone number or chat id typed into a plain text field is laid out right to left in an Arabic or Hebrew
+// page: "+62 812 3456 7890" reads "7890 3456 812 62+" and "15550001111@c.us" splits around the at sign. The
+// dashboard forces left to right on tel inputs only, so a phone field is a tel input and the fields that
+// take a chat id or a mixed list say dir="ltr" themselves.
+test('phone fields are tel inputs and id fields are left to right', async () => {
+  stubGateway();
+  renderTesterAsWriter();
+  await rtl.screen.findByRole('option', { name: /Main/ });
+  const attr = (id: string, name: string): string | null => byId(id).getAttribute(name);
+
+  assert.equal(attr('mt-13', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Contact' }));
+  assert.equal(attr('mt-7', 'type'), 'tel');
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Forward' }));
+  for (const id of ['mt-17', 'mt-9', 'mt-10']) assert.equal(attr(id, 'dir'), 'ltr', id);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Bulk' }));
+  assert.equal(attr('mt-11', 'dir'), 'ltr');
 });

@@ -184,6 +184,11 @@ async function send<T>(
       throw new TypeError(`OpenWA: dot path segment in ${JSON.stringify(options.path)}`);
     }
   }
+  // fetch upper-cases GET, POST, PUT and DELETE itself but sends PATCH and any other verb as written, and the
+  // gateway answers 400 to a lowercase method; a caller without the HttpMethod type can pass one. A missing
+  // method stays undefined, which fetch sends as GET. Read before the timer is armed: a value that is not a
+  // string throws here, and nothing would clear the timer.
+  const method = options.method?.toUpperCase();
   const timeoutMs = toTimeoutMs(options.timeoutMs ?? config.timeoutMs);
 
   const controller = new AbortController();
@@ -213,7 +218,7 @@ async function send<T>(
   const doFetch = config.fetch;
   try {
     const res = await doFetch(url, {
-      method: options.method,
+      method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
@@ -224,7 +229,7 @@ async function send<T>(
     });
 
     if (!res.ok) {
-      const context = `${options.method} ${options.path}`;
+      const context = `${method} ${options.path}`;
       const apiError = await OpenWAApiError.fromResponse(res, context);
       throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind, apiError.headers);
     }

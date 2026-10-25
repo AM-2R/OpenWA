@@ -19,10 +19,17 @@ import { toCapturedPageError } from './wwebjs-lifecycle';
  */
 export interface WwebjsEngineHost {
   ensureReady(): void;
+  /** The live client; throws EngineNotReadyError when the session is no longer ready or the client is gone. */
   getClient(): Client;
   readonly logger: ReturnType<typeof createLogger>;
   isPageTransportError(error: unknown): boolean;
   reportIfPageTransportError(error: unknown, context: string): void;
+  /**
+   * For a best-effort read that carries on after a failure: reports a death only once puppeteer's page or
+   * browser reads gone (it is given a moment to), never on the error's text alone. Optional so a host built
+   * without it keeps the text-free behaviour of simply carrying on.
+   */
+  reportOnceGone?(error: unknown, context: string): Promise<void>;
   ensureNotChannelRecipient(chatId: string): void;
   getNumberId(number: string): Promise<string | null>;
   capInboundMediaFor(
@@ -36,10 +43,10 @@ export interface WwebjsEngineHost {
 }
 
 /**
- * The client of a send path, read after ensureReady() and any awaits since (a recipient lookup, a media fetch).
- * A teardown can null the adapter's client in that gap, and the host closure then hands back a null typed as a
- * Client: the send would die as a TypeError 500 and count toward the send breaker. It answers the retryable 409
- * a not-ready session gets instead.
+ * The client of a send or status path, read after ensureReady() and any awaits since (a recipient lookup, a
+ * media fetch). The adapter's getClient already refuses a session that is not ready; this keeps a host that
+ * still has no client from handing the send a null typed as a Client, which would die as a TypeError 500 and
+ * count toward the send breaker.
  */
 export function requireClient(host: WwebjsEngineHost): Client {
   const client = host.getClient() as Client | null | undefined;

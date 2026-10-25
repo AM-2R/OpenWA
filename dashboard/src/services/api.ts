@@ -440,8 +440,6 @@ export interface ContactStatusGroup {
   latest: string;
 }
 
-// Minimal contact type for the recipient picker; the backend GET /sessions/:id/contacts
-// returns a Contact array; fields beyond id are optional.
 /** GET /sessions/:id/groups/:groupId (GroupInfoDto). */
 export interface GroupInfo {
   id: string;
@@ -472,6 +470,8 @@ export interface GroupParticipantsAck extends GroupAck {
   results: GroupParticipantResult[];
 }
 
+// An entry of the session's address book, from GET /sessions/:id/contacts: what the recipient pickers and the
+// chat list's saved-contact check read. Only the name, push name and picture are optional.
 export interface Contact {
   id: string;
   name?: string;
@@ -622,14 +622,27 @@ export interface UpdateCheck {
 
 export interface InfraStatus {
   // `builtIn` = OpenWA's own bundled container is actually running and backing this service (live),
-  // not just the saved intent — falls back to the saved flag when Docker is unavailable. (#488)
-  database: { connected: boolean; type: string; host: string; builtIn: boolean };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
+  // not just the saved intent; falls back to the saved flag (the environment's first) beside a host that reaches the
+  // bundled container when Docker is unavailable. (#488) `running` = a bundled container OpenWA created is up,
+  // whether or not the service uses it, beside this instance's own built-in flag (the environment's first, else the
+  // saved one); false for one Docker Compose created and with that flag not true, absent while Docker is unreachable,
+  // and from an older gateway.
+  database: { connected: boolean; type: string; host: string; builtIn: boolean; running?: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean; running?: boolean };
   queue: {
     enabled: boolean;
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  storage: {
+    type: 'local' | 's3';
+    path?: string;
+    bucket?: string;
+    // S3 only, when an endpoint is set: the one the server dials, which a stopped bundled MinIO still names.
+    endpoint?: string;
+    builtIn: boolean;
+    running?: boolean;
+    s3Available?: boolean;
+  };
   engine: {
     type: string;
     headless: boolean;
@@ -655,6 +668,11 @@ export interface SavedConfig {
   database: {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
+    // Whether the saved config states the built-in mode of this service. False when a host the environment
+    // pins decides it, when the file does not select the service (the first boot writes every flag as false),
+    // when the file holds the bundled host with the flag not true (the next boot dials the container) and when
+    // nothing is saved: the form then follows what /infra/status reports as running.
+    builtInSet: boolean;
     host: string;
     port: string;
     username: string;
@@ -665,11 +683,12 @@ export interface SavedConfig {
     sslRejectUnauthorized: boolean;
     passwordSet: boolean;
   };
-  redis: { enabled: boolean; builtIn: boolean; host: string; port: string; passwordSet: boolean };
+  redis: { enabled: boolean; builtIn: boolean; builtInSet: boolean; host: string; port: string; passwordSet: boolean };
   queue: { enabled: boolean };
   storage: {
     type: 'local' | 's3';
     builtIn: boolean;
+    builtInSet: boolean;
     localPath: string;
     s3Bucket: string;
     s3Region: string;
@@ -681,7 +700,8 @@ export interface SavedConfig {
 
 export interface SaveConfigPayload {
   database?: {
-    type: 'sqlite' | 'postgres';
+    // Absent keeps the stored selection; the form leaves out a type the environment pins.
+    type?: 'sqlite' | 'postgres';
     builtIn?: boolean;
     host?: string;
     port?: string;
@@ -704,7 +724,7 @@ export interface SaveConfigPayload {
     enabled?: boolean;
   };
   storage?: {
-    type: 'local' | 's3';
+    type?: 'local' | 's3';
     builtIn?: boolean;
     localPath?: string;
     s3Bucket?: string;
@@ -979,10 +999,12 @@ export const sessionApi = {
       return true;
     });
   },
-  markChatRead: (id: string, chatId: string) =>
+  // `messageIds` are the messages to acknowledge. Baileys acknowledges them one by one and, without any, only the
+  // newest it holds; whatsapp-web.js reads the whole chat and ignores them.
+  markChatRead: (id: string, chatId: string, messageIds?: string[]) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
       method: 'POST',
-      body: JSON.stringify({ chatId }),
+      body: JSON.stringify({ chatId, ...(messageIds?.length ? { messageIds } : {}) }),
     }),
   // Both also delete the gateway's stored copy of the chat's messages (rows, media, search entries).
   clearChatMessages: (id: string, chatId: string) =>
@@ -994,8 +1016,8 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
-  // Archive, pin and mute answer `{ success: false }` when the engine declined to act (WhatsApp keeps at most
-  // three chats pinned), which the callers treat as a failure.
+  // Archive and pin answer `{ success: false }` when the engine declined to act (WhatsApp keeps at most three
+  // chats pinned), which the callers treat as a failure. Mute has no declined outcome and always answers success.
   archiveChat: (id: string, chatId: string, archive: boolean) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/archive`, {
       method: 'POST',
@@ -1124,7 +1146,7 @@ export const templateApi = {
 export interface CheckNumberResponse {
   number: string;
   exists: boolean;
-  /** Engine-canonical WhatsApp id for the number (e.g. `…@c.us` or `…@lid`), or null if unregistered. */
+  /** The number's WhatsApp id in the neutral `<phone>@c.us` form on both engines, or null if unregistered. */
   whatsappId: string | null;
 }
 

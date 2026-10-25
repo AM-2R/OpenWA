@@ -1,6 +1,6 @@
 import { Optional } from '@nestjs/common';
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job, Queue } from 'bullmq';
+import { DelayedError, Job, Queue } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
@@ -13,7 +13,7 @@ import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
 import { ShutdownService } from '../../../common/services/shutdown.service';
 import { KeyedAsyncLock, orderingKeyFor } from '../../integration/ordering-lock';
-import { requeuedJobIds } from '../../integration/ingress-enqueue.service';
+import { requeuedJobIds, resolveIngressJobOptions } from '../../integration/ingress-enqueue.service';
 
 // BullMQ's failedReason for a job that stalled more than maxStalledCount (see WebhookProcessor).
 const STALL_EXHAUSTION_MESSAGE = 'job stalled more than allowable limit';
@@ -96,8 +96,23 @@ export class IngressProcessor extends WorkerHost {
     await closeWorkerIfStarted(this, MAX_WORKER_CLOSE_WAIT_MS);
   }
 
-  async process(job: Job<IngressJobData>): Promise<void> {
+  async process(job: Job<IngressJobData>, token?: string): Promise<void> {
     const d = job.data;
+    if (this.loader.isRestorePending(d.pluginId)) {
+      // The plugin's worker does not exist until the boot restore reaches it, and a restore can outlast the
+      // whole retry budget. Before the try below on purpose: this is not an attempt, so it must never be
+      // logged as a failure or file a dead-letter row. moveToDelayed does not spend one of the job's attempts.
+      // Every held job is delayed to the next multiple of the retry delay (at least a second: a job delayed to
+      // "now" is promoted straight back and would spin), so they all wake together and BullMQ promotes them in the
+      // order they were delayed. A fixed delay from "now" would give two deliveries of one conversation, a fraction of
+      // a period apart, polls a fraction of a period apart, and a restore ending between them lets the later through
+      // first. The delay carries no jitter for the same reason. Jobs of one wake that the worker reaches after
+      // the restore ends still pass those it held again before, and BullMQ's delayed score has 4096 insertion
+      // ranks per millisecond: past them the jobs of one wake come back ordered by id.
+      const delay = Math.max(1000, resolveIngressJobOptions().backoff.delay);
+      await job.moveToDelayed((Math.floor(Date.now() / delay) + 1) * delay, token);
+      throw new DelayedError();
+    }
     try {
       await this.lock.run(orderingKeyFor(d), () => this.loader.dispatchWebhookForInstance(d));
     } catch (err) {

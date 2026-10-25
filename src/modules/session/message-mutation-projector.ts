@@ -1,4 +1,4 @@
-import { Not, Repository } from 'typeorm';
+import { IsNull, Not, Or, Repository } from 'typeorm';
 import { Message } from '../message/entities/message.entity';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { LoggerService } from '../../common/services/logger.service';
@@ -6,7 +6,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
-import { mutationTargetsForeignRow, type MutationSource } from './message-mutation-guard';
+import { mutationTargetsForeignRowPersisted, type MutationSource } from './message-mutation-guard';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -23,6 +23,9 @@ export class MessageMutationProjector {
     private readonly webhookService: WebhookService,
     private readonly messageMutations: KeyedMutationQueue,
     private readonly logger: LoggerService,
+    // Told of each row the marker below lands on.
+    private readonly onMarkedEdited: (sessionId: string, waMessageId: string) => void = () => undefined,
+    private readonly resolveLid?: (jid: string) => Promise<string | null>,
   ) {}
 
   /**
@@ -72,7 +75,9 @@ export class MessageMutationProjector {
         where: { sessionId, waMessageId },
         select: { chatId: true, direction: true, author: true },
       });
-      return row ? { exists: true, reason: mutationTargetsForeignRow(row, source) } : { exists: false, reason: null };
+      return row
+        ? { exists: true, reason: await mutationTargetsForeignRowPersisted(row, source, this.resolveLid) }
+        : { exists: false, reason: null };
     } catch {
       return { exists: false, reason: null };
     }
@@ -146,12 +151,14 @@ export class MessageMutationProjector {
       return;
     }
     try {
-      // Never onto a revoked row: a late edit must not bring back text the sender deleted.
-      await this.messageRepository.update(
-        { sessionId: id, waMessageId: message.messageId, type: Not('revoked') },
+      // Never onto a revoked row: a late edit must not bring back text the sender deleted. An event that repeats the
+      // stored text is no edit, and the marker would label an unedited message. The write compares, not the read
+      // above, as the row may be inserted between the two.
+      const result = await this.messageRepository.update(
+        { sessionId: id, waMessageId: message.messageId, type: Not('revoked'), body: Or(Not(message.body), IsNull()) },
         { body: message.body },
       );
-      await this.markMessageEdited(id, message.messageId);
+      if (result.affected) await this.markMessageEdited(id, message.messageId);
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }
@@ -162,11 +169,12 @@ export class MessageMutationProjector {
   }
 
   /** Keep the marker alongside existing reactions, media and quote metadata. */
-  private async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
-    await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
+  async markMessageEdited(sessionId: string, waMessageId: string): Promise<void> {
+    const marked = await updateMessageMetadata(this.messageRepository, { sessionId, waMessageId }, metadata => ({
       ...metadata,
       edited: true,
     }));
+    if (marked) this.onMarkedEdited(sessionId, waMessageId);
   }
 
   /**

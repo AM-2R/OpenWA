@@ -99,6 +99,26 @@ describe('group DTO validation', () => {
     expect((await errorsFor(JoinGroupDto, {})).length).toBeGreaterThan(0);
   });
 
+  it('caps the invite code at 128 characters, as the contract publishes', async () => {
+    const published = Reflect.getMetadata('swagger/apiModelProperties', JoinGroupDto.prototype, 'inviteCode') as {
+      maxLength?: number;
+    };
+    expect(published.maxLength).toBe(128);
+    expect(await errorsFor(JoinGroupDto, { inviteCode: 'a'.repeat(128) })).toHaveLength(0);
+    const tooLong = await errorsFor(JoinGroupDto, { inviteCode: 'a'.repeat(129) });
+    expect(tooLong.map(e => e.property)).toEqual(['inviteCode']);
+  });
+
+  it('SetGroupPictureDto accepts only an image mimetype, so a non-image payload is refused with 400', async () => {
+    for (const mimetype of ['image/jpeg', 'image/png']) {
+      expect(await errorsFor(SetGroupPictureDto, { base64: 'QUJD', mimetype })).toHaveLength(0);
+    }
+    for (const mimetype of ['application/pdf', 'text/plain', 'jpeg']) {
+      const errors = await errorsFor(SetGroupPictureDto, { base64: 'QUJD', mimetype });
+      expect(errors.map(e => e.property)).toEqual(['mimetype']);
+    }
+  });
+
   it('GroupSettingsDto accepts an empty body and any subset of fields (at-least-one is a service rule)', async () => {
     expect(await errorsFor(GroupSettingsDto, {})).toHaveLength(0);
     expect(await errorsFor(GroupSettingsDto, { announce: true })).toHaveLength(0);

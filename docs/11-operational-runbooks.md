@@ -664,15 +664,15 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 ```
 
 > Restoring `sessions/` is required, not optional, when the rollback crosses a browser major upgrade (on
-> amd64, 0.23.5 moved Chrome for Testing from 146 to 153; arm64 runs the chromium Debian shipped when each
-> image was built), and the backup must predate the first start on the newer image; a daily backup taken
-> after the upgrade does not qualify. An older Chrome silently deletes the IndexedDB of a profile a newer
-> Chrome has opened, which is where whatsapp-web.js keeps the WhatsApp login. The symptom: every
-> previously linked whatsapp-web.js session starts at a QR code instead of reconnecting, the log names no
-> cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not
-> bring the pairing back. Changing only the image tag, or `helm rollback` (which keeps the volume), skips
-> the restore and hits this. A session first paired on the newer image is not in that backup and must be
-> paired again either way. Baileys sessions are unaffected.
+> amd64, 0.23.5 moved Chrome for Testing from 146 to 153 and the release after 0.25.0 moves it to 156; arm64
+> runs the chromium Debian shipped when each image was built), and the backup must predate the first start
+> on the newer image; a daily backup taken after the upgrade does not qualify. An older Chrome silently
+> deletes the IndexedDB of a profile a newer Chrome has opened, which is where whatsapp-web.js keeps the
+> WhatsApp login. The symptom: every previously linked whatsapp-web.js session starts at a QR code instead
+> of reconnecting, the log names no cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning),
+> and upgrading again does not bring the pairing back. Changing only the image tag, or `helm rollback`
+> (which keeps the volume), skips the restore and hits this. A session first paired on the newer image is
+> not in that backup and must be paired again either way. Baileys sessions are unaffected.
 
 > Restoring `sessions/` **and** `baileys/` is likewise required when rolling back past 0.23.5, on either
 > engine and either architecture. 0.23.5 renames each session's auth directory from the session name to
@@ -801,13 +801,17 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > first, then `./.env`, then `<data dir>/.env.generated`. Settings made through Dashboard >
 > Infrastructure therefore apply without being restated on the command line. A restore reads that
 > third layer from the archive's `.env.generated` when the archive carries one, because that copy
-> replaces the target's and is the one the restored app reads. A relative `./data/...` path in
-> `./.env` or `.env.generated`, such as the `PLUGINS_DIR=./data/plugins` that `.env.example` sets or
-> the `STORAGE_LOCAL_PATH=./data/media` the app writes on first run, names a path in the app's data
-> directory and is read under `OPENWA_DATA_DIR`, as are the `./data` database and state defaults; a
-> path from the environment is read against the current directory. When operating directly on the
-> host mount, a path recorded inside the container (`/app/data/...`) is not host-visible, so override
-> it in the environment.
+> replaces the target's and is the one the restored app reads. A path that copy names has to stay in
+> the data directory unless it is the default (a leftover `./uploads` included): the restore stops,
+> naming the key and before it copies anything, at one that leads elsewhere, whether outside the
+> directory, through `..`, a link or a link that does not resolve, or inside or around another
+> directory it refills from the archive. Set that key in the environment or `./.env` to restore
+> there. A relative `./data/...` path in `./.env` or `.env.generated`, such as the
+> `PLUGINS_DIR=./data/plugins` that `.env.example` sets or the `STORAGE_LOCAL_PATH=./data/media` the
+> app writes on first run, names a path in the app's data directory and is read under
+> `OPENWA_DATA_DIR`, as are the `./data` database and state defaults; a path from the environment is
+> read against the current directory. When operating directly on the host mount, a path recorded
+> inside the container (`/app/data/...`) is not host-visible, so override it in the environment.
 >
 > A leftover `STORAGE_LOCAL_PATH=./uploads` (which v0.2.0 to v0.7.3 wrote to `.env.generated`), in
 > `./.env` or `.env.generated`, is read as `<OPENWA_DATA_DIR>/media` whenever `OPENWA_DATA_DIR` is
@@ -903,8 +907,9 @@ tar -tzf "$(ls -t ./backups/openwa-backup-*.tar.gz | head -n 1)"
 
 Use the repo's `scripts/restore.sh`. It restores `main.sqlite` (auth/audit) and a SQLite data store;
 for PostgreSQL it stages `database.sql` for the explicit import below. It also restores
-whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files. It snapshots
-the current data dir first so a bad restore can be undone:
+whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files, all as the
+archive holds them, so restore only archives you made. It snapshots the current data dir first so a
+bad restore can be undone:
 
 ```bash
 # 1. Stop the app (so files are quiescent)

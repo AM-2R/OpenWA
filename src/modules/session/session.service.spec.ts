@@ -3,7 +3,7 @@ import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, QueryFailedError } from 'typeorm';
+import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, Or, QueryFailedError } from 'typeorm';
 import {
   NotFoundException,
   ConflictException,
@@ -19,7 +19,17 @@ import { ConfigService } from '@nestjs/config';
 import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
-import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
+import {
+  SESSION_DELETE_BATCH_MIN_SQLITE,
+  SESSION_DELETE_BATCH_SIZE_POSTGRES,
+  SESSION_DELETE_BATCH_SIZE_SQLITE,
+  SESSION_DELETE_BATCH_TARGET_MS_SQLITE,
+  SESSION_DELETE_PAUSE_MS_SQLITE,
+  SESSION_DELETE_READ_AHEAD_POSTGRES,
+  nextSqliteDeleteBatchSize,
+  ServerShuttingDownException,
+  SessionStoppedException,
+} from './session-engine-controls';
 import { decideReconnect, STABLE_READY_MS } from './reconnect-policy';
 import { ACK_RECONCILE_DELAY_MS } from './message-projector.service';
 import { SessionEngineLifecycle, type ReconnectState } from './session-engine-lifecycle.service';
@@ -78,6 +88,9 @@ import {
   getSessionReconnectLoopAlertsTotal,
 } from '../../common/metrics/session-reconnect-metrics';
 import { AuditService } from '../audit/audit.service';
+import { SessionController } from './session.controller';
+import { ChatScopeService } from '../auth/chat-scope.service';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 
 /** The (action, context) pair of one audit call, typed so assertions do not fall back to `any`. */
 const auditCall = (mock: jest.Mock, index = 0): [string, { sessionId?: string; metadata?: Record<string, unknown> }] =>
@@ -106,6 +119,18 @@ function createMockSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+/** A query builder whose chain methods return itself and whose raw read finds nothing unless told otherwise. */
+function chainableQuery(): Record<string, jest.Mock> {
+  const query: Record<string, jest.Mock> = {
+    getRawMany: jest.fn().mockResolvedValue([]),
+    execute: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+  for (const name of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'limit', 'update', 'set']) {
+    query[name] = jest.fn().mockReturnValue(query);
+  }
+  return query;
+}
+
 describe('SessionService', () => {
   let service: SessionService;
   // The engine-lifecycle verbs/state moved out of SessionService (god-object split); the white-box
@@ -116,8 +141,8 @@ describe('SessionService', () => {
   let shutdown: ShutdownService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let messageRepository: jest.Mocked<Partial<Repository<Message>>>;
-  let outboxRepository: { find: jest.Mock; delete: jest.Mock };
-  let failureRepository: { find: jest.Mock; delete: jest.Mock };
+  let outboxRepository: { target: typeof WebhookOutboxEvent; find: jest.Mock; delete: jest.Mock };
+  let failureRepository: { target: typeof WebhookDeliveryFailure; find: jest.Mock; delete: jest.Mock };
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
@@ -138,13 +163,15 @@ describe('SessionService', () => {
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
-      update: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       exists: jest.fn().mockResolvedValue(false),
     };
 
     messageRepository = {
+      target: Message,
       find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue(null),
+      createQueryBuilder: jest.fn().mockImplementation(chainableQuery),
       // `create()` in TypeORM just builds the entity instance; it does NOT populate @PrimaryGeneratedColumn
       // or @CreateDateColumn. Mirror that: return the input as-is (no id/createdAt) so tests see the same
       // shape the production code does before the `insert()` generated-maps merge.
@@ -162,23 +189,36 @@ describe('SessionService', () => {
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
-    outboxRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
-    failureRepository = { find: jest.fn().mockResolvedValue([]), delete: jest.fn().mockResolvedValue({ affected: 0 }) };
+    outboxRepository = {
+      target: WebhookOutboxEvent,
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    failureRepository = {
+      target: WebhookDeliveryFailure,
+      find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
 
     dataSource = {
+      options: { type: 'better-sqlite3' } as DataSource['options'],
       // Session delete removes the messages, the outbox records and the delivery failures in batches through the
       // data source's own repositories.
       getRepository: jest
         .fn()
         .mockImplementation((entity: unknown) =>
-          entity === WebhookOutboxEvent
-            ? outboxRepository
-            : entity === WebhookDeliveryFailure
-              ? failureRepository
-              : messageRepository,
+          entity === Session
+            ? repository
+            : entity === WebhookOutboxEvent
+              ? outboxRepository
+              : entity === WebhookDeliveryFailure
+                ? failureRepository
+                : messageRepository,
         ),
       transaction: jest.fn().mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
         const manager = {
+          getRepository: dataSource.getRepository,
+          createQueryBuilder: jest.fn().mockImplementation(chainableQuery),
           save: jest.fn().mockImplementation((entity: unknown) => Promise.resolve(entity)),
           // As TypeORM does: a removed entity comes back with its primary key cleared.
           remove: jest.fn().mockImplementation((entity: { id?: string }) => {
@@ -1350,7 +1390,7 @@ describe('SessionService', () => {
       expect(mockEngine.forceDestroy).toHaveBeenCalled();
     });
 
-    it('removes the session and all its child rows explicitly in one transaction (SQLite cascade is off)', async () => {
+    it('removes the rest of the child rows and the session explicitly in one transaction after the traffic batches (SQLite cascade is off)', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
@@ -1393,81 +1433,332 @@ describe('SessionService', () => {
     });
 
     describe('messages', () => {
+      // A SQLite batch is sized by the clock: the first has the floor's size, and the next scales by how long the
+      // last one took. This clock reads the target later on every call, so each batch looks exactly on target and
+      // the size holds at the floor; the sizing tests below set the step themselves.
+      const BATCH = SESSION_DELETE_BATCH_MIN_SQLITE;
+      let clockStep = SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+      let clock: jest.SpyInstance;
+      beforeEach(() => {
+        let now = 0;
+        clockStep = SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+        clock = jest.spyOn(performance, 'now').mockImplementation(() => (now += clockStep));
+      });
+      afterEach(() => {
+        clock.mockRestore();
+      });
       const ids = (from: number, count: number): Array<{ id: string }> =>
         Array.from({ length: count }, (_, i) => ({ id: `m${from + i}` }));
+      // The messages are read through the query builder: first the pages of rows that have a timestamp, in
+      // (timestamp, id) order, then the pages of rows that have none. Each page the script holds is one read.
+      const stamped = (from: number, count: number): Array<{ id: string; timestamp: string }> =>
+        Array.from({ length: count }, (_, i) => ({ id: `m${from + i}`, timestamp: String(1700000000 + from + i) }));
+      const messageQuery = (...pages: Array<Array<{ id: string; timestamp?: string }>>) => {
+        const query = chainableQuery();
+        for (const page of pages) query.getRawMany.mockResolvedValueOnce(page);
+        (messageRepository.createQueryBuilder as jest.Mock).mockReturnValue(query);
+        return query;
+      };
 
-      it('are removed in batches of 500 ahead of the transaction, not by one statement', async () => {
+      /** The page sizes the loop asked for, in order. */
+      const takes = (query: Record<string, jest.Mock>): number[] =>
+        (query.limit.mock.calls as Array<[number]>).map(([take]) => take);
+
+      it('are removed in batches ahead of the transaction, not by one statement', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        (messageRepository.find as jest.Mock)
-          .mockResolvedValueOnce(ids(0, 500))
-          .mockResolvedValueOnce(ids(500, 500))
-          .mockResolvedValueOnce(ids(1000, 20));
+        const query = messageQuery(stamped(0, BATCH), stamped(BATCH, BATCH), stamped(2 * BATCH, 20));
 
         await service.delete('sess-uuid-1');
 
-        expect(messageRepository.find).toHaveBeenCalledTimes(3);
-        expect(messageRepository.find).toHaveBeenCalledWith({
-          select: { id: true },
-          where: { sessionId: 'sess-uuid-1' },
-          take: 500,
+        // Three pages of rows with a timestamp, then one read that finds no row without one.
+        expect(query.getRawMany).toHaveBeenCalledTimes(4);
+        expect(query.limit).toHaveBeenCalledTimes(4);
+        for (const [take] of query.limit.mock.calls) expect(take).toBe(BATCH);
+        expect(query.where).toHaveBeenNthCalledWith(1, expect.stringContaining('message.sessionId = :sessionId'), {
+          sessionId: 'sess-uuid-1',
+        });
+        // Each page starts after the last row of the one before it, not from the head of the session again.
+        // In the order of the cursor: without it the database may hand the rows out in any order and the cursor
+        // would skip some.
+        expect(query.orderBy).toHaveBeenCalledTimes(4);
+        expect(query.addOrderBy).toHaveBeenCalledTimes(4);
+        for (const [column, direction] of query.orderBy.mock.calls)
+          expect([column, direction]).toEqual(['message.timestamp', 'ASC']);
+        for (const [column, direction] of query.addOrderBy.mock.calls)
+          expect([column, direction]).toEqual(['message.id', 'ASC']);
+        const after = '(message.timestamp, message.id) > (:timestamp, :id)';
+        expect(query.andWhere).toHaveBeenCalledTimes(2);
+        expect(query.andWhere).toHaveBeenNthCalledWith(1, after, {
+          timestamp: 1700000000 + BATCH - 1,
+          id: `m${BATCH - 1}`,
+        });
+        expect(query.andWhere).toHaveBeenNthCalledWith(2, after, {
+          timestamp: 1700000000 + 2 * BATCH - 1,
+          id: `m${2 * BATCH - 1}`,
         });
         const del = messageRepository.delete as jest.Mock;
         expect(del).toHaveBeenCalledTimes(3);
-        expect(del).toHaveBeenNthCalledWith(1, {
-          sessionId: 'sess-uuid-1',
-          id: In(ids(0, 500).map(row => row.id)),
-        });
-        expect(del).toHaveBeenNthCalledWith(3, {
-          sessionId: 'sess-uuid-1',
-          id: In(ids(1000, 20).map(row => row.id)),
-        });
+        // By primary key alone: the ids were read for this session a statement earlier, and a sessionId
+        // condition next to an id list makes the database walk the session's remaining rows on every batch.
+        expect(del).toHaveBeenNthCalledWith(1, { id: In(ids(0, BATCH).map(row => row.id)) });
+        expect(del).toHaveBeenNthCalledWith(3, { id: In(ids(2 * BATCH, 20).map(row => row.id)) });
         // Every batch is out before the transaction that removes the rest and the session row.
         const transaction = dataSource.transaction as jest.Mock;
-        expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder[0]);
+        expect(del.mock.invocationCallOrder[2]).toBeLessThan(transaction.mock.invocationCallOrder.at(-1)!);
       });
 
-      it('and the webhook outbox records are removed in batches the same way', async () => {
+      it('without a timestamp follow the ones with, paged by id', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        outboxRepository.find.mockResolvedValueOnce(ids(0, 500)).mockResolvedValueOnce(ids(500, 3));
+        const query = messageQuery(stamped(0, 5), ids(100, BATCH), ids(100 + BATCH, 4));
 
         await service.delete('sess-uuid-1');
 
-        expect(outboxRepository.delete).toHaveBeenCalledTimes(2);
-        expect(outboxRepository.delete).toHaveBeenNthCalledWith(1, {
+        const del = messageRepository.delete as jest.Mock;
+        expect(del).toHaveBeenCalledTimes(3);
+        expect(del).toHaveBeenNthCalledWith(1, { id: In(stamped(0, 5).map(row => row.id)) });
+        expect(del).toHaveBeenNthCalledWith(2, { id: In(ids(100, BATCH).map(row => row.id)) });
+        expect(del).toHaveBeenNthCalledWith(3, { id: In(ids(100 + BATCH, 4).map(row => row.id)) });
+        // The short page of the first kind of row ends its pass; the second pass pages after its last id.
+        expect(query.where).toHaveBeenNthCalledWith(2, expect.stringContaining('message.timestamp IS NULL'), {
           sessionId: 'sess-uuid-1',
-          id: In(ids(0, 500).map(row => row.id)),
         });
+        expect(query.andWhere).toHaveBeenCalledTimes(1);
+        expect(query.andWhere).toHaveBeenCalledWith('message.id > :lastId', { lastId: `m${100 + BATCH - 1}` });
+      });
+
+      // PostgreSQL's statement time follows the bytes of the rows (inline media payloads), so it keeps a fixed
+      // smaller batch whatever the clock says; SQLite starts at the floor and scales to the target. The values are
+      // pinned here on purpose.
+      it('keeps PostgreSQL batches at a fixed size however long a batch takes', async () => {
+        (dataSource as { options: unknown }).options = { type: 'postgres' };
+        clockStep = 10 * SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const size = SESSION_DELETE_BATCH_SIZE_POSTGRES;
+        const query = messageQuery(stamped(0, size), stamped(size, size), stamped(2 * size, 3));
+        outboxRepository.find.mockResolvedValueOnce(ids(0, size + 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(SESSION_DELETE_BATCH_SIZE_POSTGRES).toBe(500);
+        expect(takes(query)).toEqual([size, size, size, size]);
+        expect(
+          (outboxRepository.delete.mock.calls as Array<[{ id: { value: string[] } }]>).map(
+            ([criteria]) => criteria.id.value.length,
+          ),
+        ).toEqual([size, 3]);
+        expect(failureRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: size * SESSION_DELETE_READ_AHEAD_POSTGRES,
+        });
+      });
+
+      // The outbox records and the delivery failures have no index that orders a session's rows, so a read after
+      // every batch goes back over the session's whole range. On PostgreSQL one read feeds several batches; SQLite
+      // reads one batch at a time.
+      it.each([
+        ['outbox records', () => outboxRepository],
+        ['delivery failures', () => failureRepository],
+      ])('reads the %s ahead on PostgreSQL, one read for several batches', async (_name, pick) => {
+        (dataSource as { options: unknown }).options = { type: 'postgres' };
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const size = SESSION_DELETE_BATCH_SIZE_POSTGRES;
+        const window = size * SESSION_DELETE_READ_AHEAD_POSTGRES;
+        const table = pick();
+        // A stand-in for the table: a read returns the first rows that are left, a delete takes its ids out.
+        const left = new Set(ids(0, window + 2 * size + 7).map(row => row.id));
+        table.find.mockImplementation(({ take }: { take: number }) =>
+          Promise.resolve([...left].slice(0, take).map(id => ({ id }))),
+        );
+        table.delete.mockImplementation(({ id }: { id: { value: string[] } }) => {
+          for (const gone of id.value) left.delete(gone);
+          return Promise.resolve({ affected: id.value.length });
+        });
+        let leftBeforeTransaction = -1;
+        const transact = (dataSource.transaction as jest.Mock).getMockImplementation() as (
+          cb: unknown,
+        ) => Promise<unknown>;
+        (dataSource.transaction as jest.Mock).mockImplementation((cb: unknown) => {
+          if (left.size > 0) return transact(cb);
+          leftBeforeTransaction = left.size;
+          return Promise.reject(new Error('closing transaction not under test'));
+        });
+
+        await expect(service.delete('sess-uuid-1')).rejects.toThrow('closing transaction not under test');
+
+        expect(SESSION_DELETE_READ_AHEAD_POSTGRES).toBe(20);
+        // Two reads of a full window, the second finds the rest; every batch is still out before the transaction.
+        expect(table.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([window, window]);
+        const batches = (table.delete.mock.calls as Array<[{ id: { value: string[] } }]>).map(
+          ([criteria]) => criteria.id.value.length,
+        );
+        expect(batches).toEqual([...Array<number>(SESSION_DELETE_READ_AHEAD_POSTGRES + 2).fill(size), 7]);
+        expect(leftBeforeTransaction).toBe(0);
+      });
+
+      it('reads the outbox records one batch at a time on SQLite', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        outboxRepository.find.mockResolvedValueOnce(ids(0, BATCH)).mockResolvedValueOnce(ids(BATCH, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(outboxRepository.find.mock.calls.map(([options]) => (options as { take: number }).take)).toEqual([
+          BATCH,
+          BATCH,
+        ]);
+      });
+
+      it.each([
+        ['scales to the target time', 1000, 300, 500],
+        ['grows by at most a factor of two', 300, 20, 600],
+        ['never passes the ceiling', 1500, 20, 2000],
+        ['never drops below the floor', 300, 5000, 250],
+        ['reads a zero duration as one millisecond', 250, 0, 500],
+      ])('sizes the next SQLite batch: %s', (_name: string, rows: number, tookMs: number, expected: number) => {
+        expect(nextSqliteDeleteBatchSize(rows, tookMs)).toBe(expected);
+      });
+
+      // SQLite runs a batch on the event loop, so between batches it pauses long enough for a request that needs
+      // several turns to finish; PostgreSQL's driver gives the loop its turns and only yields.
+      it.each([
+        ['better-sqlite3', SESSION_DELETE_BATCH_MIN_SQLITE, 2],
+        ['postgres', SESSION_DELETE_BATCH_SIZE_POSTGRES, 0],
+      ])('pauses between the batches on %s', async (type: string, size: number, pauses: number) => {
+        (dataSource as { options: unknown }).options = { type };
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        messageQuery(stamped(0, size), stamped(size, size), stamped(2 * size, 3));
+        const timers = jest.spyOn(global, 'setTimeout');
+
+        try {
+          await service.delete('sess-uuid-1');
+
+          expect(SESSION_DELETE_PAUSE_MS_SQLITE).toBe(5);
+          expect(timers.mock.calls.filter(([, ms]) => ms === SESSION_DELETE_PAUSE_MS_SQLITE)).toHaveLength(pauses);
+        } finally {
+          timers.mockRestore();
+        }
+      });
+
+      it('starts a SQLite delete at the floor and grows to the ceiling while batches are fast', async () => {
+        clockStep = 1;
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const query = messageQuery(
+          stamped(0, 250),
+          stamped(250, 500),
+          stamped(750, 1000),
+          stamped(1750, 2000),
+          stamped(3750, 2000),
+          stamped(5750, 10),
+        );
+
+        await service.delete('sess-uuid-1');
+
+        expect(SESSION_DELETE_BATCH_MIN_SQLITE).toBe(250);
+        expect(SESSION_DELETE_BATCH_SIZE_SQLITE).toBe(2000);
+        // Six pages with a timestamp, then the read for the rows without one, which keep the size the loop reached.
+        expect(takes(query)).toEqual([250, 500, 1000, 2000, 2000, 2000, 2000]);
+        expect(outboxRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: 2000,
+        });
+      });
+
+      it('shrinks a SQLite batch when the last one ran long, down to the floor', async () => {
+        clockStep = 4 * SESSION_DELETE_BATCH_TARGET_MS_SQLITE;
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        const query = messageQuery(stamped(0, 250), stamped(250, 250), stamped(500, 250), stamped(750, 9));
+
+        await service.delete('sess-uuid-1');
+
+        // 250 rows in four times the target would be 62 rows: held at the floor.
+        expect(takes(query)).toEqual([250, 250, 250, 250, 250]);
+      });
+
+      it.each([
+        ['a session with a partial last batch', 2 * BATCH + 7, 4, 3],
+        ['a session that fills its last batch exactly', 2 * BATCH, 4, 2],
+        ['a session that fits in one batch', 12, 2, 1],
+        ['a session without messages', 0, 2, 0],
+      ])(
+        'need a bounded number of statements for %s',
+        async (_name: string, total: number, expectedReads: number, expectedDeletes: number) => {
+          (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+          const query = messageQuery();
+          // A stand-in for the table: every read returns the next page of what is left. The last read of a
+          // pass that fills its final page exactly finds nothing, and the pass of rows without a timestamp
+          // costs one read more.
+          let left = total;
+          query.getRawMany.mockImplementation(() => {
+            const take = takes(query)[takes(query).length - 1];
+            const page = stamped(total - left, Math.min(left, take));
+            left -= page.length;
+            return Promise.resolve(page);
+          });
+
+          await service.delete('sess-uuid-1');
+
+          expect(query.getRawMany).toHaveBeenCalledTimes(expectedReads);
+          const del = messageRepository.delete as jest.Mock;
+          expect(del).toHaveBeenCalledTimes(expectedDeletes);
+          let removed = 0;
+          for (const [criteria] of del.mock.calls as Array<[{ id: { value: string[] } }]>) {
+            expect(Object.keys(criteria)).toEqual(['id']);
+            expect(criteria.id.value.length).toBeLessThanOrEqual(BATCH);
+            removed += criteria.id.value.length;
+          }
+          expect(removed).toBe(total);
+        },
+      );
+
+      it('and the webhook outbox records are removed in batches the same way', async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        outboxRepository.find.mockResolvedValueOnce(ids(0, BATCH)).mockResolvedValueOnce(ids(BATCH, 3));
+
+        await service.delete('sess-uuid-1');
+
+        expect(outboxRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: BATCH,
+        });
+        expect(outboxRepository.delete).toHaveBeenCalledTimes(2);
+        expect(outboxRepository.delete).toHaveBeenNthCalledWith(1, { id: In(ids(0, BATCH).map(row => row.id)) });
+        expect(outboxRepository.delete).toHaveBeenNthCalledWith(2, { id: In(ids(BATCH, 3).map(row => row.id)) });
         const transaction = dataSource.transaction as jest.Mock;
         expect(outboxRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
-          transaction.mock.invocationCallOrder[0],
+          transaction.mock.invocationCallOrder.at(-1)!,
         );
       });
 
       it('and the webhook delivery failures are removed in batches the same way', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        failureRepository.find.mockResolvedValueOnce(ids(0, 500)).mockResolvedValueOnce(ids(500, 3));
+        failureRepository.find.mockResolvedValueOnce(ids(0, BATCH)).mockResolvedValueOnce(ids(BATCH, 3));
 
         await service.delete('sess-uuid-1');
 
-        expect(failureRepository.delete).toHaveBeenCalledTimes(2);
-        expect(failureRepository.delete).toHaveBeenNthCalledWith(1, {
-          sessionId: 'sess-uuid-1',
-          id: In(ids(0, 500).map(row => row.id)),
+        expect(failureRepository.find).toHaveBeenCalledWith({
+          select: { id: true },
+          where: { sessionId: 'sess-uuid-1' },
+          take: BATCH,
         });
+        expect(failureRepository.delete).toHaveBeenCalledTimes(2);
+        expect(failureRepository.delete).toHaveBeenNthCalledWith(1, { id: In(ids(0, BATCH).map(row => row.id)) });
+        expect(failureRepository.delete).toHaveBeenNthCalledWith(2, { id: In(ids(BATCH, 3).map(row => row.id)) });
         const transaction = dataSource.transaction as jest.Mock;
         expect(failureRepository.delete.mock.invocationCallOrder[1]).toBeLessThan(
-          transaction.mock.invocationCallOrder[0],
+          transaction.mock.invocationCallOrder.at(-1)!,
         );
       });
 
       it('give up the delete when a batch fails, leaving the session row for a retry to finish', async () => {
         (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-        (messageRepository.find as jest.Mock).mockResolvedValueOnce(ids(0, 500));
+        messageQuery(stamped(0, BATCH));
         (messageRepository.delete as jest.Mock).mockRejectedValueOnce(new Error('canceling statement'));
 
         await expect(service.delete('sess-uuid-1')).rejects.toThrow('canceling statement');
 
-        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
         expect(repository.remove).not.toHaveBeenCalled();
       });
     });
@@ -1556,16 +1847,24 @@ describe('SessionService', () => {
   // ── ownership claim lifecycle (multi-node) ────────────────────────
 
   describe('ownership release', () => {
-    type OwnershipStub = { claim: jest.Mock; release: jest.Mock; isHeldByOtherNode: jest.Mock };
+    type OwnershipStub = {
+      nodeId: string;
+      claim: jest.Mock;
+      release: jest.Mock;
+      isHeldByOtherNode: jest.Mock;
+      stopExpiredForeignClaim: jest.Mock;
+    };
 
     // The trailing @Optional constructor dep the DI module deliberately omits; poked onto the
     // instance like the other white-box seams in this file.
     const withOwnership = (claimResult = true): OwnershipStub => {
       const ownership: OwnershipStub = {
+        nodeId: 'node-a',
         claim: jest.fn().mockResolvedValue(claimResult),
         release: jest.fn().mockResolvedValue(undefined),
         // No live peer holds it unless a test says so — the single-node answer.
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
       };
       Object.assign(service as unknown as Record<string, unknown>, { ownership });
       return ownership;
@@ -2143,6 +2442,19 @@ describe('SessionService', () => {
       expect(ownership.release).toHaveBeenCalledWith('sess-uuid-1');
     });
 
+    // A delete refused before its teardown (a credential teardown still pending for the name) leaves the
+    // engine running here, and the claim it took is the one that engine's heartbeat renews.
+    it('delete() keeps the claim it took when it is refused while the engine still runs here', async () => {
+      const ownership = withOwnership();
+      jest.spyOn(lifecycle, 'delete').mockRejectedValue(new ConflictException('teardown pending'));
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(true);
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow(ConflictException);
+
+      expect(ownership.claim).toHaveBeenCalledWith('sess-uuid-1', expect.any(Function));
+      expect(ownership.release).not.toHaveBeenCalled();
+    });
+
     it('forceKill() hands the claim back after the kill', async () => {
       const ownership = withOwnership();
       jest.spyOn(lifecycle, 'forceKill').mockResolvedValue(createMockSession());
@@ -2661,44 +2973,79 @@ describe('SessionService', () => {
       // A stop whose ownership query failed took nothing down, so the retry still has a session to
       // bring back. Counting that refusal skipped the retry and left the session DISCONNECTED with
       // its claim released, waiting for an operator.
-      it('start() still retries a transient failure when a stop refused by the fence landed during the delay', async () => {
-        const row = await seed();
-        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
-        mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      it.each([
+        [
+          'whose ownership query fails',
+          () =>
+            jest
+              .spyOn(ownership, 'isHeldByOtherNode')
+              .mockRejectedValueOnce(new Error('Connection terminated unexpectedly')),
+          'Connection terminated unexpectedly',
+        ],
+        [
+          'refused for a live peer',
+          () => jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true),
+          ConflictException,
+        ],
+        [
+          'that cannot record itself',
+          () => (repository.update as jest.Mock).mockRejectedValueOnce(new Error('db down')),
+          'db down',
+        ],
+        [
+          'refused when its record is written',
+          () =>
+            (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
+              Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
+            ),
+          ConflictException,
+        ],
+      ])(
+        'start() still retries a transient failure when a stop %s landed during the delay',
+        async (_case, arrange, refusal) => {
+          const row = await seed();
+          (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
+          mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
 
-        const starting = service.start(row.id);
-        await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
-        jest
-          .spyOn(ownership, 'isHeldByOtherNode')
-          .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
-        await expect(service.stop(row.id)).rejects.toThrow('Connection terminated unexpectedly');
+          const starting = service.start(row.id);
+          await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
+          arrange();
+          await expect(service.stop(row.id)).rejects.toThrow(refusal);
 
-        await starting;
+          await starting;
 
-        expect(mockEngine.initialize).toHaveBeenCalledTimes(2);
-        expect(lifecycle.isEngineActive(row.id)).toBe(true);
-        expect(await nodeIdOf(row.id)).toBe('node-a');
-      });
+          expect(mockEngine.initialize).toHaveBeenCalledTimes(2);
+          expect(lifecycle.isEngineActive(row.id)).toBe(true);
+          expect(await nodeIdOf(row.id)).toBe('node-a');
+        },
+      );
 
-      // The rollback decrements, it does not clear: a stop that DID take the engine down stays
-      // counted when a later request is refused, so the retry it must cancel stays cancelled.
-      // Clearing instead would relaunch the session the first stop took down and re-claim its row.
-      it('start() does not retry when an effective stop during the delay is followed by a refused one', async () => {
-        const row = await seed();
-        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
-        mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+      // A refused stop withdraws only its own request: one that DID take the engine down still stands
+      // when a later request is refused, so the retry it must cancel stays cancelled. Clearing every
+      // request instead would relaunch the session the first stop took down and re-claim its row.
+      it.each(['ownership read', 'record write'])(
+        'start() does not retry when an effective stop is followed by one refused at the %s',
+        async refusal => {
+          const row = await seed();
+          (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
+          mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
 
-        const starting = service.start(row.id);
-        const outcome = starting.catch((error: unknown) => error);
-        await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
-        await service.stop(row.id);
-        jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
-        await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
+          const starting = service.start(row.id);
+          const outcome = starting.catch((error: unknown) => error);
+          await until(() => mockEngine.initialize.mock.calls.length === 1 && !lifecycle.isEngineActive(row.id));
+          await service.stop(row.id);
+          if (refusal === 'ownership read') jest.spyOn(ownership, 'isHeldByOtherNode').mockResolvedValueOnce(true);
+          else
+            (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
+              Promise.resolve({ affected: patch.desiredState ? 0 : 1 }),
+            );
+          await expect(service.stop(row.id)).rejects.toThrow(ConflictException);
 
-        expect(await outcome).toBeInstanceOf(SessionStoppedException);
-        expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
-        expect(lifecycle.isEngineActive(row.id)).toBe(false);
-      });
+          expect(await outcome).toBeInstanceOf(SessionStoppedException);
+          expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+          expect(lifecycle.isEngineActive(row.id)).toBe(false);
+        },
+      );
 
       // A 400 changes nothing, and release() also clears a lapsed foreign claim: that took a crashed
       // node's session out of the lapsed-claim sweep for good.
@@ -5717,6 +6064,49 @@ describe('SessionService', () => {
       expect(messageRepository.insert).not.toHaveBeenCalled();
       expect(webhookService.dispatch).not.toHaveBeenCalled();
     });
+
+    // What an engine the session no longer owns reports must not reach the socket, the webhook or the stored
+    // status: it would read as the delivery state of whatever engine the session has now, or of none.
+    describe.each([
+      ['superseded by a newer engine', () => Promise.resolve(enginesOf().set('sess-uuid-1', { marker: 'B' }))],
+      ['retired by a stop', () => service.stop('sess-uuid-1')],
+    ])('after its engine was %s', (_how, retire) => {
+      it('ignores onMessageAck (no ack write, no socket event, no webhook, no hook)', async () => {
+        const callbacks = await startAndCapture();
+        await retire();
+        (messageRepository.update as jest.Mock).mockClear();
+        (eventsGateway.emitMessageAck as jest.Mock).mockClear();
+        (webhookService.dispatch as jest.Mock).mockClear();
+        (hookManager.execute as jest.Mock).mockClear();
+
+        callbacks.onMessageAck?.('wa-out-1', 'delivered');
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessageAck).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+        expect(hookManager.execute).not.toHaveBeenCalled();
+      });
+
+      it('ignores onMessageReceipt (no socket event, no webhook)', async () => {
+        const callbacks = await startAndCapture();
+        await retire();
+        (eventsGateway.emitMessageReceipt as jest.Mock).mockClear();
+        (webhookService.dispatch as jest.Mock).mockClear();
+
+        callbacks.onMessageReceipt?.({
+          messageId: 'wa-out-1',
+          chatId: '120363000000000001@g.us',
+          participant: '628222@c.us',
+          status: 'read',
+          timestamp: 1700000000,
+        });
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(eventsGateway.emitMessageReceipt).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // ── stuck-auth recovery budget (hoisted to session lifecycle) ─────
@@ -8003,6 +8393,127 @@ describe('SessionService', () => {
 
       await expect(service.getChats('sess-uuid-1')).rejects.toThrow(BadRequestException);
     });
+
+    describe('one engine read per walk', () => {
+      const chatsOf = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, i) => ({
+          id: `${prefix}${i}@c.us`,
+          name: `c${i}`,
+          isGroup: false,
+          unreadCount: 0,
+          timestamp: i,
+        }));
+      const walk = async (sessionId = 'sess-uuid-1') => {
+        const ids: string[] = [];
+        for (let offset = 0; ; offset += 1000) {
+          const page = await service.getChats(sessionId, { limit: 1000, offset });
+          ids.push(...page.map(c => c.id));
+          if (page.length < 1000) return ids;
+        }
+      };
+
+      beforeEach(async () => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        await service.start('sess-uuid-1');
+        mockEngine.getChats.mockResolvedValue(chatsOf('62', 5000));
+      });
+
+      it('reads the engine once for every page of one walk', async () => {
+        expect(new Set(await walk()).size).toBe(5000);
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads afresh for the first page of every walk', async () => {
+        await walk();
+        await walk();
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it('reads afresh for a later page once the listing has outlived its few seconds', async () => {
+        const now = Date.now();
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+        try {
+          await service.getChats('sess-uuid-1', { offset: 0 });
+          clock.mockReturnValue(now + 60_000);
+          await service.getChats('sess-uuid-1', { offset: 1000 });
+        } finally {
+          clock.mockRestore();
+        }
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it("never serves one session's listing to another session", async () => {
+        const other = { getChats: jest.fn().mockResolvedValue(chatsOf('63', 1500)) };
+        registry.set('sess-uuid-2', other as never);
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        const page = await service.getChats('sess-uuid-2', { offset: 1000 });
+        expect(other.getChats).toHaveBeenCalledTimes(1);
+        expect(page).toHaveLength(500);
+        expect(page.every(c => c.id.startsWith('63'))).toBe(true);
+      });
+
+      it('reads afresh from an engine that replaced the one the listing came from', async () => {
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        // The same engine object registered again stands in for any replacement: identity alone
+        // would not tell it apart, so only the retire notification can drop the listing.
+        registry.delete('sess-uuid-1');
+        registry.set('sess-uuid-1', mockEngine as never);
+        await service.getChats('sess-uuid-1', { offset: 1000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+
+      it('answers 400 for a stopped session instead of its last listing', async () => {
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        registry.delete('sess-uuid-1');
+        await expect(service.getChats('sess-uuid-1', { offset: 1000 })).rejects.toThrow(BadRequestException);
+      });
+
+      it.each([
+        ['sendSeen', (s: SessionService) => s.sendSeen('sess-uuid-1', '1@c.us')],
+        ['markUnread', (s: SessionService) => s.markUnread('sess-uuid-1', '1@c.us')],
+        ['clearChatMessages', (s: SessionService) => s.clearChatMessages('sess-uuid-1', '1@c.us')],
+        ['archiveChat', (s: SessionService) => s.archiveChat('sess-uuid-1', '1@c.us', true)],
+        ['muteChat', (s: SessionService) => s.muteChat('sess-uuid-1', '1@c.us', null)],
+        ['pinChat', (s: SessionService) => s.pinChat('sess-uuid-1', '1@c.us', true)],
+        ['deleteChat', (s: SessionService) => s.deleteChat('sess-uuid-1', '1@c.us')],
+      ])('a %s call makes the next page read afresh, even when it fails', async (method, write) => {
+        mockEngine.archiveChat = jest.fn().mockResolvedValue(true);
+        mockEngine.muteChat = jest.fn().mockResolvedValue(undefined);
+        mockEngine.pinChat = jest.fn().mockResolvedValue(true);
+        await service.getChats('sess-uuid-1', { offset: 0 });
+        await write(service);
+        await service.getChats('sess-uuid-1', { offset: 1000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+
+        // A timed-out write may still have been applied, so a failure drops the listing too.
+        mockEngine[method] = jest.fn().mockRejectedValue(new Error('timed out'));
+        await expect(write(service)).rejects.toThrow('timed out');
+        await service.getChats('sess-uuid-1', { offset: 2000 });
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(3);
+      });
+
+      it('filters every page for a chat-restricted key after an unrestricted walk read the listing', async () => {
+        const controller = new SessionController(
+          service,
+          { logInfo: jest.fn() } as unknown as AuditService,
+          new ChatScopeService(),
+        );
+        const allowed = ['623@c.us', '622500@c.us', '624999@c.us'];
+        const restricted = { allowedChats: allowed } as ApiKey;
+        expect(await controller.getChats('sess-uuid-1', { allowedChats: null } as ApiKey, '1000', '0')).toHaveLength(
+          1000,
+        );
+        const seen: string[] = [];
+        for (let offset = 0; offset < 4; offset++) {
+          const page = await controller.getChats('sess-uuid-1', restricted, '1', String(offset));
+          expect(page.every(c => allowed.includes(c.id))).toBe(true);
+          seen.push(...page.map(c => c.id));
+        }
+        expect(seen.sort()).toEqual([...allowed].sort());
+        expect(mockEngine.getChats).toHaveBeenCalledTimes(2);
+      });
+    });
   });
 
   describe('start() concurrent stop/delete guard', () => {
@@ -8042,6 +8553,25 @@ describe('SessionService', () => {
       expect(service.getEngine('sess-uuid-1')).toBeDefined();
       expect(mockEngine.destroy).not.toHaveBeenCalled();
       expect(mockEngine.forceDestroy).not.toHaveBeenCalled();
+    });
+
+    // A failed retirement read assumes the session is still there, so the read that follows has the last word:
+    // a row found gone then leaves the engine this start registered with no session to serve.
+    it('tears the engine down when the retirement read failed and the row turns out to be gone', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (repository.findOne as jest.Mock)
+          .mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'))
+          .mockResolvedValue(null);
+        return Promise.resolve();
+      });
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow(NotFoundException);
+
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(service.getEngine('sess-uuid-1')).toBeUndefined();
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('sess-uuid-1');
     });
 
     it('escalates to forceDestroy() when the retired engine fails its graceful destroy()', async () => {
@@ -8188,7 +8718,7 @@ describe('SessionService', () => {
 
       // Second argument is the optional messageIds, absent here — the engine falls back to the
       // newest message it still holds.
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined);
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined, undefined);
       expect(result).toBe(true);
     });
 
@@ -8202,7 +8732,63 @@ describe('SessionService', () => {
 
       await service.sendSeen('sess-uuid-1', '123@c.us', ['M1', 'M2']);
 
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2']);
+      // A one to one receipt needs no sender, so the rows are not read.
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2'], undefined);
+      expect(messageRepository.find).not.toHaveBeenCalled();
+    });
+
+    describe('in a group', () => {
+      const GROUP = '120363000000000001@g.us';
+      const start = async (): Promise<void> => {
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        await service.start('sess-uuid-1');
+        mockEngine.sendSeen.mockResolvedValue(true);
+      };
+
+      it('hands the engine who posted each named message, from the rows the gateway stored', async () => {
+        await start();
+        (messageRepository.find as jest.Mock).mockResolvedValue([
+          { waMessageId: 'M1', author: '628111@c.us' },
+          { waMessageId: 'M2', author: '9988@lid' },
+          { waMessageId: 'M3', author: null },
+        ]);
+
+        await service.sendSeen('sess-uuid-1', GROUP, ['M1', 'M2', 'M3']);
+
+        expect(messageRepository.find).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              sessionId: 'sess-uuid-1',
+              chatId: GROUP,
+              direction: MessageDirection.INCOMING,
+            }) as unknown,
+          }),
+        );
+        const [, , authors] = mockEngine.sendSeen.mock.calls[0] as [string, string[], ReadonlyMap<string, string>];
+        expect([...authors]).toEqual([
+          ['M1', '628111@c.us'],
+          ['M2', '9988@lid'],
+        ]);
+      });
+
+      it('reads no rows when it names no message', async () => {
+        await start();
+
+        await service.sendSeen('sess-uuid-1', GROUP);
+
+        expect(messageRepository.find).not.toHaveBeenCalled();
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, undefined, undefined);
+      });
+
+      it('still reads the chat when the rows cannot be read', async () => {
+        await start();
+        (messageRepository.find as jest.Mock).mockRejectedValue(new Error('database is locked'));
+
+        await expect(service.sendSeen('sess-uuid-1', GROUP, ['M1'])).resolves.toBe(true);
+
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, ['M1'], undefined);
+      });
     });
 
     it('should throw BadRequestException when session is not started', async () => {
@@ -8606,7 +9192,12 @@ describe('SessionService', () => {
       await new Promise(resolve => setImmediate(resolve));
 
       expect(messageRepository.update).toHaveBeenCalledWith(
-        { sessionId: 'sess-uuid-1', waMessageId: 'WA_MSG_EDIT_1', type: Not('revoked') },
+        {
+          sessionId: 'sess-uuid-1',
+          waMessageId: 'WA_MSG_EDIT_1',
+          type: Not('revoked'),
+          body: Or(Not('New edited text'), IsNull()),
+        },
         { body: 'New edited text' },
       );
       expect(eventsGateway.emitMessageEdited).not.toHaveBeenCalled();
@@ -9508,9 +10099,11 @@ describe('SessionService', () => {
     const updates = (): unknown[][] => (repository.update as jest.Mock).mock.calls as unknown[][];
     const withOwnership = (over: Record<string, jest.Mock> = {}) => {
       const ownership = {
+        nodeId: 'node-a',
         claim: jest.fn().mockResolvedValue(true),
         release: jest.fn().mockResolvedValue(undefined),
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
         ...over,
       };
       Object.assign(service as unknown as Record<string, unknown>, { ownership });
@@ -10237,6 +10830,7 @@ describe('SessionService', () => {
         claim: jest.fn().mockResolvedValue(true),
         release: jest.fn().mockResolvedValue(undefined),
         isHeldByOtherNode: jest.fn().mockResolvedValue(false),
+        stopExpiredForeignClaim: jest.fn().mockResolvedValue(false),
         onLeaseLoss: jest.fn(),
         setEngineLiveness: jest.fn(),
         startHeartbeat: jest.fn(),

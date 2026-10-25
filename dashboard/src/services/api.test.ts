@@ -332,6 +332,26 @@ for (const status of [500, 429]) {
   });
 }
 
+test('the chat list request carries the caller signal, so an abort cuts a request that never answers', async () => {
+  const controller = new AbortController();
+  let seen: AbortSignal | null | undefined;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    seen = init?.signal;
+    // A half-open connection: the request answers only when its signal aborts it.
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    });
+  }) as typeof fetch;
+
+  const result = sessionApi.getChats('s1', controller.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  // Asserted before waiting on the result, which would never settle without the signal.
+  assert.ok(seen, 'the request carried no signal');
+  controller.abort();
+  assert.equal(seen.aborted, true, 'the signal of the request did not follow the caller');
+  await assert.rejects(result, { name: 'AbortError' });
+});
+
 for (const change of ['replace key', 'sign out', 'abort'] as const) {
   test(`chat pagination stops before the next page after ${change}`, async () => {
     let release!: (response: Response) => void;

@@ -175,6 +175,16 @@
       "backgroundColor": "Colore di sfondo",
       "font": "Carattere",
       "fontDefault": "Predefinito",
+      "fonts": {
+        "system": "Sistema",
+        "systemText": "Testo di sistema",
+        "script": "Corsivo",
+        "bold": "Grassetto",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "o",
       "post": "Pubblica",
       "posted": "Stato pubblicato",
@@ -676,7 +686,7 @@
       "call.rejected": "Quando una chiamata viene rifiutata",
       "call.missed": "Quando una chiamata resta senza risposta",
       "status.received": "Quando un contatto pubblica uno stato",
-      "all": "Tutti gli eventi"
+      "all": "Tutti gli eventi tranne message.receipt, che va indicato esplicitamente"
     },
     "auth": {
       "title": "Autenticazione delle consegne",
@@ -977,6 +987,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} inviati",
     "groupSendCancelled": "{{count}}, annullati",
     "groupSendStopped": "{{count}}, interrotto dopo HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, interrotto: il gateway non ha risposto",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "ID Messaggio",
@@ -1051,7 +1062,7 @@
       "copy": "Copia",
       "copied": "Copiato",
       "checkedAt": "Verificato alle",
-      "openTester": "Apri in Messaggio di prova"
+      "openTester": "Vai a Messaggio di prova"
     },
     "recent": {
       "title": "Verifiche recenti",
@@ -1089,6 +1100,7 @@
       "start": "Avvia verifica in blocco",
       "stop": "Interrompi verifica",
       "export": "Esporta risultati (CSV)",
+      "exportHint": "Il file contiene tutte le cifre. Un foglio di calcolo può mostrare i numeri lunghi come 9.19612E+11 o eliminare uno zero iniziale; importa il file e imposta la colonna Phone Number su Testo per mantenerli così come sono.",
       "stoppedTitle": "Verifica in blocco interrotta",
       "checked": "Verificati",
       "remaining": "Rimanenti",
@@ -1102,6 +1114,7 @@
       "partial": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numero non è stato inviato. Riprova più tardi.",
       "partial_other": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",
       "partial_many": "{{reason}} (HTTP {{status}}). Verifica interrotta al numero {{attempted}} di {{total}}; {{count}} numeri non sono stati inviati. Riprova più tardi.",
+      "noAnswer": "Il gateway non ha risposto. Verifica interrotta al numero {{attempted}} di {{total}}. Riprova più tardi.",
       "last": "{{reason}} (HTTP {{status}}). L'ultima verifica non è riuscita. Riprova più tardi."
     },
     "toast": {
@@ -1207,6 +1220,7 @@
       "successTitle": "✅ Server Pronto",
       "errorTitle": "❌ Riavvio Fallito",
       "idleDesc": "La configurazione è stata salvata in <code>.env.generated</code>.<br/>È richiesto un riavvio del server per applicare le modifiche.",
+      "stopsContainers": "Il riavvio arresterà anche questi container integrati, che conservano i loro dati e non vengono eliminati:",
       "later": "Riavvia Più Tardi",
       "now": "Riavvia Ora",
       "restartingMsg": "Riavvio del server... {{count}}s",
@@ -1221,7 +1235,10 @@
       "saveFailed": "Salvataggio Fallito"
     },
     "envPinNote": "Fissato dalla variabile d'ambiente {{name}}: questo è il valore in esecuzione; le modifiche dalla dashboard non verranno applicate finché quella variabile non viene rimossa.",
+    "envPinFlagNote": "Fissato dalla variabile d'ambiente {{name}}: finché vale true e questo servizio è in uso, il container integrato viene avviato a ogni avvio del server, anche con questo interruttore disattivato.",
     "pendingRestartNote": "Salvato, ma non ancora applicato: riavvia il server perché questa modifica abbia effetto.",
+    "pendingBuiltInNote": "Salvato, ma non ancora applicato: il server usa ora un servizio esterno e un riavvio lo passerà al container integrato.",
+    "pendingExternalNote": "Salvato, ma non ancora applicato: il server usa ora il container integrato e un riavvio lo passerà a un servizio esterno.",
     "migration": {
       "title": "Attenzione: questa operazione cambia il backend dei dati",
       "dbWarning": "Il nuovo database parte vuoto. Scarica ora un backup dei tuoi dati attuali (mentre sei ancora sul vecchio database), poi ripristinalo dopo il riavvio.",

@@ -1,7 +1,7 @@
 import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -438,6 +438,8 @@ export class SessionEngineLifecycle {
       cancelReconnect: id => this.cancelReconnect(id),
       initializeEngine: (id, session) => this.initializeEngine(id, session),
       isSessionRetired: id => this.isSessionRetired(id),
+      nodeId: this.ownership?.nodeId,
+      prepareStart: (id, desiredState) => this.prepareStart(id, desiredState),
       purgeAuthDirsIfDeleted: id => this.purgeAuthDirsIfDeleted(id),
       updateStatus: (id, status) => this.updateStatus(id, status),
       stoppingSessions: this.stoppingSessions,
@@ -457,7 +459,7 @@ export class SessionEngineLifecycle {
   // settlement profile the inline methods had (the Task-1 delegate rule above).
 
   /** Delegate: SessionEngineControls.start. */
-  start(id: string, options?: { explicit?: boolean }): Promise<Session> {
+  start(id: string, options?: { explicit?: boolean; stoppedSince?: () => boolean }): Promise<Session> {
     return this.controls.start(id, options);
   }
 
@@ -479,6 +481,11 @@ export class SessionEngineLifecycle {
   /** Delegate: SessionEngineControls.delete. */
   delete(id: string, hooks?: StopHooks): Promise<void> {
     return this.controls.delete(id, hooks);
+  }
+
+  /** Delegate: SessionEngineControls.holdDelete. */
+  holdDelete(id: string): () => void {
+    return this.controls.holdDelete(id);
   }
 
   /** Delegate: SessionEngineControls.shutdown. */
@@ -556,13 +563,15 @@ export class SessionEngineLifecycle {
 
   /**
    * True while this process still has anything alive for the session: a registered engine, an
-   * in-flight start(), or reconnect state whose armed/executing attempt will re-register one.
+   * in-flight start(), reconnect state whose armed/executing attempt will re-register one, or a
+   * delete still running (its engine is gone by then, but a peer that adopted the lapsed lease
+   * would start the session being deleted).
    * The ownership heartbeat consults this so a claim that no longer covers an engine stops being
    * renewed and can lapse for a peer to adopt; the service-level release paths consult it so an
    * "already starting/started" refusal never releases a session this node genuinely runs.
    */
   isEngineActive(id: string): boolean {
-    if (this.engines.has(id) || this.initializingSessions.has(id)) return true;
+    if (this.engines.has(id) || this.initializingSessions.has(id) || this.controls.isDeleting(id)) return true;
     // Reconnect state counts only while an attempt is actually pending: a timer armed by
     // scheduleReconnect, or one that has fired and is running executeReconnect (which has already
     // counted its attempt). The entry start() creates up
@@ -1285,18 +1294,33 @@ export class SessionEngineLifecycle {
     }, delay);
   }
 
+  private prepareStart(id: string, desiredState: Session['desiredState']): Promise<boolean> {
+    if (this.ownership) return this.ownership.prepareStart(id, desiredState);
+    return this.sessionRepository
+      .update({ id, desiredState: desiredState ?? IsNull() }, { desiredState: null })
+      .then(({ affected }) => affected !== 0);
+  }
+
   /**
-   * True once a session must stay down: it is explicitly marked tearing-down, or it was deleted
-   * outright while a slow engine.initialize() was in flight. delete() clears its `stoppingSessions`
-   * mark in its finally (ms) and removes the session row well before a Chromium launch resolves, so
-   * the mark alone can't catch a delete that raced a (re)connect — the session row is the source of
-   * truth a post-init guard must re-check before keeping the engine it just created.
+   * A start or reconnect cannot keep an engine after a stop, deletion or loss of its live claim.
+   * A peer writes no local stop mark, and delete() drops its own mark before a slow init resolves,
+   * so the post-init decision also reads the durable record and the current claim.
    */
   private async isSessionRetired(id: string): Promise<boolean> {
     if (this.stoppingSessions.has(id)) {
       return true;
     }
-    return (await this.sessionRepository.findOne({ where: { id } })) == null;
+    const session = await this.sessionRepository.findOne({ where: { id } });
+    return (
+      session == null ||
+      !!session.desiredState ||
+      !!(
+        this.ownership &&
+        (session.nodeId !== this.ownership.nodeId ||
+          session.leaseExpiresAt == null ||
+          session.leaseExpiresAt <= new Date())
+      )
+    );
   }
 
   /**
@@ -1366,6 +1390,8 @@ export class SessionEngineLifecycle {
         if (this.reconnectStates.get(id) === state) this.cancelReconnect(id);
         return;
       }
+      // Another attempt can finish tearing down this same engine first while sharing the episode.
+      if (state.started !== attempt) return;
 
       // Re-initialize. An engine failure reported inside this window is parked (see
       // parkReconnectInitFailure): a failed launch must retry, not land FAILED and strand the session.
@@ -1377,8 +1403,9 @@ export class SessionEngineLifecycle {
         mine = registered !== before ? registered : undefined;
         await init;
       } finally {
-        state.initInFlight = false;
+        if (state.started === attempt) state.initInFlight = false;
       }
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
       // Init resolved, so a failure the engine reported meanwhile (a stuck-auth or readiness timer, an
       // auth failure) is real: apply it, unless a stop/delete/start already replaced this state.
       const parked = state.parkedFailure;
@@ -1399,10 +1426,10 @@ export class SessionEngineLifecycle {
         retired = false;
       }
       if (retired) {
-        const resurrected = this.engines.get(id);
-        if (resurrected) {
-          await this.fences.destroyWithEscalation(id, resurrected);
-          this.engines.deleteIfLive(id, resurrected);
+        // The read can outlive this attempt. Only its captured engine is ours to retire.
+        if (mine && this.engines.isLive(id, mine)) {
+          await this.fences.destroyWithEscalation(id, mine);
+          this.engines.deleteIfLive(id, mine);
         }
         // Same start/delete window as start()'s post-init guard: this re-init re-created auth dirs
         // delete() had already purged — purge again so no credentials outlive the row.
@@ -1415,12 +1442,11 @@ export class SessionEngineLifecycle {
         sessionId: id,
         action: 'reconnect_error',
       });
+      // A delete (or delete + start) replaced this state while init ran: nothing here is ours any more,
+      // and a later attempt in the same episode owns its initialization marker and parked failure too.
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
       const parked = state.parkedFailure;
       state.parkedFailure = undefined;
-      // A delete (or delete + start) replaced this state while init ran: nothing here is ours any more,
-      // and the engine in the map may be the replacement's. No await may sit between this check and
-      // the eviction/scheduling below.
-      if (this.reconnectStates.get(id) !== state) return;
       // A failure only the operator can fix (re-scan, stale profile) stays terminal on a reconnect too.
       if (parked && (parked.terminal || isKnownTerminalEngineFailure(errorMessage))) {
         parked.run();

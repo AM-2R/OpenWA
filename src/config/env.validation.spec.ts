@@ -522,6 +522,29 @@ describe('validateEnv', () => {
     );
   });
 
+  // The bundled PostgreSQL container runs without TLS: a built-in database with DATABASE_SSL=true would retry its
+  // connection until the boot gives up, so the boot refuses it at once and names the key.
+  describe('DATABASE_SSL with the built-in PostgreSQL container', () => {
+    const builtIn = {
+      DATABASE_TYPE: 'postgres',
+      POSTGRES_BUILTIN: 'true',
+      DATABASE_HOST: 'postgres',
+      DATABASE_USERNAME: 'openwa',
+      DATABASE_PASSWORD: 'openwa',
+    };
+    it.each(['postgres', 'Postgres', 'postgres.', 'openwa-postgres'])('refuses it beside the host %j', host => {
+      expect(() => validateEnv({ ...builtIn, DATABASE_HOST: host, DATABASE_SSL: 'true' })).toThrow(
+        /DATABASE_SSL=true .*built-in PostgreSQL container/,
+      );
+    });
+    it('accepts it off, and on for another host or without the built-in flag', () => {
+      expect(() => validateEnv({ ...builtIn, DATABASE_SSL: 'false' })).not.toThrow();
+      expect(() => validateEnv({ ...builtIn, DATABASE_HOST: 'db.ext.example', DATABASE_SSL: 'true' })).not.toThrow();
+      // A server of its own named postgres (a Kubernetes Service, a compose service with TLS set up) may serve TLS.
+      expect(() => validateEnv({ ...builtIn, POSTGRES_BUILTIN: 'false', DATABASE_SSL: 'true' })).not.toThrow();
+    });
+  });
+
   it('rejects DATABASE_SYNCHRONIZE=true with DATABASE_TYPE=postgres (drops body_ts → /search 501)', () => {
     // The Postgres data connection hardcodes migrationsRun=true; an opted-in synchronize=true makes
     // TypeORM re-sync from entities on every boot, dropping the migration-created `body_ts` generated
@@ -643,7 +666,7 @@ describe('validateEnv', () => {
 
   // The prefix is joined to the queue name with a colon in every Redis key.
   it('accepts a plain QUEUE_PREFIX, or none, and rejects one that would build ambiguous keys', () => {
-    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', '', '  ']) {
+    for (const ok of ['bull', 'openwa-staging', 'prod_2.eu', 'a', '0', '', '  ']) {
       expect(() => validateEnv({ QUEUE_PREFIX: ok })).not.toThrow();
     }
     for (const bad of ['a:b', 'has space', '-lead', '.lead', 'a/b', 'x'.repeat(65)]) {
@@ -676,13 +699,19 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ REDIS_TLS: '' })).not.toThrow();
   });
 
-  it.each(['INGRESS_RETRY_DELAY_MS', 'REDIS_CACHE_DB'])('rejects a negative or non-integer %s and keeps 0', key => {
-    for (const bad of ['-1', '1.5', 'abc']) {
-      expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
-    }
-    expect(() => validateEnv({ [key]: '0' })).not.toThrow();
-    expect(() => validateEnv({ [key]: '' })).not.toThrow();
-  });
+  // BAILEYS_GROUP_METADATA_CACHE_TTL_MS: 0 switches the cache off, and the reader falls back to five minutes
+  // on `5m`, so only boot validation tells the operator the value was refused.
+  it.each(['INGRESS_RETRY_DELAY_MS', 'REDIS_CACHE_DB', 'BAILEYS_GROUP_METADATA_CACHE_TTL_MS'])(
+    'rejects a negative or non-integer %s and keeps 0',
+    key => {
+      for (const bad of ['-1', '1.5', 'abc', '5m']) {
+        expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
+      }
+      expect(() => validateEnv({ [key]: '0' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '300000' })).not.toThrow();
+      expect(() => validateEnv({ [key]: '' })).not.toThrow();
+    },
+  );
 
   it('rejects a unit-suffixed CHAT_MEDIA_ARCHIVE_TTL_DAYS but keeps 0 (keep forever)', () => {
     expect(() => validateEnv({ CHAT_MEDIA_ARCHIVE_TTL_DAYS: '30d' })).toThrow(/CHAT_MEDIA_ARCHIVE_TTL_DAYS/);

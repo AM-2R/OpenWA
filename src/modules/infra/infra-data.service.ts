@@ -5,6 +5,9 @@ import { DataSource, QueryRunner } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
+import { closeSessionWrites } from '../../common/utils/session-write-scope';
+import { awaitNoOpenTransaction, SHARED_CONNECTION_DIALECTS } from '../../common/utils/shared-connection';
+import { failUnfinishedSessionBatches } from '../message/batch-media.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SessionService } from '../session/session.service';
@@ -145,13 +148,6 @@ export function toSqliteDatetime(value: unknown): unknown {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : DateUtils.mixedDateToUtcDatetimeString(date);
 }
-
-/**
- * Dialects where every TypeORM query runner shares ONE connection, so an open transaction is visible
- * to anything else querying in the same process. A positive list on purpose: a dialect nobody has
- * classified must not silently opt into suspending a safety mechanism.
- */
-const SHARED_CONNECTION_DIALECTS = new Set(['better-sqlite3', 'sqlite']);
 
 /**
  * Aggregate budget for the inline base64 media ONE export may carry, counted in the encoded bytes
@@ -717,6 +713,16 @@ export class InfraDataService {
     const sharesOneConnection = SHARED_CONNECTION_DIALECTS.has(this.dataDataSource.options.type);
     const resumeLossDetection = sharesOneConnection ? this.ownership?.suspendLossDetection() : undefined;
 
+    // The replace deletes every session the archive does not hold, rows and all, and messages has no foreign
+    // key to refuse a send or batch row that lands after it. So their write scopes are closed and drained
+    // before the transaction opens, as SessionEngineControls.delete does. Not for an engine force left
+    // running, which keeps writing (restartRequired says so), nor for one another node holds.
+    const leftRunning = new Set([...heldElsewhere, ...(data.stopOrphans ? [] : orphanedEngines)]);
+    let retired: Array<{ id: string; writes: ReturnType<typeof closeSessionWrites> }> = [];
+    let committed = false;
+    // Set when another transaction opened on the shared connection while the writes drained.
+    let foreignTransaction = false;
+
     // Everything from here is wrapped so the token cannot outlive this request. It is not enough to
     // release it in the transaction's own finally: createQueryRunner/connect/startTransaction sit
     // before that finally exists, so any throw there — a driver change, a broadcaster subscriber, a
@@ -725,7 +731,6 @@ export class InfraDataService {
     // silently, which is strictly worse than the teardown the suspension prevents.
     try {
       const queryRunner = this.dataDataSource.createQueryRunner();
-      await queryRunner.connect();
 
       // Refuse BEFORE a single row is deleted, not after. On better-sqlite3 every query runner is a
       // driver SINGLETON, so if anything else already holds a transaction on this DataSource — a
@@ -738,20 +743,46 @@ export class InfraDataService {
       // deleted every row — including any the enclosing transaction just wrote. Refusing up front is
       // the only answer that is both honest and non-destructive. On Postgres each runner gets its own
       // pooled client, so this is always false there and the check costs nothing.
-      if (queryRunner.isTransactionActive) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'Conflict',
-          message:
-            'Another database transaction is in progress on this connection, so a restore could not be ' +
-            'made durable. Retry with no other data operation in flight.',
-          code: 'IMPORT_NESTED_TRANSACTION',
-        });
+      //
+      // The try/finally that releases the runner opens only after BEGIN, so the refusal and a failing
+      // BEGIN give the runner back here: a pooled PostgreSQL client would otherwise stay checked out for
+      // the life of the process.
+      const refuseNestedTransaction = (): void => {
+        if (queryRunner.isTransactionActive) {
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            message:
+              'Another database transaction is in progress on this connection, so a restore could not be ' +
+              'made durable. Retry with no other data operation in flight.',
+            code: 'IMPORT_NESTED_TRANSACTION',
+          });
+        }
+      };
+      try {
+        refuseNestedTransaction();
+        // Drained before BEGIN: on SQLite a write still in flight would otherwise join this transaction. And
+        // before this runner takes a pooled client on PostgreSQL, where the write may still need one: with a
+        // pool of one it would wait for the import while the import waits for it. So the ids are read on a
+        // client that goes back at once there; on SQLite this runner is the one connection anyway.
+        const existing = await this.dataDataSource.query<Array<{ id: string }>>(
+          'SELECT id FROM sessions',
+          [],
+          sharesOneConnection ? queryRunner : undefined,
+        );
+        retired = existing
+          .filter(({ id }) => !importedSessionIds.has(id) && !leftRunning.has(id))
+          .map(({ id }) => ({ id, writes: closeSessionWrites(this.dataDataSource, id) }));
+        await Promise.all(retired.map(({ writes }) => writes.drain()));
+        await queryRunner.connect();
+        // Again after the drain's await: BEGIN must follow the check with nothing in between.
+        if (queryRunner.isTransactionActive) foreignTransaction = true;
+        refuseNestedTransaction();
+        await queryRunner.startTransaction();
+      } catch (error) {
+        await queryRunner.release().catch(() => undefined);
+        throw error;
       }
-
-      // startTransaction is inside the runner's own try/finally, so a throw from it still releases
-      // the runner instead of stranding it for the life of the process.
-      await queryRunner.startTransaction();
 
       try {
         const isPostgres = this.dataDataSource.options.type === 'postgres';
@@ -1038,6 +1069,7 @@ export class InfraDataService {
         }
 
         await queryRunner.commitTransaction();
+        committed = true;
 
         // Runtime reconciliation, part 2 (post-commit): the in-memory lid->phone mirror was warmed from
         // the OLD lid_mappings rows and is write-through only, so the just-restored table would never
@@ -1094,6 +1126,29 @@ export class InfraDataService {
         await queryRunner.release();
       }
     } finally {
+      // A restore that did not commit keeps those sessions, but a batch run that captured their writes before
+      // the close stays stopped, so its row is failed before the release, as a failed delete does. Their
+      // engines are gone, so the batch could not have sent anyway. Not inside a transaction another caller
+      // opened on the shared connection while the writes drained: the fail would roll back with it.
+      if (foreignTransaction && retired.length > 0 && !(await awaitNoOpenTransaction(this.dataDataSource))) {
+        this.logger.warn('Failing the unfinished batches of a refused import inside another open transaction', {
+          action: 'infra_import_foreign_transaction_open',
+          sessionIds: retired.map(({ id }) => id),
+        });
+      }
+      for (const { id } of committed ? [] : retired) {
+        await failUnfinishedSessionBatches(this.dataDataSource, id).catch((error: unknown) =>
+          this.logger.warn(
+            `Could not fail the unfinished batches of session ${id} after an import that did not commit`,
+            {
+              sessionId: id,
+              action: 'infra_import_batch_fail_failed',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          ),
+        );
+      }
+      for (const { writes } of retired) writes.release();
       // Its own finally, so a throwing release() cannot strand the token either.
       resumeLossDetection?.();
     }

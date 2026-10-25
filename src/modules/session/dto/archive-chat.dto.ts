@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictString } from '../../../common/utils/strict-boolean';
 import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
 
 export class ArchiveChatDto {
@@ -9,6 +9,7 @@ export class ArchiveChatDto {
     description: "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
     example: '1234567890-123@g.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)

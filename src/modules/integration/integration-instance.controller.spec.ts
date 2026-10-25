@@ -193,6 +193,174 @@ describe('IntegrationInstanceController provisioning bridge', () => {
     expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-2', { baseUrl: 'https://y' }); // new bound
   });
 
+  describe('a secret removed from a wildcard instance', () => {
+    const manifest = {
+      id: 'chatwoot-adapter',
+      ingress: [{ route: 'chatwoot' }],
+      permissions: ['webhook:ingress'],
+      configSchema: {
+        type: 'object',
+        properties: { apiToken: { type: 'string', secret: true }, baseUrl: { type: 'string' } },
+      },
+    };
+    const row = (sessionScope: string | null, config: Record<string, unknown>, enabled = true) => ({
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      sessionScope,
+      config,
+      enabled,
+    });
+
+    /**
+     * `before` is the row PATCH reads; `after` is what update() stores; `others` are the sibling rows. The
+     * plugin's base config holds what the instance projected into it, unless `base` says otherwise.
+     */
+    function patchWith(
+      before: ReturnType<typeof row>,
+      after: ReturnType<typeof row>,
+      others: unknown[] = [],
+      base: Record<string, unknown> = before.config,
+    ) {
+      const { loader, audit, updatePluginConfig, setPluginSessionConfig } = build();
+      (loader.getPlugin as jest.Mock).mockReturnValue({ manifest, activeSessions: ['*'], config: base });
+      const instances = {
+        resolve: jest.fn().mockResolvedValue(before),
+        update: jest.fn().mockResolvedValue(after),
+        remove: jest.fn().mockResolvedValue(true),
+        list: jest.fn().mockResolvedValue([after, ...others]),
+        maskedView: (i: unknown) => i,
+      } as unknown as PluginInstanceService;
+      const controller = new IntegrationInstanceController(
+        instances,
+        loader,
+        audit,
+        new ScopeBindingService(instances, loader, audit, sessions),
+      );
+      return { controller, updatePluginConfig, setPluginSessionConfig };
+    }
+
+    /** DELETE reads the row, removes it, then lists what is left: only `others`. */
+    function deleteWith(
+      before: ReturnType<typeof row>,
+      others: unknown[] = [],
+      base: Record<string, unknown> = before.config,
+    ) {
+      const built = patchWith(before, before, others, base);
+      const instances = (built.controller as unknown as { instances: { list: jest.Mock } }).instances;
+      instances.list.mockResolvedValue(others);
+      return built;
+    }
+
+    it('is retracted from the plugin base config, where the earlier projection left it', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row(null, { apiToken: 'LEAKED', baseUrl: 'https://crm' }),
+        row(null, { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { config: { apiToken: null, baseUrl: 'https://crm' } });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm', apiToken: null });
+    });
+
+    it('is also retracted when the config is replaced without it', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row('*', { apiToken: 'LEAKED', baseUrl: 'https://crm' }),
+        row('*', { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://crm' } });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm', apiToken: null });
+    });
+
+    it('leaves the base config alone when the instance moves in from a concrete session', async () => {
+      const { controller, updatePluginConfig } = patchWith(
+        row('sess-1', { apiToken: 'SLICE-ONLY', baseUrl: 'https://crm' }),
+        row(null, { baseUrl: 'https://crm' }),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: null });
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm' });
+    });
+
+    // The wildcard projection only merges, so whatever an instance projected stays in the base config after
+    // it stops contributing. Its secrets are taken back when it is disabled, deleted or moved off the scope.
+    const held = { apiToken: 'LEAKED', baseUrl: 'https://crm' };
+
+    it('is retracted when the instance moves out to a concrete session, which keeps it in its own slice', async () => {
+      const { controller, updatePluginConfig, setPluginSessionConfig } = patchWith(
+        row(null, held),
+        row('sess-1', held),
+      );
+
+      await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: 'sess-1' });
+
+      expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { apiToken: null });
+      expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-1', held);
+    });
+
+    it('is retracted when the instance is disabled', async () => {
+      const { controller, updatePluginConfig } = patchWith(row(null, held), row(null, held, false));
+
+      await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
+
+      expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { apiToken: null });
+    });
+
+    it('is retracted when the instance is deleted', async () => {
+      const { controller, updatePluginConfig } = deleteWith(row('*', held));
+
+      await controller.remove('chatwoot-adapter', 'acct1');
+
+      expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { apiToken: null });
+    });
+
+    it('is left alone when the plugin config no longer holds the value the instance put there', async () => {
+      const { controller, updatePluginConfig } = deleteWith(row(null, held), [], { ...held, apiToken: 'OPERATOR' });
+
+      await controller.remove('chatwoot-adapter', 'acct1');
+
+      expect(updatePluginConfig).not.toHaveBeenCalled();
+    });
+
+    it('is handed back as the value another enabled wildcard instance still defines', async () => {
+      const sibling = { ...row(null, { apiToken: 'B-TOKEN' }), instanceId: 'acct2' };
+      const { controller, updatePluginConfig } = deleteWith(row(null, held), [sibling]);
+
+      await controller.remove('chatwoot-adapter', 'acct1');
+
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { apiToken: 'B-TOKEN' });
+    });
+
+    it('stays while the instance only moves between the spellings of the wildcard scope', async () => {
+      const { controller, updatePluginConfig } = patchWith(row(null, held), row('*', held));
+
+      await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: '*' });
+
+      expect(updatePluginConfig).toHaveBeenCalledTimes(1);
+      expect(updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', held);
+    });
+
+    it('is not retracted for an instance that was not contributing: disabled, or on a concrete session', async () => {
+      const disabled = patchWith(row(null, held, false), row(null, { baseUrl: 'https://crm' }, false));
+      await disabled.controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://crm' } });
+      expect(disabled.updatePluginConfig).not.toHaveBeenCalled();
+
+      // Enabling it without the secret must not wipe a value the operator set on the plugin meanwhile.
+      const enabling = patchWith(row(null, held, false), row(null, { baseUrl: 'https://crm' }));
+      await enabling.controller.patch('chatwoot-adapter', 'acct1', { enabled: true });
+      expect(enabling.updatePluginConfig).toHaveBeenCalledWith('chatwoot-adapter', { baseUrl: 'https://crm' });
+
+      const concrete = deleteWith(row('sess-1', held));
+      await concrete.controller.remove('chatwoot-adapter', 'acct1');
+      expect(concrete.updatePluginConfig).not.toHaveBeenCalled();
+    });
+  });
+
   it('returns a bound instance to all sessions on PATCH sessionScope:null', async () => {
     const { loader, audit, setPluginSessionConfig, setPluginSessions, updatePluginConfig } = build();
     (loader.getPlugin as jest.Mock).mockReturnValue({

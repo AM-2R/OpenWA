@@ -75,11 +75,13 @@ export function Templates() {
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
+  // The template list route is OPERATOR-only and the gateway records every refusal as a failed authentication,
+  // so a key that cannot write is not sent it.
   const {
     data: templates = [],
     isLoading: loadingTemplates,
     error: templatesError,
-  } = useTemplatesQuery(selectedSessionId, !!selectedSessionId);
+  } = useTemplatesQuery(selectedSessionId, canWrite && !!selectedSessionId);
   const createMutation = useCreateTemplateMutation();
   const updateMutation = useUpdateTemplateMutation();
   const deleteMutation = useDeleteTemplateMutation();
@@ -141,7 +143,9 @@ export function Templates() {
       body: template.body,
       footer: template.footer || '',
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // An explicit smooth ignores the CSS scroll-behavior, so the preference is asked for here.
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
   };
 
   const handleSave = async () => {
@@ -278,12 +282,13 @@ export function Templates() {
               <div className="templates-loading-inline">
                 <Loader2 className="animate-spin" size={24} />
               </div>
-            ) : templatesError && templates.length === 0 ? (
-              // A failed read is not an empty library: a viewer key always gets 403 here (the route is
-              // OPERATOR-only), and a gateway error would otherwise read as "no templates saved".
+            ) : (templatesError || !canWrite) && templates.length === 0 ? (
+              // A failed read is not an empty library: a key below operator is refused here (the route is
+              // OPERATOR-only, so it is never sent), and a gateway error would otherwise read as "no templates
+              // saved". The 403 branch stays for a key whose role the page took for a writer's.
               <div className="templates-empty-list" role="alert">
                 <AlertCircle size={40} strokeWidth={1} />
-                {(templatesError as { status?: number }).status === 403 ? (
+                {!canWrite || (templatesError as { status?: number } | null)?.status === 403 ? (
                   <>
                     <h3>{t('templates.empty.forbiddenTitle')}</h3>
                     <p>{t('templates.empty.forbiddenDesc')}</p>
@@ -291,7 +296,7 @@ export function Templates() {
                 ) : (
                   <>
                     <h3>{t('templates.empty.loadErrorTitle')}</h3>
-                    <p>{templatesError.message}</p>
+                    <p>{templatesError?.message}</p>
                   </>
                 )}
               </div>

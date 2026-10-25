@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { normalizeS3KeyPrefix } from '../common/storage/s3-key-prefix';
+import { namesBundledContainer } from '../modules/docker/bundled-host';
 import { resolveBodyLimit } from './bootstrap-security';
 import { parseBodyLimitBytes } from './inflight-body-budget';
 
@@ -173,6 +174,20 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     const pgSchemaError = typeof pgSchema === 'string' && pgSchema !== '' ? postgresSchemaError(pgSchema) : null;
     if (pgSchemaError) {
       errors.push(pgSchemaError);
+    }
+    // The bundled PostgreSQL container runs without TLS (DockerService.getContainerSpec sets none up), so the built-in
+    // database with DATABASE_SSL=true retries its connection until the boot gives up, and the dashboard that could undo
+    // it stays down. Both flags are read raw, as configuration.ts and the boot guard compare them.
+    const dbHost = str('DATABASE_HOST');
+    if (
+      config.POSTGRES_BUILTIN === 'true' &&
+      config.DATABASE_SSL === 'true' &&
+      namesBundledContainer('postgres', dbHost)
+    ) {
+      errors.push(
+        `DATABASE_SSL=true cannot reach the built-in PostgreSQL container (POSTGRES_BUILTIN=true, DATABASE_HOST=${dbHost}), ` +
+          'which runs without TLS: set DATABASE_SSL=false where it is set (data/.env.generated, the project .env or the environment)',
+      );
     }
   } else {
     // SQLite (explicit or default): DATABASE_NAME is a file path for the 'data' connection. It must

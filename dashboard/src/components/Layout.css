@@ -12,6 +12,8 @@
   flex-direction: column;
   position: fixed;
   height: 100vh;
+  /* The dynamic viewport excludes a phone browser's collapsing toolbar; the line above is the fallback. */
+  height: 100dvh;
   z-index: 100;
   transition:
     width 0.3s ease,
@@ -67,7 +69,6 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--text-muted);
-  opacity: 0.7;
   margin-top: 1px;
 }
 
@@ -111,17 +112,13 @@
 .collapse-toggle:hover {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: #0f172a;
   box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
 }
 
 .collapse-toggle svg {
   width: 16px;
   height: 16px;
-}
-
-.sidebar.collapsed .collapse-toggle {
-  right: -14px;
 }
 
 .sidebar-nav {
@@ -249,6 +246,11 @@
   border-radius: var(--radius);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
   z-index: 120;
+  /* The menu grows upward from the footer, so it may be as tall as the window less the footer (up to 186px in
+     Arabic) and a margin. */
+  max-height: calc(100vh - 13rem);
+  max-height: calc(100dvh - 13rem);
+  overflow-y: auto;
 }
 
 .language-menu-item {
@@ -282,6 +284,8 @@
   right: auto;
   left: calc(100% + 0.5rem);
   bottom: 0;
+  max-height: calc(100vh - 9rem);
+  max-height: calc(100dvh - 9rem);
 }
 
 .logout-btn {
@@ -314,7 +318,9 @@
   width: calc(100% - 260px);
   background: var(--bg-light);
   min-height: 100vh;
-  overflow-x: hidden;
+  /* clip, not hidden: hidden makes this the scroll container that a sticky child (the Plugins status rail)
+     sticks to, and it never scrolls. */
+  overflow-x: clip;
   transition:
     margin-left 0.3s ease,
     width 0.3s ease;
@@ -334,6 +340,8 @@
   display: none;
 }
 
+/* Layout.tsx switches to the phone layout on this same query (MOBILE_QUERY), so the drawer markup and these styles
+   agree at every width, a fractional one included. */
 @media (max-width: 767px) {
   .mobile-header {
     display: flex;
@@ -347,7 +355,8 @@
     padding: 0 1rem;
     background: var(--bg-white);
     border-bottom: 1px solid var(--border);
-    z-index: 90;
+    /* Above the overlay (95) so the menu button, the close control while the drawer is open, is not dimmed. */
+    z-index: 96;
   }
 
   .mobile-menu-btn {
@@ -384,14 +393,26 @@
     font-size: 1rem;
   }
 
+  /* The drawer starts under the header (56px, as the header and the page scroller's padding) so it never covers the
+     menu button. */
   .sidebar.mobile {
     transform: translateX(-100%);
     width: 280px;
-    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
+    top: 56px;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
   }
 
+  /* The menu grows upward from the footer, so it gives up the header strip the drawer no longer spans. */
+  .sidebar.mobile .language-menu-list {
+    max-height: calc(100vh - 13rem - 56px);
+    max-height: calc(100dvh - 13rem - 56px);
+  }
+
+  /* The shadow belongs to the open drawer: on the closed one it would reach past the screen edge. */
   .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   .sidebar-overlay {
@@ -417,8 +438,9 @@
     width: 100%;
     padding-top: 56px;
     height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
   }
 
   .collapse-toggle {
@@ -466,10 +488,10 @@
 
   [dir='rtl'] .sidebar.mobile {
     transform: translateX(100%);
-    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 
   [dir='rtl'] .sidebar.mobile.open {
     transform: translateX(0);
+    box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);
   }
 }

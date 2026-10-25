@@ -171,6 +171,16 @@
       "backgroundColor": "背景颜色",
       "font": "字体",
       "fontDefault": "默认",
+      "fonts": {
+        "system": "系统",
+        "systemText": "系统文本",
+        "script": "手写体",
+        "bold": "粗体",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "或",
       "post": "发布",
       "posted": "状态已发布",
@@ -670,7 +680,7 @@
       "call.rejected": "来电被拒接时",
       "call.missed": "来电未接听时",
       "status.received": "联系人发布状态时",
-      "all": "所有事件"
+      "all": "除 message.receipt 外的所有事件（message.receipt 须明确指定）"
     },
     "auth": {
       "title": "投递认证",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "已发送 {{sent}}/{{total}}",
     "groupSendCancelled": "{{count}} 个，已取消",
     "groupSendStopped": "{{count}} 个，在 HTTP {{status}} 后停止",
+    "groupSendStoppedNoAnswer": "{{count}} 个，已停止：网关未响应",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",
@@ -1045,7 +1056,7 @@
       "copy": "复制",
       "copied": "已复制",
       "checkedAt": "检查时间",
-      "openTester": "在消息测试器中打开"
+      "openTester": "前往消息测试器"
     },
     "recent": {
       "title": "最近检查记录",
@@ -1082,6 +1093,7 @@
       "start": "开始批量检查",
       "stop": "停止检查",
       "export": "导出结果（CSV）",
+      "exportHint": "文件包含每一位数字。电子表格可能把长号码显示为 9.19612E+11，或去掉开头的 0；请导入该文件，并将 Phone Number 列设为文本，以保持原样。",
       "stoppedTitle": "批量检查已停止",
       "checked": "已检查",
       "remaining": "剩余",
@@ -1094,6 +1106,7 @@
       "reasonOther": "网关拒绝了一次查询",
       "partial": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
       "partial_other": "{{reason}}（HTTP {{status}}）。已在第 {{attempted}} 个号码处停止（共 {{total}} 个），其余 {{count}} 个号码未查询。请稍后重试。",
+      "noAnswer": "网关未响应。已在第 {{attempted}} 个号码处停止（共 {{total}} 个）。请稍后重试。",
       "last": "{{reason}}（HTTP {{status}}）。最后一次查询失败。请稍后重试。"
     },
     "toast": {
@@ -1198,6 +1211,7 @@
       "successTitle": "✅ 服务器就绪",
       "errorTitle": "❌ 重启失败",
       "idleDesc": "配置已保存到 <code>.env.generated</code>。<br/>需要重启服务器才能应用更改。",
+      "stopsContainers": "重启还会停止以下内置容器，它们会连同数据一起保留，不会被删除：",
       "later": "稍后重启",
       "now": "立即重启",
       "restartingMsg": "服务器正在重启... {{count}} 秒",
@@ -1212,7 +1226,10 @@
       "saveFailed": "保存失败"
     },
     "envPinNote": "已由环境变量 {{name}} 锁定 —— 此为当前运行值；在取消该变量之前，仪表盘的更改不会生效。",
+    "envPinFlagNote": "已由环境变量 {{name}} 锁定：只要其值为 true 且此服务正在使用，即使此开关已关闭，内置容器仍会在每次服务器启动时启动。",
     "pendingRestartNote": "已保存，但尚未生效 —— 请重启服务器以应用此更改。",
+    "pendingBuiltInNote": "已保存，但尚未生效：服务器当前使用外部服务，重启后将切换为内置容器。",
+    "pendingExternalNote": "已保存，但尚未生效：服务器当前使用内置容器，重启后将切换为外部服务。",
     "migration": {
       "title": "请注意 —— 此操作将更改数据后端",
       "dbWarning": "新数据库将从空白状态开始。请立即（在仍使用旧数据库时）下载当前数据的备份，然后在重启后恢复。",

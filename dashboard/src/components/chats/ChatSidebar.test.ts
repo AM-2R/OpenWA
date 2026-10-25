@@ -2,6 +2,7 @@
 import '../../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { Channel, Chat } from '../../services/api.ts';
@@ -125,11 +126,20 @@ test('the quick filters show the active one as pressed, on the Chats tab only', 
   rtl.cleanup();
 
   const channels = renderSidebar('channels', [], { all: [], shown: [] });
-  assert.equal(channels.container.querySelector('.chat-filters'), null);
+  assert.equal(channels.container.querySelectorAll('.chat-filters').length, 0);
 });
 
 test('a channel search with no match says so instead of showing a blank list', () => {
   const channel = { id: '1@newsletter', name: 'News' } as Channel;
   const { container } = renderSidebar('channels', [], { all: [channel], shown: [] });
   assert.equal(container.querySelector('.chats-list-empty')?.textContent, t('chats.empty'));
+});
+
+test('a Retry that is running is dimmed and shows the progress cursor', () => {
+  // The button stays focusable while it runs (aria-disabled, not disabled), so only a rule on that attribute
+  // tells a sighted operator it is busy.
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  const rule = css.match(/\.chats-page \.btn-secondary\[aria-disabled=['"]true['"]\]\s*\{([^}]*)\}/)?.[1] ?? '';
+  assert.match(rule, /opacity:\s*0?\.[0-9]+/);
+  assert.match(rule, /cursor:\s*progress/);
 });

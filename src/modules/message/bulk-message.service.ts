@@ -15,7 +15,7 @@ import { ShutdownService } from '../../common/services/shutdown.service';
 import { ConfigService } from '@nestjs/config';
 import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, QueryDeepPartialEntity, Repository } from 'typeorm';
+import { In, IsNull, Not, QueryDeepPartialEntity, Repository, EntityManager } from 'typeorm';
 import { createHash, randomUUID } from 'crypto';
 import { setTimeout } from 'node:timers/promises';
 import {
@@ -155,7 +155,10 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * Registered here, before any bootstrap hook can start a session.
    */
   onModuleInit(): void {
-    this.ownership?.onAdoption(sessionId => this.reapProcessingBatches(sessionId, 'session taken from a lapsed node'));
+    this.ownership?.onAdoption(
+      (sessionId, manager) => this.reapProcessingBatches(sessionId, 'session taken from a lapsed node', manager),
+      true,
+    );
   }
 
   /**
@@ -223,6 +226,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
   private async failOrphanedBatch(
     batch: Pick<MessageBatch, 'id'> & Partial<MessageBatch>,
     withRunState = false,
+    repository = this.batchRepository,
   ): Promise<boolean> {
     const set: QueryDeepPartialEntity<MessageBatch> = { status: BatchStatus.FAILED, completedAt: new Date() };
     if (batch.messages) {
@@ -234,7 +238,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       if (batch.results) set.results = batch.results;
       if (batch.currentIndex !== undefined) set.currentIndex = batch.currentIndex;
     }
-    const failed = await this.batchRepository.update(
+    const failed = await repository.update(
       { id: batch.id, status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]) },
       set,
     );
@@ -253,15 +257,16 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * the session before or still runs a stale engine for it: createBatch registers every batch before
    * its row is written, so only the lapsed node's batches go.
    */
-  async reapProcessingBatches(sessionId: string, reason: string): Promise<number> {
+  async reapProcessingBatches(sessionId: string, reason: string, manager?: EntityManager): Promise<number> {
+    const repository = manager?.getRepository(MessageBatch) ?? this.batchRepository;
     const unfinished = (
-      await this.batchRepository.find({
+      await repository.find({
         where: { status: In([BatchStatus.PENDING, BatchStatus.PROCESSING]), sessionId },
       })
     ).filter(batch => !this.processingBatches.has(batch.id));
     let failed = 0;
     for (const batch of unfinished) {
-      if (await this.failOrphanedBatch(batch)) failed++;
+      if (await this.failOrphanedBatch(batch, false, repository)) failed++;
     }
     if (failed > 0) {
       this.logger.warn(`Marked ${failed} unfinished batch(es) FAILED for session ${sessionId} (${reason})`);
@@ -725,7 +730,13 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
 
       this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
     } catch (error) {
-      if (!engineAsked) settleAdmission?.();
+      if (!engineAsked) {
+        settleAdmission?.();
+        // A session deleted under an item the engine was never asked to send is no delivery failure to
+        // count or report; the run stops here and the batch goes with the session (or is failed by the
+        // delete that did not complete).
+        lifetime.assertCurrent();
+      }
       result.status = BatchMessageStatus.FAILED;
       // Sanitize: an SSRF block names an internal address — never store/return/log it verbatim.
       const sanitized = sanitizeBatchError(error);

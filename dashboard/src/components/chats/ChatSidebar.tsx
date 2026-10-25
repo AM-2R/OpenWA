@@ -39,6 +39,8 @@ interface ChatSidebarProps {
   newChatPanel?: ReactNode;
   chatsTab: {
     loading: boolean;
+    /** Set when the filter in use cannot be decided because the address book could not be read. */
+    filterError?: { retrying: boolean; onRetry: () => void };
     chats: Chat[];
     filter: ChatListFilter;
     onFilterChange: (filter: ChatListFilter) => void;
@@ -270,6 +272,24 @@ function ChatSidebar({
             <div className="chats-list-loading">
               <Loader2 className="animate-spin" size={24} />
               <span>{t('chats.loadingChats')}</span>
+            </div>
+          ) : chatsTab.filterError ? (
+            <div className="chats-list-empty">
+              <AlertCircle size={24} className="text-warn" />
+              <span>{t('chats.newChat.contactsError')}</span>
+              {/* aria-disabled, not disabled, so the keyboard stays on the button while the read runs; Chats.css dims it. */}
+              <button
+                type="button"
+                className="btn-secondary"
+                aria-disabled={chatsTab.filterError.retrying}
+                aria-busy={chatsTab.filterError.retrying}
+                onClick={() => {
+                  if (!chatsTab.filterError?.retrying) chatsTab.filterError?.onRetry();
+                }}
+              >
+                {chatsTab.filterError.retrying && <Loader2 className="animate-spin" size={16} />}
+                {t('common.retry')}
+              </button>
             </div>
           ) : chatsTab.chats.length === 0 ? (
             <div className="chats-list-empty">

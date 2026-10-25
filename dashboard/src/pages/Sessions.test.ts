@@ -97,6 +97,7 @@ function resetFetchCalls(): void {
   sessionProxy = { enabled: false, proxyType: null, proxyHost: null, hasCredentials: false };
   proxyGetFails = false;
   sessionListFailures = 0;
+  sessionListEmpty = false;
   distinctFailureMessages = false;
   startFailure = null;
   startGate = null;
@@ -127,6 +128,8 @@ let configPatchFails = false;
 let proxyGetFails = false;
 // How many of the next GET /api/sessions reads fail, as they do while the gateway is down.
 let sessionListFailures = 0;
+// Whether GET /api/sessions answers with no sessions at all.
+let sessionListEmpty = false;
 // Whether each failed read carries its own message, as a 502, a 504 and a dropped connection do.
 let distinctFailureMessages = false;
 // When set, POST .../start answers with this error, first applying `leaves` to the session's row: the
@@ -190,6 +193,7 @@ function installFetchStub(): void {
           : 'gateway unavailable';
         return Promise.resolve(jsonResponse({ message }, 503));
       }
+      if (sessionListEmpty) return Promise.resolve(jsonResponse([]));
       if (listGate) {
         const until = listGate;
         listGate = null;
@@ -490,6 +494,68 @@ test('a refused and then successful create leave a failed list read in the banne
   assert.ok(screen.queryByText('gateway unavailable'), 'the create cleared the failed read banner');
 });
 
+// A failed read says nothing about how many sessions there are: the banner is the only message, and the
+// page must not tell the operator there are none and invite them to create one.
+test('a failed first list read shows the error, not the empty state', async () => {
+  const { screen } = rtl;
+  resetFetchCalls();
+  sessionListFailures = 1;
+  // No connect, so the recovery effect does not re-read the list behind the test's back.
+  holdConnect();
+  renderSessions();
+
+  await screen.findByText('gateway unavailable');
+  assert.equal(screen.queryByText('No sessions found') === null, true, 'a failed read claimed there are no sessions');
+});
+
+test('an empty list shows the empty state, and a refused create does not take it away', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  sessionListEmpty = true;
+  createFailure = { status: 409, message: 'Session name already in use' };
+  renderSessions();
+
+  await screen.findByText('No sessions found');
+  fireEvent.click(screen.getByRole('button', { name: 'New Session' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByPlaceholderText('e.g., marketing-bot'), { target: { value: 'retry-bot' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+  await screen.findAllByText('Session name already in use');
+
+  assert.equal(screen.queryByText('No sessions found') === null, false, 'the refused create hid the empty state');
+});
+
+// The other half of the gate: a failed read hides the empty state only while no list is held. With rows on
+// screen the banner sits above them, and a search that matches none is still an empty result, not an unknown.
+test('a failed refetch keeps the rows, and a search that matches none still shows the empty state', async () => {
+  const { screen, fireEvent, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  holdConnect();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('connect'));
+
+  // Every later list read fails, the recovery retry included, so the failure outlasts the push that caused it.
+  sessionListFailures = 10;
+  act(() => {
+    socket.receive('message', {
+      type: 'event',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      payload: { event: 'session.restriction', sessionId: SESSION_QR.id, data: {} },
+    });
+  });
+  await screen.findByText('gateway unavailable');
+  screen.getByText('new-device');
+
+  fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'no-such-session' } });
+  await screen.findByText('No sessions found');
+  screen.getByText('gateway unavailable');
+});
+
 test('Enter in the name field follows the same gate as the Create button', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   resetFetchCalls();
@@ -633,6 +699,55 @@ test('a typed pairing phone number survives toggling to the QR tab and back', as
     '919876543210',
     'the typed pairing phone number was lost after toggling tabs',
   );
+});
+
+// The pairing field keeps digits only, so a number typed in another script has to be read, not dropped.
+test('a pairing phone number typed in native-script or full-width digits is kept as ASCII digits', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+  await screen.findByAltText('QR');
+  fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+
+  for (const zero of [0x0660, 0xff10]) {
+    const typed = [...'919876543210'].map(d => String.fromCharCode(zero + Number(d))).join('');
+    fireEvent.change(phoneInput, { target: { value: typed } });
+    assert.equal(phoneInput.value, '919876543210');
+  }
+});
+
+// An IME composition in progress is the field's own text: a controlled input that rewrites it mid-composition garbles
+// what the IME then commits. The digits are read when the composition ends; pasted and directly typed text is read at once.
+test('the pairing phone field leaves a composition in progress alone and reads it when it ends', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+  await screen.findByAltText('QR');
+  fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+  const fullwidth = (ascii: string) => [...ascii].map(d => String.fromCharCode(0xff10 + Number(d))).join('');
+
+  fireEvent.compositionStart(phoneInput);
+  fireEvent.input(phoneInput, { target: { value: fullwidth('6') }, isComposing: true });
+  assert.equal(phoneInput.value, fullwidth('6'));
+  fireEvent.input(phoneInput, { target: { value: fullwidth('62') }, isComposing: true });
+  assert.equal(phoneInput.value, fullwidth('62'));
+
+  fireEvent.compositionEnd(phoneInput);
+  assert.equal(phoneInput.value, '62');
+
+  // Outside a composition the text is read at once, as before.
+  fireEvent.input(phoneInput, { target: { value: fullwidth('628123456789') } });
+  assert.equal(phoneInput.value, '628123456789');
 });
 
 // Nothing server-side refuses a pairing code for a number linked elsewhere, so the panel has to say
@@ -1031,6 +1146,29 @@ test('a failed status push closes that session QR modal', async () => {
   pushSessionStatus(SESSION_QR.id, 'failed');
 
   await waitFor(() => assert.ok(!screen.queryByRole('dialog'), 'the QR modal stayed open after its session failed'));
+});
+
+// A date-only formatter put a session active a few hours ago on a bare date.
+test('a session last active a few hours ago reads in hours, not as a date', async () => {
+  const { screen, within } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  const lastActive = new Date(Date.now() - 5 * 3_600_000).toISOString();
+  SESSIONS.push({
+    ...SESSION_QR,
+    id: 'sess-recent-1',
+    name: 'recent',
+    status: 'ready',
+    phone: '15550004444',
+    lastActive,
+  });
+  try {
+    renderSessions();
+    const card = (await screen.findByText('recent')).closest('.session-card') as HTMLElement;
+    assert.ok(within(card).getByText('5 hours ago'));
+  } finally {
+    SESSIONS.pop();
+  }
 });
 
 // The gateway writes the linked phone and lastActive when a session reaches READY; the push carries
@@ -2014,4 +2152,50 @@ for (const [label, cardButton, confirmButton, method, path] of [
 test('Sessions.css aligns text to the text direction, not a physical side', () => {
   const css = readFileSync(new URL('./Sessions.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(css, /text-align\s*:\s*(left|right)\b/, 'text is aligned to a physical side');
+});
+
+// ── Live feed subscription ───────────────────────────────────────────────────
+
+// Written out, not imported: the page handles exactly these three events, and a list taken from the module that
+// builds the frames would follow it when one is dropped.
+const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
+
+/** The payload of every frame the page sent over the socket. */
+const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
+
+test('the page joins the live session feed once connected, with the events it renders', async () => {
+  const { screen, waitFor } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() =>
+    assert.deepEqual(feedFrames(), [{ type: 'subscribe', sessionId: '*', events: SESSION_FEED_EVENTS }]),
+  );
+});
+
+test('a key refused the wildcard room joins each listed session instead', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() => assert.equal(feedFrames().length, 1));
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() =>
+    socket.receive('message', { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+  );
+
+  const joined = (): string[] =>
+    feedFrames()
+      .slice(1)
+      .map(frame => (frame as { sessionId: string }).sessionId)
+      .sort();
+  await waitFor(() => assert.deepEqual(joined(), SESSIONS.map(session => session.id).sort()));
+  for (const frame of feedFrames().slice(1)) {
+    assert.deepEqual((frame as { events: string[] }).events, SESSION_FEED_EVENTS);
+  }
 });

@@ -171,6 +171,16 @@
       "backgroundColor": "Arka plan rengi",
       "font": "Yazı Tipi",
       "fontDefault": "Varsayılan",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Sistem metni",
+        "script": "El yazısı",
+        "bold": "Kalın",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "veya",
       "post": "Paylaş",
       "posted": "Durum paylaşıldı",
@@ -670,7 +680,7 @@
       "call.rejected": "Bir arama reddedildiğinde",
       "call.missed": "Bir arama yanıtsız kaldığında",
       "status.received": "Bir kişi durum paylaştığında",
-      "all": "Tüm olaylar"
+      "all": "message.receipt hariç tüm olaylar (message.receipt açıkça belirtilmelidir)"
     },
     "auth": {
       "title": "Teslimat kimlik doğrulaması",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gönderildi",
     "groupSendCancelled": "{{count}}, iptal edildi",
     "groupSendStopped": "{{count}}, HTTP {{status}} sonrası durduruldu",
+    "groupSendStoppedNoAnswer": "{{count}}, durduruldu: ağ geçidi yanıt vermedi",
     "response": {
       "timestamp": "Zaman Damgası",
       "messageId": "Mesaj ID'si",
@@ -1045,7 +1056,7 @@
       "copy": "Kopyala",
       "copied": "Kopyalandı",
       "checkedAt": "Kontrol Saati",
-      "openTester": "Mesaj Test Aracı'nda Aç"
+      "openTester": "Mesaj Test Aracı'na git"
     },
     "recent": {
       "title": "Son Kontroller",
@@ -1082,6 +1093,7 @@
       "start": "Toplu Kontrolü Başlat",
       "stop": "Kontrolü Durdur",
       "export": "Sonuçları Dışa Aktar (CSV)",
+      "exportHint": "Dosya her rakamı içerir. Bir hesap tablosu uzun numaraları 9.19612E+11 olarak gösterebilir veya baştaki sıfırı silebilir; numaraları olduğu gibi korumak için dosyayı içe aktarın ve Phone Number sütununu Metin olarak ayarlayın.",
       "stoppedTitle": "Toplu Kontrol Durduruldu",
       "checked": "Kontrol Edilen",
       "remaining": "Kalan",
@@ -1094,6 +1106,7 @@
       "reasonOther": "Ağ geçidi bir sorguyu reddetti",
       "partial": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
       "partial_other": "{{reason}} (HTTP {{status}}). {{total}} numaradan {{attempted}}. numarada durduruldu; {{count}} numara gönderilmedi. Daha sonra tekrar deneyin.",
+      "noAnswer": "Ağ geçidi yanıt vermedi. {{total}} numaradan {{attempted}}. numarada durduruldu. Daha sonra tekrar deneyin.",
       "last": "{{reason}} (HTTP {{status}}). Son sorgu başarısız oldu. Daha sonra tekrar deneyin."
     },
     "toast": {
@@ -1192,7 +1205,10 @@
       "disabled": "Devre Dışı"
     },
     "envPinNote": "{{name}} ortam değişkeni tarafından sabitlendi — bu çalışan değerdir; ortam değişkeni kaldırılana kadar kontrol panelindeki değişiklikler uygulanmayacaktır.",
+    "envPinFlagNote": "{{name}} ortam değişkeni tarafından sabitlendi: değeri true olduğu ve bu hizmet kullanıldığı sürece, bu anahtar kapalı olsa bile dahili konteyner sunucunun her başlatılışında başlatılır.",
     "pendingRestartNote": "Kaydedildi, ancak henüz uygulanmadı — bu değişikliğin yürürlüğe girmesi için sunucuyu yeniden başlatın.",
+    "pendingBuiltInNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda harici bir hizmetle çalışıyor, yeniden başlatma onu dahili konteynere geçirir.",
+    "pendingExternalNote": "Kaydedildi, ancak henüz uygulanmadı: sunucu şu anda dahili konteynerle çalışıyor, yeniden başlatma onu harici bir hizmete geçirir.",
     "migration": {
       "title": "Dikkat — bu işlem veri arka ucunu değiştirir",
       "dbWarning": "Yeni veritabanı boş olarak başlar. Mevcut verilerinizin yedeğini şimdi (hala eski veritabanındayken) indirin, ardından yeniden başlattıktan sonra geri yükleyin.",
@@ -1218,6 +1234,7 @@
       "successTitle": "Sunucu hazır",
       "errorTitle": "Yeniden başlatma başarısız",
       "idleDesc": "Yapılandırma <code>.env.generated</code> dosyasına kaydedildi.<br/>Değişikliklerin uygulanması için sunucunun yeniden başlatılması gerekir.",
+      "stopsContainers": "Yeniden başlatma şu dahili konteynerleri de durdurur; verileriyle birlikte saklanırlar ve silinmezler:",
       "later": "Daha Sonra Yeniden Başlat",
       "now": "Şimdi Yeniden Başlat",
       "restartingMsg": "Sunucu yeniden başlatılıyor... {{count}}s",

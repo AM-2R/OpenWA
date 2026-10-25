@@ -284,7 +284,8 @@ export const EXPORT_TABLES: AnyExportTable[] = [
     sessionFk: true,
   }),
 
-  // The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the
+  // The persisted lid->phone resolution cache. sessionId names the session whose negative may clear the
+  // phone; it is not a FK to sessions, so the
   // import's `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly
   // or a backup→restore into a fresh DB loses the whole cache (it self-heals, but lossily).
   defineExportTable({ key: 'lidMappings', table: 'lid_mappings', optional: true }),

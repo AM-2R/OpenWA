@@ -501,7 +501,7 @@ custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or th
 
 **Cause D — Debian 12 OS Chromium SIGTRAP in non-root Pods.**
 If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows `Trace/breakpoint trap (core dumped)` with exit code 133, the underlying Debian 12 OS `chromium` package has crashed due to strict non-root or seccomp constraints (even with `--no-zygote` or `Unconfined` seccomp).
-_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@153.0.8010.36'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
+_Fix:_ On amd64, do not use the `chromium` package from Debian's `apt` — it SIGTRAPs under strict non-root/seccomp. Instead, download Chrome for Testing via Puppeteer during the Docker build (`./node_modules/.bin/puppeteer browsers install 'chrome@156.0.8078.47'`) and point `PUPPETEER_EXECUTABLE_PATH` to it. (arm64 keeps Debian's `chromium`, which ships a native arm64 binary, by choice: Chrome for Testing publishes linux-arm64 builds only from 153, and the image has not moved arm64 to one.) The official `Dockerfile` implements this mixed approach.
 
 **Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
@@ -530,14 +530,14 @@ reads like a Puppeteer bug and gives no hint that the profile is the cause — t
 advisory when it detects this error, and the session's `lastError` (the message the dashboard shows on
 the session card) carries a short form of it, so the pointer survives without reading the container log.
 
-**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the
-IndexedDB of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp
-login: every previously linked session starts at a QR code instead of reconnecting, the log names no
-cause (0.23.3 and 0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring
-the pairing back. On amd64 this follows a rollback from 0.23.5 or later (Chrome for Testing 153) to 0.23.4
-or earlier (146); on arm64, a rollback to an image built with an older Debian chromium major. Restoring
-`sessions/` from a backup taken before the first start on the newer image keeps the pairing (see the
-upgrade runbook's rollback in docs/11); without one, scan a new QR.
+**Rolling back to an older browser** does not raise this error. An older Chrome silently deletes the IndexedDB
+of a profile a newer Chrome has opened, and that is where whatsapp-web.js keeps the WhatsApp login: every
+previously linked session starts at a QR code instead of reconnecting, the log names no cause (0.23.3 and
+0.23.4 log only a generic `relink_required` warning), and upgrading again does not bring the pairing back. On
+amd64 this follows a rollback from the release after 0.25.0 (Chrome for Testing 156) to 0.25.0 or earlier, and
+from 0.23.5 or later to 0.23.4 or earlier (146); on arm64, a rollback to an image built with an older Debian
+chromium major. Restoring `sessions/` from a backup taken before the first start on the newer image keeps the
+pairing (see the upgrade runbook's rollback in docs/11); without one, scan a new QR.
 
 **Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
 profile cannot be salvaged — clearing only the cache subdirs (`Cache`, `GPUCache`, `Code Cache`, …) is
@@ -774,12 +774,12 @@ rm -rf node_modules/whatsapp-web.js && npm ci
   block/unblock refusing every id, a status media send that never arrives, a group description that
   cannot be set, an app-state resync that never settles
 
-**Cause:** OpenWA applies twelve exact source transforms to its engine libraries at install time
+**Cause:** OpenWA applies thirteen exact source transforms to its engine libraries at install time
 (docs/29 §29.3). The Docker image runs them without `--best-effort`, so a source shape a patcher
-cannot recognise fails the image build. A source install runs them through `scripts/postinstall.js`
-with `--best-effort`, where a patcher that cannot apply prints one line into a long `npm install`
-transcript and the install still succeeds. The usual causes are `npm install --ignore-scripts` and
-an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
+cannot recognise fails the image build. Source installs run the Puppeteer compatibility transform
+without best-effort too, because browser teardown depends on it. The other transforms use
+`--best-effort`, where a refusal prints one line into the install transcript and installation continues.
+The usual causes are `npm install --ignore-scripts` and an upstream release whose shape a patcher no longer recognises. Each engine now checks its own
 patches as it starts and names the ones that did not land, so the report arrives on the machine that
 is actually affected rather than in an install log nobody kept.
 
@@ -1083,7 +1083,7 @@ DATABASE_IDLE_TIMEOUT_MS=30000        # idle client eviction (default 30000)
 DATABASE_CONNECTION_TIMEOUT_MS=10000  # wait for a free connection (default 10000)
 DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000)
 
-# Redis caching (per-key TTLs are fixed in code — there is no cache TTL env var)
+# Redis (the cache connection only answers the infra status probe — there is no cache TTL env var)
 # REDIS_ENABLED=true
 # REDIS_HOST=localhost
 # REDIS_PORT=6379

@@ -1788,6 +1788,33 @@ func TestDoPathWithQueryAppendsQueryValues(t *testing.T) {
 	}
 }
 
+// net/http sends the method as written and the gateway answers 400 to a lowercase one, so Do upper-cases
+// it. The idempotency header and the retry policy compare the upper-case names too.
+func TestDoSendsTheMethodInUpperCase(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
+	c := newTestClient(t, rt)
+	for _, tc := range []struct{ given, want string }{
+		{"get", "GET"}, {"post", "POST"}, {"put", "PUT"}, {"patch", "PATCH"}, {"delete", "DELETE"},
+		{"Patch", "PATCH"}, {"PATCH", "PATCH"},
+	} {
+		rt.lastReq = nil
+		if err := c.Do(context.Background(), tc.given, "/api/x", nil, nil, nil); err != nil {
+			t.Fatalf("Do(%q): %v", tc.given, err)
+		}
+		if got := rt.lastReq.Method; got != tc.want {
+			t.Errorf("Do(%q): the transport saw %q, want %q", tc.given, got, tc.want)
+		}
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), "k1")
+	if err := c.Do(ctx, "post", "/api/sessions/s/messages/send-text", nil, map[string]string{"chatId": "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.lastReq.Header.Get("Idempotency-Key"); got != "k1" {
+		t.Errorf("a lowercase post to a send route sent Idempotency-Key %q, want %q", got, "k1")
+	}
+}
+
 func TestSendIdempotencyKey(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{"messageId":"m","timestamp":1}`}
 	c := newTestClient(t, rt, WithHeader("idempotency-key", "default"))
@@ -1923,5 +1950,56 @@ func TestRetryKeepsIdempotencyKey(t *testing.T) {
 		if key != "stable" {
 			t.Fatalf("keys: %v", keys)
 		}
+	}
+}
+
+// The status font ids are the wire values of the Baileys protocol's ExtendedTextMessage.FontType. The
+// constants carry the protocol's names; the first-release names for the same ids stay as deprecated
+// aliases so existing code keeps compiling and sending the same numbers.
+func TestStatusFontConstants(t *testing.T) {
+	cases := []struct {
+		name string
+		got  StatusFont
+		want int
+	}{
+		{"SYSTEM", StatusFontDefault, 0},
+		{"SYSTEM_TEXT", StatusFontSystemText, 1},
+		{"FB_SCRIPT", StatusFontFBScript, 2},
+		{"SYSTEM_BOLD", StatusFontBold, 6},
+		{"MORNINGBREEZE_REGULAR", StatusFontMorningBreezeRegular, 7},
+		{"CALISTOGA_REGULAR", StatusFontCalistogaRegular, 8},
+		{"EXO2_EXTRABOLD", StatusFontExo2ExtraBold, 9},
+		{"COURIERPRIME_BOLD", StatusFontCourierPrimeBold, 10},
+	}
+	for _, c := range cases {
+		if int(c.got) != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+
+	aliases := []struct {
+		name string
+		old  StatusFont
+		want StatusFont
+	}{
+		{"StatusFontSerif", StatusFontSerif, StatusFontSystemText},
+		{"StatusFontNorican", StatusFontNorican, StatusFontFBScript},
+		{"StatusFontOswald", StatusFontOswald, StatusFontMorningBreezeRegular},
+		{"StatusFontDamion", StatusFontDamion, StatusFontCalistogaRegular},
+		{"StatusFontMorningbreeze", StatusFontMorningbreeze, StatusFontExo2ExtraBold},
+		{"StatusFontBryndan", StatusFontBryndan, StatusFontCourierPrimeBold},
+	}
+	for _, a := range aliases {
+		if a.old != a.want {
+			t.Errorf("%s = %d, want the wire value %d it always had", a.name, a.old, a.want)
+		}
+	}
+
+	body, err := json.Marshal(SendTextStatusRequest{Text: "hi", Font: Ptr(StatusFontCourierPrimeBold)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"font":10`) {
+		t.Errorf("font did not marshal as a bare number: %s", body)
 	}
 }

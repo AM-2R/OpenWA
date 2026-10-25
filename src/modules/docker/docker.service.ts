@@ -3,12 +3,33 @@ import { createLogger } from '../../common/services/logger.service';
 import Docker from 'dockerode';
 import { isEnvPinned, isOsProvidedEnv } from '../../config/env-precedence';
 import { readGeneratedEnv } from '../infra/generated-env';
+import { BUNDLED_SERVICE_ENV, namesBundledContainer } from './bundled-host';
 
 /**
  * The only Docker profiles OpenWA manages (and may start/stop). Used to bound teardown so a
  * caller-supplied profile name can never reach stopManagedService for an unrelated container.
  */
 export const MANAGED_DOCKER_PROFILES: readonly string[] = ['postgres', 'redis', 'minio'];
+
+/**
+ * Whether the configuration `read` describes uses the datastore a managed profile runs. Redis is reached by the
+ * queue and the cache as well as by REDIS_ENABLED, each of which connects on its own.
+ */
+export function datastoreInUse(profile: string, read: (key: string) => string | undefined): boolean {
+  if (profile === 'postgres') return read('DATABASE_TYPE') === 'postgres';
+  if (profile === 'minio') return read('STORAGE_TYPE') === 's3';
+  return ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'].some(key => read(key) === 'true');
+}
+
+/**
+ * Whether the environment (or the project .env) pins the profile's host to anything but its bundled container, in
+ * any spelling namesBundledContainer accepts. The pin outranks the saved file at every boot, so a container started
+ * for that profile would run with nothing using it.
+ */
+export function hostPinnedElsewhere(profile: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const [key] = BUNDLED_SERVICE_ENV[profile] ?? [];
+  return key !== undefined && isEnvPinned(key) && !namesBundledContainer(profile, env[key]);
+}
 
 interface ContainerInfo {
   id: string;
@@ -84,8 +105,9 @@ export class DockerService implements OnModuleInit {
    * Bootstrap orchestration: start built-in containers based on saved config.
    * Runs from onModuleInit, which Nest calls only after the data connection is up. When that
    * connection is the built-in database (DATABASE_TYPE=postgres), the postgres profile is a no-op
-   * here: a stopped container was already started by prestartBuiltinDatabase in main.ts. With
-   * POSTGRES_BUILTIN=true on any other DATABASE_TYPE, this is what starts or creates it.
+   * here: a stopped container was already started by prestartBuiltinDatabase in main.ts. A flag set
+   * for a datastore this boot does not use (see datastoreInUse), or whose host the environment pins
+   * elsewhere, starts nothing.
    */
   private async bootstrapOrchestration(): Promise<void> {
     if (!this.isAvailable) {
@@ -93,18 +115,16 @@ export class DockerService implements OnModuleInit {
       return;
     }
 
-    const profiles: string[] = [];
+    const env = (key: string): string | undefined => process.env[key];
+    const wanted = (profile: string, flag: string | undefined): boolean =>
+      flag === 'true' && datastoreInUse(profile, env) && !hostPinnedElsewhere(profile);
 
     // Check for built-in services from environment variables
-    if (process.env.REDIS_BUILTIN === 'true') {
-      profiles.push('redis');
-    }
-    if (process.env.POSTGRES_BUILTIN === 'true') {
-      profiles.push('postgres');
-    }
-    if (process.env.MINIO_BUILTIN === 'true') {
-      profiles.push('minio');
-    }
+    const profiles = [
+      wanted('redis', process.env.REDIS_BUILTIN) && 'redis',
+      wanted('postgres', process.env.POSTGRES_BUILTIN) && 'postgres',
+      wanted('minio', process.env.MINIO_BUILTIN) && 'minio',
+    ].filter((p): p is string => typeof p === 'string');
 
     if (profiles.length === 0) {
       this.logger.log('[Bootstrap Orchestration] No built-in services configured');
@@ -207,17 +227,22 @@ export class DockerService implements OnModuleInit {
 
   /**
    * Which bundled (OpenWA-managed) service containers are currently RUNNING, keyed by the
-   * `com.openwa.service` label (`database` | `cache` | `storage`). Lets the dashboard show the real
-   * built-in state instead of the saved intent. All false when Docker is unavailable or none run.
+   * `com.openwa.service` label (`database` | `cache` | `storage`), and who created each: `'compose'` for one
+   * Docker Compose created (it carries Compose's project label and belongs to the deployment), `'openwa'` for
+   * one createService made. Lets the dashboard show the real built-in state instead of the saved intent. All
+   * false when Docker is unavailable or none run.
    */
-  async getRunningBuiltinServices(): Promise<{ database: boolean; cache: boolean; storage: boolean }> {
+  async getRunningBuiltinServices(): Promise<Record<'database' | 'cache' | 'storage', false | 'compose' | 'openwa'>> {
     const containers = await this.listContainers();
-    const isRunning = (svc: string): boolean =>
-      containers.some(
+    const creator = (svc: string): false | 'compose' | 'openwa' => {
+      const running = containers.find(
         c =>
           c.labels['com.openwa.service'] === svc && c.labels['com.openwa.builtin'] === 'true' && c.state === 'running',
       );
-    return { database: isRunning('database'), cache: isRunning('cache'), storage: isRunning('storage') };
+      if (!running) return false;
+      return running.labels['com.docker.compose.project'] ? 'compose' : 'openwa';
+    };
+    return { database: creator('database'), cache: creator('cache'), storage: creator('storage') };
   }
 
   /**
@@ -568,9 +593,13 @@ export class DockerService implements OnModuleInit {
    * startService()/createService() simply restart the retained container. Stop-only is also
    * strictly less destructive (a remove with `v: true` discards anonymous volumes).
    *
-   * Caveat: a retained container keeps its original env. If the service's credentials changed
-   * while it was disabled, remove the container from the host (`docker rm <name>`) before
-   * re-enabling so it is recreated fresh. To reclaim disk space, likewise remove it manually.
+   * Caveat: a retained container keeps its original env, and recreating it applies new credentials
+   * only to a service that reads them at every start. MinIO does: after they change, remove the
+   * container (`docker rm <name>`) before re-enabling. PostgreSQL does not: POSTGRES_PASSWORD seeds
+   * the role only when the data volume is first initialized, so a recreated container still
+   * authenticates with the password stored in the volume. Change it with `ALTER ROLE openwa
+   * PASSWORD '...'` in the running container, or re-initialize the volume (which discards the data).
+   * Redis runs without credentials. To reclaim disk space, remove the container manually.
    */
   async stopManagedService(profile: string): Promise<boolean> {
     this.logger.log(`Stopping service with profile: ${profile} (container retained, not removed)`);
@@ -686,7 +715,8 @@ export async function prestartBuiltinDatabase(
   service: Pick<DockerService, 'startBuiltinDatabase'> = new DockerService(),
   timeoutMs = 15_000,
 ): Promise<void> {
-  if (env.DATABASE_TYPE !== 'postgres' || env.POSTGRES_BUILTIN !== 'true') return;
+  if (env.DATABASE_TYPE !== 'postgres' || env.POSTGRES_BUILTIN !== 'true' || hostPinnedElsewhere('postgres', env))
+    return;
   const logger = createLogger('DockerService');
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>(resolve => {

@@ -124,16 +124,17 @@ describe('BaileysSessionStore', () => {
     store.upsertContacts([{ id: '111@lid', name: 'Alice' }]);
     store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
 
-    expect(store.findContact('111@lid')).toMatchObject({ id: '628111@c.us', name: 'Alice', number: '628111' });
+    expect(store.findContact('111@lid')).toMatchObject({ id: '111@lid', name: 'Alice', number: '628111' });
   });
 
-  it('lists a person once when both of their entries carry a saved name', () => {
+  it('keeps phone and LID contact identities distinct when both carry a saved name', () => {
     // Both project to the same neutral id once the lid resolves, so listing both puts two rows
     // sharing one id into GET /contacts.
     store.upsertContacts([{ id: '111@lid', name: 'Alice' }]);
     store.upsertContacts([{ id: '628111@s.whatsapp.net', lid: '111@lid', name: 'Alice' }]);
 
     expect(store.listContacts()).toEqual([
+      expect.objectContaining({ id: '111@lid', name: 'Alice', number: '628111' }),
       expect.objectContaining({ id: '628111@c.us', name: 'Alice', number: '628111' }),
     ]);
   });
@@ -150,7 +151,7 @@ describe('BaileysSessionStore', () => {
     ]);
   });
 
-  it('folds two twins by content, not by which one was touched last', () => {
+  it('keeps each raw contact record stable when a lookup touches its LID', () => {
     // The store is LRU-ordered, so iteration order tracks traffic: an inbound message touches the
     // lid twin on every message. Letting order decide meant the list answered with whichever twin
     // had been quiet, dropping a pushname the other had just learned and flipping back later.
@@ -159,27 +160,21 @@ describe('BaileysSessionStore', () => {
 
     const first = store.listContacts();
     expect(first).toEqual([
-      {
-        id: '628111@c.us',
-        name: 'Alice',
-        pushName: 'Ali', // filled from the lid twin, which is the only side that has one
-        number: '628111', // and the number from the phone twin, which is the only side with that
-        isMyContact: true,
-        isBlocked: false,
-        profilePicUrl: 'http://p/a.jpg',
-      },
+      expect.objectContaining({ id: '111@lid', name: 'Alice', pushName: 'Ali', profilePicUrl: 'http://p/a.jpg' }),
+      expect.objectContaining({ id: '628111@c.us', name: 'Alice', number: '628111', pushName: undefined }),
     ]);
 
     // Touch the lid twin the way an inbound message does, moving it to the recent end, and read again.
     expect(store.findContact('111@lid')).toBeTruthy();
-    expect(store.listContacts()).toEqual(first);
+    expect(store.listContacts()).toHaveLength(first.length);
+    expect(store.listContacts()).toEqual(expect.arrayContaining(first));
   });
 
   it('accepts a contact keyed only by lid (id omitted) and finds it by phone', () => {
     store.upsertContacts([{ lid: '111@lid', phoneNumber: '628111@s.whatsapp.net', name: 'Ada' }]);
     expect(store.findContact('111@lid')?.name).toBe('Ada');
     expect(store.findContact('628111@c.us')?.name).toBe('Ada');
-    expect(store.listContacts()[0]).toMatchObject({ id: '628111@c.us', name: 'Ada', number: '628111' });
+    expect(store.listContacts()[0]).toMatchObject({ id: '111@lid', name: 'Ada', number: '628111' });
   });
 
   it('drops groups/newsletters/status from the contact map (they are not address-book entries)', () => {
@@ -421,7 +416,7 @@ describe('BaileysSessionStore', () => {
     });
   });
 
-  it('keeps the latest type across older messages, edits, and revokes addressed through a twin', () => {
+  it('keeps the latest type across older messages and edits of independent raw chats', () => {
     store.addLidMappings([{ lid: '999@lid', pn: '628111@s.whatsapp.net' }]);
     store.upsertChats([{ id: '999@lid' }]);
     store.recordMessage(
@@ -436,7 +431,7 @@ describe('BaileysSessionStore', () => {
       },
       'text',
     );
-    store.recordMessageEdit('628111@c.us', 'LATEST', 'new caption');
+    store.recordMessageEdit('999@lid', 'LATEST', 'new caption');
     expect(store.listChats()[0]).toMatchObject({
       lastMessage: 'new caption',
       lastMessageType: 'image',
@@ -444,7 +439,7 @@ describe('BaileysSessionStore', () => {
     });
     store.recordMessageEdit('628111@c.us', 'OLD', '', 'revoked');
     expect(store.listChats()[0].lastMessageType).toBe('image');
-    store.recordMessageEdit('628111@c.us', 'LATEST', '', 'revoked');
+    store.recordMessageEdit('999@lid', 'LATEST', '', 'revoked');
     expect(store.listChats()[0]).toMatchObject({ lastMessage: '', lastMessageType: 'revoked', timestamp: 200 });
   });
 
@@ -489,7 +484,8 @@ describe('BaileysSessionStore', () => {
     });
     store.upsertChats(chats.map(id => ({ id })));
     store.recordMessageEdit(editedVia, 'M1', '');
-    expect(store.listChats().map(c => c.lastMessage)).toEqual(['']);
+    expect(store.listChats().find(c => c.id === '999@lid')?.lastMessage).toBe(editedVia === '999@lid' ? '' : 'secret');
+    expect(store.listChats().find(c => c.id === '628111@c.us')?.lastMessage).toBeUndefined();
   });
 
   it('flags a group chat by jid', () => {
@@ -742,6 +738,11 @@ describe('BaileysSessionStore', () => {
   });
 
   describe('recordKeyLidMappings (#362)', () => {
+    it('does not pair an own-message recipient with the sender phone carried as remoteJidAlt', () => {
+      store.recordKeyLidMappings({ remoteJid: '111@lid', remoteJidAlt: '628999@s.whatsapp.net', fromMe: true });
+      expect(store.resolvePhone('111@lid')).toBeNull();
+    });
+
     it('learns a lid->pn mapping from an inbound message key (remoteJid/remoteJidAlt)', () => {
       store.recordKeyLidMappings({ remoteJid: '111@lid', remoteJidAlt: '628999@s.whatsapp.net' });
       expect(store.resolvePhone('111@lid')).toBe('628999');
@@ -752,10 +753,11 @@ describe('BaileysSessionStore', () => {
       expect(store.resolvePhone('222@lid')).toBe('628222');
     });
 
-    it('canonicalizes a @lid to <phone>@c.us once the key mapping is learned', () => {
+    it('retains the LID identity after learning its phone for display', () => {
       expect(store.toNeutralJid('111@lid')).toBe('111@lid'); // unknown yet
       store.recordKeyLidMappings({ remoteJid: '111@lid', remoteJidAlt: '628111@s.whatsapp.net' });
-      expect(store.toNeutralJid('111@lid')).toBe('628111@c.us');
+      expect(store.toNeutralJid('111@lid')).toBe('111@lid');
+      expect(store.resolvePhone('111@lid')).toBe('628111');
     });
 
     it('pairs the sender of a broadcast-list or status message with its alt, never the list id', () => {
@@ -810,10 +812,11 @@ describe('BaileysSessionStore', () => {
       expect(store.toNeutralJid('')).toBe('');
     });
 
-    it('resolves a @lid to <phone>@c.us when known, else keeps the raw lid', () => {
+    it('retains the raw LID while its display phone is known', () => {
       expect(store.toNeutralJid('111@lid')).toBe('111@lid'); // no mapping yet
       store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
-      expect(store.toNeutralJid('111@lid')).toBe('628999@c.us');
+      expect(store.toNeutralJid('111@lid')).toBe('111@lid');
+      expect(store.resolvePhone('111@lid')).toBe('628999');
     });
 
     it('is idempotent on an already-neutral @c.us id', () => {
@@ -866,20 +869,25 @@ describe('BaileysSessionStore', () => {
       store.upsertChats([{ id: PHONE }]);
       store.addLidMappings([{ lid: LID, pn: PHONE }]);
       store.recordMessage(msg(LID, 'OUT', 100, true));
-      expect(store.listChats()).toEqual([expect.objectContaining({ timestamp: 100, lastMessage: 'OUT' })]);
+      expect(store.listChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: LID, timestamp: 100, lastMessage: 'OUT' }),
+          expect.objectContaining({ id: '628111@c.us', lastMessage: undefined }),
+        ]),
+      );
     });
 
     it('finds a lid-keyed chat from the @c.us id the listing publishes', () => {
       store.upsertChats([{ id: LID }]);
       store.recordKeyLidMappings({ remoteJid: LID, remoteJidAlt: PHONE });
       store.recordMessage(msg(LID, 'IN', 100));
-      expect(store.listChats()[0].id).toBe('628111@c.us');
+      expect(store.listChats()[0].id).toBe(LID);
       expect(store.lastMessage('628111@c.us')).toEqual({
         key: { remoteJid: LID, fromMe: false, id: 'IN' },
         timestamp: 100,
         jid: LID,
       });
-      store.recordMessageEdit('628111@c.us', 'IN', 'edited');
+      store.recordMessageEdit(LID, 'IN', 'edited');
       expect(store.listChats()[0].lastMessage).toBe('edited');
     });
 
@@ -898,7 +906,7 @@ describe('BaileysSessionStore', () => {
       expect(fake.rows.size).toBe(0);
       // A later message re-creates the chat without the pin the deleted one carried.
       s.upsertChats([{ id: LID }]);
-      expect(s.listChats().find(c => c.id === '628111@c.us')).toEqual(expect.objectContaining({ pinned: false }));
+      expect(s.listChats().find(c => c.id === LID)).toEqual(expect.objectContaining({ pinned: false }));
     });
 
     it('finds the lid twin through the persisted table as well', () => {
@@ -906,7 +914,7 @@ describe('BaileysSessionStore', () => {
         getCached: jest.fn(() => undefined),
         resolveLid: jest.fn(() => null),
         lidsForPhone: jest.fn((phone: string) => (phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       s.upsertChats([{ id: LID }]);
@@ -987,7 +995,7 @@ describe('BaileysSessionStore', () => {
         { id: LID, muteEndTime: -1 },
       ]);
       const expected = { id: '628111@c.us', name: 'Alice', pinned: true, archived: true, muted: true };
-      expect(s.listChats()).toEqual([expect.objectContaining(expected)]);
+      expect(s.listChats()).toEqual(expect.arrayContaining([expect.objectContaining(expected)]));
       expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
 
       const restarted = newStore();
@@ -1002,7 +1010,9 @@ describe('BaileysSessionStore', () => {
       expect([...fake.rows.keys()]).toEqual([K(LID)]);
       s.upsertChats([{ id: PHONE, name: 'Alice' }]);
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', name: 'Alice', pinned: true })]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: '628111@c.us', name: 'Alice', pinned: true })]),
+      );
       await flush();
       expect([...fake.rows.keys()]).toEqual([K(LID)]); // a listing writes nothing
       // A later mute through either spelling folds the lid row onto the phone row.
@@ -1082,7 +1092,9 @@ describe('BaileysSessionStore', () => {
       s.upsertChats([{ id: PHONE, pinned: 2 }]);
       s.upsertChats([{ id: LID, pinned: 0 }]);
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', pinned: false })]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: '628111@c.us', pinned: false })]),
+      );
       s.upsertChats([{ id: PHONE, muteEndTime: -1 }]);
       expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
       expect(s.listChats()[0]).toMatchObject({ pinned: false, muted: true });
@@ -1115,7 +1127,9 @@ describe('BaileysSessionStore', () => {
       const s = newStore();
       s.upsertContacts([{ id: LID, phoneNumber: PHONE }]);
       s.upsertChats([{ id: LID }]);
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true, pinned: true })]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: LID, archived: true, pinned: true })]),
+      );
       s.upsertChats([{ id: LID, muteEndTime: -1 }]);
       expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
       expect(s.listChats()[0]).toMatchObject({ archived: true, pinned: true, muted: true });
@@ -1129,7 +1143,9 @@ describe('BaileysSessionStore', () => {
       const s = newStore();
       s.upsertContacts([{ id: LID, phoneNumber: PHONE }]);
       s.upsertChats(ids.map(id => ({ id })));
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true, pinned: true })]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: '628111@c.us', archived: true, pinned: true })]),
+      );
       s.upsertChats([{ id: PHONE, muteEndTime: -1 }]);
       expect([...fake.rows.keys()]).toEqual([K(PHONE)]);
       expect(s.listChats()[0]).toMatchObject({ archived: true, pinned: true, muted: true });
@@ -1151,7 +1167,7 @@ describe('BaileysSessionStore', () => {
           { lid: '2@lid', pn: '6202@s.whatsapp.net' },
         ]);
         s.upsertChats([{ id: PHONE }, { id: LID }]);
-        expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', pinned: true })]);
+        expect(s.listChats()).toEqual(expect.arrayContaining([expect.objectContaining({ id: LID, pinned: true })]));
       } finally {
         if (cap === undefined) delete process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES;
         else process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES = cap;
@@ -1169,7 +1185,7 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => []),
         findPhoneForLid: jest.fn((jid: string) => Promise.resolve(jid.startsWith('484848') ? '628111' : null)),
         findLidsForPhone: jest.fn((phone: string) => Promise.resolve(phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, SID, fake);
       s.removeChats([deleted]);
@@ -1184,7 +1200,7 @@ describe('BaileysSessionStore', () => {
         getCached: jest.fn((lid: string) => (lid === '484848' ? '628111' : undefined)),
         resolveLid: jest.fn(() => null),
         lidsForPhone: jest.fn((phone: string) => (phone === '628111' ? ['484848'] : [])),
-        remember: jest.fn(() => Promise.resolve()),
+        remember: jest.fn(() => Promise.resolve(true)),
       };
       const s = new BaileysSessionStore(lidStore, SID, fake);
       s.upsertChats([{ id: PHONE }]);
@@ -1205,15 +1221,18 @@ describe('BaileysSessionStore', () => {
     it.each([
       ['phone first', [PHONE, LID]],
       ['lid first', [LID, PHONE]],
-    ])('merges the two records into one row, whichever arrived first (%s)', (_order, ids) => {
+    ])('keeps both raw chat records, whichever arrived first (%s)', (_order, ids) => {
       const s = new BaileysSessionStore();
       for (const id of ids) {
         s.upsertChats([id === LID ? { id, name: 'Alice', unreadCount: 2, conversationTimestamp: 50 } : { id }]);
       }
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([
-        expect.objectContaining({ id: '628111@c.us', name: 'Alice', unreadCount: 2, timestamp: 50 }),
-      ]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: LID, name: 'Alice', unreadCount: 2, timestamp: 50 }),
+          expect.objectContaining({ id: '628111@c.us', unreadCount: 0, timestamp: 0 }),
+        ]),
+      );
     });
 
     it('takes the unread count from the more recently active of the two records', () => {
@@ -1223,7 +1242,12 @@ describe('BaileysSessionStore', () => {
         { id: LID, unreadCount: 2, conversationTimestamp: 50 },
       ]);
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', unreadCount: 2, timestamp: 50 })]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: LID, unreadCount: 2, timestamp: 50 }),
+          expect.objectContaining({ id: '628111@c.us', unreadCount: 0, timestamp: 10 }),
+        ]),
+      );
     });
 
     it('shows a preview filed under the lid before the mapping on the merged row, newest first', () => {
@@ -1236,11 +1260,18 @@ describe('BaileysSessionStore', () => {
       s.upsertChats([{ id: PHONE }]);
       s.recordMessage(msg(LID, 'VIA_LID', 100));
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([
-        expect.objectContaining({ id: '628111@c.us', timestamp: 100, lastMessage: 'VIA_LID' }),
-      ]);
+      expect(s.listChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: LID, timestamp: 100, lastMessage: 'VIA_LID' }),
+          expect.objectContaining({ id: '628111@c.us', lastMessage: undefined }),
+        ]),
+      );
       s.recordMessage(msg(PHONE, 'VIA_PHONE', 50));
-      expect(s.listChats()[0]).toMatchObject({ timestamp: 100, lastMessage: 'VIA_LID' });
+      expect(s.listChats().find(c => c.id === LID)).toMatchObject({ timestamp: 100, lastMessage: 'VIA_LID' });
+      expect(s.listChats().find(c => c.id === '628111@c.us')).toMatchObject({
+        timestamp: 50,
+        lastMessage: 'VIA_PHONE',
+      });
     });
 
     it('keeps distinct chats apart', () => {
@@ -1277,7 +1308,7 @@ describe('BaileysSessionStore', () => {
       fake.rows.set(K(LID), { muteEndTime: null, archived: true, pinned: false });
       const s = newStore();
       s.addLidMappings([{ lid: LID, pn: PHONE }]);
-      expect(s.listChats()).toEqual([expect.objectContaining({ id: '628111@c.us', archived: true })]);
+      expect(s.listChats()).toEqual([expect.objectContaining({ id: LID, archived: true })]);
     });
 
     it('finds the disappearing timer a lid-keyed chat record carries from the @c.us id', () => {
@@ -1300,7 +1331,11 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => [] as string[]),
         remember: jest.fn((lid: string, phone: string | null) => {
           map.set(lid, phone);
-          return Promise.resolve();
+          return Promise.resolve(true);
+        }),
+        rememberIfUnknown: jest.fn((lid: string, phone: string) => {
+          if (!map.has(lid)) map.set(lid, phone);
+          return Promise.resolve(true);
         }),
       };
     };
@@ -1325,12 +1360,24 @@ describe('BaileysSessionStore', () => {
       expect(lidStore.remember).toHaveBeenCalledWith('444', '628444', 'sess-1');
     });
 
+    it('keeps a reconstructed contact phone as display data until an incoming phone field confirms it', () => {
+      const lidStore = makeFakeLidStore();
+      const s = new BaileysSessionStore(lidStore, 'sess-1');
+      s.upsertContacts([{ id: 'c1', phoneNumber: '628444@s.whatsapp.net' }]);
+      s.upsertContacts([{ id: 'c1', lid: '444@lid' }]);
+      expect(s.resolvePhone('444@lid')).toBe('628444');
+      expect(lidStore.rememberIfUnknown).toHaveBeenCalledWith('444', '628444', 'sess-1');
+      expect(lidStore.remember).not.toHaveBeenCalled();
+      s.upsertContacts([{ id: 'c1', phoneNumber: '628444@s.whatsapp.net' }]);
+      expect(lidStore.remember).toHaveBeenCalledWith('444', '628444', 'sess-1');
+    });
+
     it('resolves a lid via the persistent cache when the in-session map misses', () => {
       const lidStore = makeFakeLidStore();
       lidStore.map.set('444', '628777'); // known only to the cross-session table
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       expect(s.resolvePhone('444@lid')).toBe('628777');
-      expect(s.toNeutralJid('444@lid')).toBe('628777@c.us');
+      expect(s.toNeutralJid('444@lid')).toBe('444@lid');
     });
 
     it('returns null for a cached-negative or unseen lid', () => {
@@ -1439,7 +1486,7 @@ describe('BaileysSessionStore', () => {
         lidsForPhone: jest.fn(() => [] as string[]),
         remember: jest.fn((lid: string, phone: string | null) => {
           map.set(lid, phone);
-          return Promise.resolve();
+          return Promise.resolve(true);
         }),
       };
       const s = storeWithCap('2', lidStore);

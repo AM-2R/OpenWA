@@ -46,6 +46,8 @@ let catalogReads = 0;
 // Further installed plugins listed after PLUGIN, and a gate a POST /disable waits for before answering.
 let extraPlugins: Record<string, unknown>[] = [];
 let disableGate: Promise<void> | undefined;
+// Whether GET /api/plugins answers with a server error, as it does while the plugin registry is unavailable.
+let pluginListFails = false;
 
 function installFetchStub(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -53,6 +55,7 @@ function installFetchStub(): void {
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     const method = init?.method ?? 'GET';
     if (method === 'GET' && path === '/api/plugins') {
+      if (pluginListFails) return Promise.resolve(jsonResponse({ message: 'plugin registry unavailable' }, 500));
       return Promise.resolve(jsonResponse([{ ...PLUGIN, sessionConfig, ...pluginOverride }, ...extraPlugins]));
     }
     if (method === 'POST' && path.endsWith('/disable')) {
@@ -68,6 +71,10 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ success: true, message: 'Uninstalled' }));
     }
     if (method === 'GET' && path === '/api/sessions') return Promise.resolve(jsonResponse([SESSION, SESSION_2]));
+    if (method === 'PUT' && path === `/api/plugins/${PLUGIN.id}/config`) {
+      putBodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(jsonResponse(putReply));
+    }
     const put = method === 'PUT' ? path.match(new RegExp(`^/api/plugins/${PLUGIN.id}/config/([^/]+)$`)) : null;
     if (put) {
       const sid = put[1];
@@ -123,6 +130,7 @@ afterEach(() => {
   catalogReads = 0;
   extraPlugins = [];
   disableGate = undefined;
+  pluginListFails = false;
   rtl.cleanup();
   queryClient?.clear();
   queryClient = undefined;
@@ -149,6 +157,34 @@ async function openSessionOverride(sessionLabel: string): Promise<void> {
   await findByText(select, sessionLabel);
   fireEvent.change(select, { target: { value: SESSION.id } });
 }
+
+// A failed read says nothing about what is installed: the banner is the only message, and the page must not
+// count zero plugins or tell the operator to install one.
+test('a failed first plugin read shows the error, not an empty install base', async () => {
+  const { screen } = rtl;
+  pluginListFails = true;
+  renderPlugins();
+
+  await screen.findByText('plugin registry unavailable');
+  assert.equal(screen.queryByText('No plugins installed') === null, true, 'a failed read claimed nothing is installed');
+  assert.equal(screen.queryByText('None enabled yet') === null, true, 'a failed read claimed nothing is enabled');
+  const counts = Array.from(document.querySelectorAll('.rail-stat-num')).map(node => node.textContent);
+  assert.deepEqual(counts, ['-', '-'], 'the rail counted plugins it could not read');
+});
+
+test('a failed refetch keeps the installed plugins and their counts', async () => {
+  const { screen, act } = rtl;
+  renderPlugins();
+  await screen.findByTitle('Configure');
+
+  pluginListFails = true;
+  await act(() => queryClient!.refetchQueries({ queryKey: ['plugins'] }));
+
+  await screen.findByText('plugin registry unavailable');
+  assert.ok(screen.queryByTitle('Configure'), 'the failed refetch dropped the installed plugin');
+  const counts = Array.from(document.querySelectorAll('.rail-stat-num')).map(node => node.textContent);
+  assert.deepEqual(counts, ['1', '1']);
+});
 
 test('a per-session override the server rejects reports the failure, not "Saved"', async () => {
   const { screen, fireEvent } = rtl;
@@ -257,6 +293,103 @@ test('a config schema without properties opens the config modal and the Sessions
   // No declared field means nothing to override per session.
   await screen.findByText('Run for');
   assert.equal(screen.queryByRole('combobox', { name: 'Select a session…' }) === null, true);
+});
+
+// The gateway keeps a stored secret for the mask and for an empty string; only an explicit null removes it.
+// A secret textarea (a PEM key, a service-account JSON) is cleared the same way as a secret text field.
+test('clearing a stored secret textarea saves null, as clearing a secret text field does', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = {
+    config: { pem: '***', token: '***' },
+    configSchema: {
+      type: 'object',
+      properties: {
+        pem: { type: 'textarea', title: 'Private key', secret: true },
+        token: { type: 'string', title: 'Token', secret: true },
+      },
+    },
+  };
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  const pem = await screen.findByLabelText<HTMLTextAreaElement>('Private key');
+  assert.equal(pem.value, '***');
+
+  fireEvent.change(pem, { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText<HTMLInputElement>('Token'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { pem: null, token: null } }]);
+});
+
+test('a typed secret textarea is saved as typed', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = {
+    config: { pem: '***' },
+    configSchema: { type: 'object', properties: { pem: { type: 'textarea', title: 'Private key', secret: true } } },
+  };
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  fireEvent.change(await screen.findByLabelText('Private key'), { target: { value: 'NEW-KEY' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { pem: 'NEW-KEY' } }]);
+});
+
+// A stored secret reads back as the mask '***', which no pattern describes. The form holds it untouched,
+// and the browser checks a pattern against whatever the field holds, so the save was refused on a field
+// the operator never edited.
+const PATTERNED_SECRET = {
+  config: { greeting: 'hello', token: '***' },
+  configSchema: {
+    type: 'object',
+    properties: {
+      greeting: { type: 'string', title: 'Greeting' },
+      token: { type: 'string', title: 'Token', secret: true, required: true, pattern: '^tok_[a-z0-9]+$' },
+    },
+  },
+};
+
+test('a stored secret with a pattern is saved without retyping it', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  putReply = { success: true };
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  fireEvent.change(await screen.findByLabelText('Greeting'), { target: { value: 'hi' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.deepEqual(putBodies, [{ config: { greeting: 'hi', token: '***' } }]);
+});
+
+test('a stored secret with a pattern does not block the per-session override save', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  putReply = { success: true };
+  await openSessionOverride('Main');
+  fireEvent.change(await screen.findByLabelText('Greeting'), { target: { value: 'hi' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save override' }));
+
+  await waitFor(() => assert.equal(putBodies.length, 1));
+  assert.equal((putBodies[0] as { config: { greeting?: string } }).config.greeting, 'hi');
+});
+
+test('a secret typed over the stored one is still held to its pattern', async () => {
+  const { screen, fireEvent } = rtl;
+  pluginOverride = PATTERNED_SECRET;
+  renderPlugins();
+  fireEvent.click(await screen.findByTitle('Configure'));
+  const token = await screen.findByLabelText<HTMLInputElement>(/Token/);
+  assert.equal(token.validity.patternMismatch, false);
+
+  fireEvent.change(token, { target: { value: 'nope' } });
+  assert.equal(token.validity.patternMismatch, true);
+  fireEvent.change(token, { target: { value: 'tok_abc1' } });
+  assert.equal(token.validity.valid, true);
 });
 
 test('a fractional value in a bounded number field does not block the override save', async () => {

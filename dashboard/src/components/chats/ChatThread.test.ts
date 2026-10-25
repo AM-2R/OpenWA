@@ -395,7 +395,7 @@ test('poll messages display exact choices, including outgoing and legacy polls',
     Array.from(container.querySelectorAll('li bdi')).map(node => node.textContent),
     [...poll.options, ...poll.options],
   );
-  assert.equal(container.querySelector('script'), null);
+  assert.equal(container.querySelectorAll('script').length, 0);
   assert.ok(container.textContent?.includes('Legacy question'));
 });
 
@@ -1836,5 +1836,5 @@ test('does not label an unedited or revoked message as edited', () => {
     { ...PROMPT, metadata: undefined },
     { ...PROMPT, id: 'revoked', waMessageId: 'revoked', type: 'revoked', metadata: { edited: true } },
   ]);
-  assert.equal(container.querySelector('.message-edited'), null);
+  assert.equal(container.querySelectorAll('.message-edited').length, 0);
 });

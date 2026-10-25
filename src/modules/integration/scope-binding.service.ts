@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -7,7 +8,15 @@ import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { Session } from '../session/entities/session.entity';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
+import type { PluginConfigField } from '../../core/plugins/plugin.interfaces';
 import { createLogger } from '../../common/services/logger.service';
+
+/** Whether a config field is a secret, or holds one at any depth. */
+const holdsSecret = (field: PluginConfigField | undefined): boolean =>
+  !!field &&
+  (field.secret === true || Object.values(field.properties ?? {}).some(holdsSecret) || holdsSecret(field.items));
+
+const isDefined = (value: unknown): boolean => value != null && value !== '';
 
 /**
  * Owns the provisioning bridge that makes a persisted plugin instance's config reach the ingress
@@ -176,13 +185,17 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * instance row would silently overwrite that operator choice — and bind the plugin to the row's
    * scope even when that session has since been deleted, leaving it activated for nothing. So the boot
    * path only ever ADDS the row's scope; it removes nothing.
+   *
+   * `previousConfig` is what an enabled wildcard instance contributed to the base config before the change
+   * being applied. The base config merges, so a secret that the instance no longer defines (activation) or
+   * no longer contributes at all (teardown) would otherwise stay in it; see retractedSecrets.
    */
   async applyScopeBinding(
     pluginId: string,
     scope: string | null,
     config: Record<string, unknown>,
     activate: boolean,
-    opts: { additive?: boolean } = {},
+    opts: { additive?: boolean; previousConfig?: Record<string, unknown> | null } = {},
   ): Promise<void> {
     try {
       if (!scope || scope === '*') {
@@ -192,10 +205,15 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         // enabled instance still binds a wildcard/null scope — otherwise disabling/deleting a wildcard
         // instance would leave the plugin firing on every session with stale config.
         if (activate) {
-          this.loader.updatePluginConfig(pluginId, config);
+          this.loader.updatePluginConfig(pluginId, {
+            ...(await this.retractedSecrets(pluginId, config, opts.previousConfig)),
+            ...config,
+          });
           this.loader.setPluginSessions(pluginId, ['*']);
           return;
         }
+        const retracted = await this.retractedSecrets(pluginId, {}, opts.previousConfig);
+        if (Object.keys(retracted).length > 0) this.loader.updatePluginConfig(pluginId, retracted);
         const rows = await this.instances.list(pluginId);
         const anyWildcardLeft = rows.some(i => i.enabled && (!i.sessionScope || i.sessionScope === '*'));
         if (!anyWildcardLeft) {
@@ -261,5 +279,41 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         metadata: { pluginId, scope, bridgeError: String(err) },
       });
     }
+  }
+
+  /**
+   * What to write over the base config to take back the secrets `previous` held and `config` no longer
+   * defines (none, for a teardown). The wildcard projection only merges, so on its own it cannot delete a
+   * key: a secret the operator revoked, or one of an instance that was disabled, deleted or moved off the
+   * wildcard scope, would stay in the base config, in registry.json and in the config of every hook and
+   * ingress delivery. A key is taken back only while the base config still holds the value the instance
+   * put there. It is written as the value another enabled wildcard instance still defines (the last by id,
+   * as boot reconciliation replays them), else as null, which is how a removed top-level secret is stored
+   * there. Siblings are read only when a secret was actually removed.
+   */
+  private async retractedSecrets(
+    pluginId: string,
+    config: Record<string, unknown>,
+    previous: Record<string, unknown> | null | undefined,
+  ): Promise<Record<string, unknown>> {
+    const before = previous ?? {};
+    const plugin = this.loader.getPlugin(pluginId);
+    const properties = plugin?.manifest.configSchema?.properties ?? {};
+    const removed = Object.keys(before).filter(
+      key =>
+        holdsSecret(properties[key]) &&
+        isDefined(before[key]) &&
+        !isDefined(config[key]) &&
+        // Only what this instance put there: a value set on the plugin since, or one a sibling projected
+        // after it, is not the instance's to take back.
+        isDeepStrictEqual(plugin?.config[key], before[key]),
+    );
+    if (removed.length === 0) return {};
+    const siblings = (await this.instances.list(pluginId))
+      .filter(row => row.enabled && (!row.sessionScope || row.sessionScope === '*'))
+      .sort((a, b) => String(a.instanceId).localeCompare(String(b.instanceId)));
+    return Object.fromEntries(
+      removed.map(key => [key, siblings.findLast(row => isDefined(row.config?.[key]))?.config?.[key] ?? null]),
+    );
   }
 }

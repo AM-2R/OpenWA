@@ -257,7 +257,8 @@ export class GroupService {
    * leave a silently half-applied patch behind when the ephemeral call then throws.
    *
    * A failure on the FIRST applied field propagates unchanged (nothing was applied, so the patch
-   * simply failed). A failure on a LATER field means the group is now in a mixed state, so the
+   * simply failed, except for a 503: a WhatsApp timeout can still land the change). A failure on a
+   * LATER field means the group is now in a mixed state, so the
    * error names the failed field and the ones already applied — the caller can reconcile instead
    * of guessing which subset took effect. The wrapped error keeps the underlying HTTP status, and
    * carries the underlying message only for an HTTP error; any other failure is logged here and

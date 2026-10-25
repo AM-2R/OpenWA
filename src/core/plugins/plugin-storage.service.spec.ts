@@ -336,6 +336,45 @@ describe('PluginStorageService per-plugin storage quota', () => {
 
       await expect(second.set('state', 'y'.repeat(900))).resolves.toBeUndefined();
     });
+
+    // The recount before a refusal puts a stale total right, so a write that ends up accepted cannot tell
+    // one from a correct total. What a stale total costs is a directory read on the main thread.
+    it('takes a deleted key out of the total, so a write that then fits does not read the directory', async () => {
+      const storage = makeStorage(1024);
+      await storage.set('a', 'x'.repeat(500)); // 502 bytes
+      await storage.set('b', 'y'.repeat(400)); // 402 bytes
+      await storage.delete('a');
+
+      const readdir = jest.spyOn(fs, 'readdirSync');
+      try {
+        // 402 + 302 fits the quota only once the 502 bytes of 'a' are out of the total.
+        await storage.set('c', 'z'.repeat(300));
+        expect(readdir.mock.calls.filter(([dir]) => String(dir) === pluginDir())).toHaveLength(0);
+      } finally {
+        readdir.mockRestore();
+      }
+    });
+
+    it('seeds the total again, once, after the plugin data is deleted', async () => {
+      const configService = {
+        get: (k: string) => (k === 'dataDir' ? dataDir : k === 'plugins.storageMaxBytes' ? 1024 : undefined),
+      } as unknown as ConfigService;
+      const service = new PluginStorageService(configService);
+      await service.createPluginStorage('reinstalled').set('state', 'x'.repeat(100));
+
+      service.deletePluginData('reinstalled');
+      const second = service.createPluginStorage('reinstalled');
+
+      const readdir = jest.spyOn(fs, 'readdirSync');
+      try {
+        // Small writes, so a total carried over from before the delete would still look right.
+        await second.set('a', 'y'.repeat(100));
+        await second.set('b', 'z'.repeat(100));
+        expect(readdir.mock.calls.filter(([dir]) => String(dir) === pluginDir('reinstalled'))).toHaveLength(1);
+      } finally {
+        readdir.mockRestore();
+      }
+    });
   });
 });
 

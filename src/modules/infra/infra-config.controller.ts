@@ -10,14 +10,20 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { InfraConfigResponseDto, InfraConfigSaveResponseDto, InfraRestartResponseDto } from './dto/infra-response.dto';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { RestartDto } from './dto/restart.dto';
 import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
-import { DockerService, MANAGED_DOCKER_PROFILES } from '../docker';
+import {
+  BUNDLED_SERVICE_ENV,
+  DockerService,
+  MANAGED_DOCKER_PROFILES,
+  hostPinnedElsewhere,
+  namesBundledContainer,
+} from '../docker';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
 import { AuditService } from '../audit/audit.service';
@@ -30,6 +36,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { encodeGeneratedEnvValue, generatedEnvPath, readGeneratedEnv } from './generated-env';
+import { savedBuiltInMode } from './saved-builtin-mode';
 import {
   applyDatabaseSection,
   applyEngineSection,
@@ -38,31 +45,11 @@ import {
   ConfigSectionContext,
 } from './config-sections';
 
-// The PUT /infra/config body DTOs live in ./dto/save-config.dto.ts: as *.dto.ts classes they are
-// covered by the input-coercion drift gate (src/common/utils/dto-strict-coercion.spec.ts), which
-// controller-local classes escape, and their boolean/numeric fields carry the @ToStrictBoolean /
-// @ToStrictNumber transforms that keep a form-encoded 'false' from being coerced to `true`.
-
-class RestartDto {
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  profiles?: string[];
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  profilesToRemove?: string[];
-}
-
-// The env key and value that point the app at each bundled service, as /infra/status detects them.
-const BUNDLED_SERVICE_ENV: Record<string, [string, string]> = {
-  postgres: ['DATABASE_HOST', 'postgres'],
-  redis: ['REDIS_HOST', 'redis'],
-  minio: ['S3_ENDPOINT', 'http://minio:9000'],
-};
+// The PUT /infra/config body DTOs live in ./dto/save-config.dto.ts and the restart body in
+// ./dto/restart.dto.ts: as *.dto.ts classes they are covered by the input-coercion drift gate
+// (src/common/utils/dto-strict-coercion.spec.ts), which controller-local classes escape, and their
+// boolean/numeric fields carry the @ToStrictBoolean / @ToStrictNumber transforms that keep a form-encoded
+// 'false' from being coerced to `true`.
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
 // values are never echoed back — a `*Set` boolean indicates whether one is stored.
@@ -70,6 +57,7 @@ interface SavedConfigResponse {
   database: {
     type: 'sqlite' | 'postgres';
     builtIn: boolean;
+    builtInSet: boolean;
     host: string;
     port: string;
     username: string;
@@ -80,11 +68,12 @@ interface SavedConfigResponse {
     sslRejectUnauthorized: boolean;
     passwordSet: boolean;
   };
-  redis: { enabled: boolean; builtIn: boolean; host: string; port: string; passwordSet: boolean };
+  redis: { enabled: boolean; builtIn: boolean; builtInSet: boolean; host: string; port: string; passwordSet: boolean };
   queue: { enabled: boolean };
   storage: {
     type: 'local' | 's3';
     builtIn: boolean;
+    builtInSet: boolean;
     localPath: string;
     s3Bucket: string;
     s3Region: string;
@@ -141,7 +130,7 @@ export class InfraConfigController {
     return {
       database: {
         type: effective('DATABASE_TYPE') === 'postgres' ? 'postgres' : 'sqlite',
-        builtIn: effective('POSTGRES_BUILTIN') === 'true',
+        ...savedBuiltInMode('database', saved),
         host: effective('DATABASE_HOST') || '',
         port: effective('DATABASE_PORT') || '',
         username: effective('DATABASE_USERNAME') || '',
@@ -154,7 +143,7 @@ export class InfraConfigController {
       },
       redis: {
         enabled: effective('REDIS_ENABLED') === 'true',
-        builtIn: effective('REDIS_BUILTIN') === 'true',
+        ...savedBuiltInMode('redis', saved),
         host: effective('REDIS_HOST') || '',
         port: effective('REDIS_PORT') || '',
         passwordSet: Boolean(effective('REDIS_PASSWORD')),
@@ -162,7 +151,7 @@ export class InfraConfigController {
       queue: { enabled: effective('QUEUE_ENABLED') === 'true' },
       storage: {
         type: effective('STORAGE_TYPE') === 's3' ? 's3' : 'local',
-        builtIn: effective('MINIO_BUILTIN') === 'true',
+        ...savedBuiltInMode('storage', saved),
         localPath: effective('STORAGE_LOCAL_PATH') || '',
         s3Bucket: effective('S3_BUCKET') || '',
         s3Region: effective('S3_REGION') || '',
@@ -257,12 +246,13 @@ export class InfraConfigController {
     }
 
     // Redis and queue are independent sections: a payload carrying only one of them must
-    // not rewrite (or disable) the other's saved keys.
-    if (config.redis) {
-      applyRedisSection(config.redis, existing, ctx);
-    }
+    // not rewrite (or disable) the other's saved keys. The queue goes first because it reaches Redis
+    // too, and the Redis section reads its new switch.
     if (config.queue) {
       if (config.queue.enabled !== undefined) updates.QUEUE_ENABLED = config.queue.enabled ? 'true' : 'false';
+    }
+    if (config.redis) {
+      applyRedisSection(config.redis, existing, ctx);
     }
 
     if (config.storage) {
@@ -448,17 +438,32 @@ export class InfraConfigController {
     orchestration?: object;
     removal?: object;
   }> {
-    const profiles = body?.profiles || [];
-    // Never stop a bundled service the environment pins the app to (e.g. the documented manual
-    // built-in Postgres with DATABASE_HOST=postgres in .env): that pin outranks the saved config, so
-    // the restarted app would still point at the container and fail to boot.
-    const pinnedToBundled = Object.entries(BUNDLED_SERVICE_ENV)
-      .filter(([, [key, value]]) => isEnvPinned(key) && process.env[key] === value)
-      .map(([profile]) => profile);
+    // Never start a bundled service whose host the environment pins elsewhere: the pin outranks the saved file, so
+    // the next boot dials the pinned host and the container would run with nothing using it.
+    const requestedStart = body?.profiles || [];
+    const pinnedElsewhere = requestedStart.filter(p => hostPinnedElsewhere(p));
+    const profiles = requestedStart.filter(p => !pinnedElsewhere.includes(p));
+    if (pinnedElsewhere.length > 0) {
+      this.logger.warn('Not starting profiles whose host the environment pins elsewhere', { pinnedElsewhere });
+    }
+    // Never stop a bundled service the NEXT boot still dials, whatever the page asked for: the restarted
+    // app would point at a stopped container and fail to boot, with the dashboard that could undo it. The
+    // host it dials is the one the environment pins (e.g. the documented manual built-in Postgres with
+    // DATABASE_HOST=postgres in .env, which outranks the saved config), else the one in the saved file,
+    // which already holds the save that precedes this restart. Any spelling that reaches the container counts (the
+    // container name, another letter case). A host moved away from the bundled name still stops its container.
+    let saved: Record<string, string> | undefined;
+    const dialsBundled = (profile: string): boolean => {
+      const bundled = BUNDLED_SERVICE_ENV[profile];
+      if (!bundled) return false;
+      const [key] = bundled;
+      return namesBundledContainer(profile, isEnvPinned(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key]);
+    };
     const requestedRemoval = body?.profilesToRemove || [];
-    const profilesToRemove = requestedRemoval.filter(p => !pinnedToBundled.includes(p));
-    if (profilesToRemove.length < requestedRemoval.length) {
-      this.logger.warn('Keeping profiles the environment pins the app to', { pinnedToBundled });
+    const keptRunning = requestedRemoval.filter(dialsBundled);
+    const profilesToRemove = requestedRemoval.filter(p => !keptRunning.includes(p));
+    if (keptRunning.length > 0) {
+      this.logger.warn('Keeping profiles the next boot still dials', { keptRunning });
     }
     let orchestrationResult: object | undefined;
     // Teardown is stop-only (see DockerService.stopManagedService): containers are stopped and
@@ -474,9 +479,11 @@ export class InfraConfigController {
       // (re)start. We deliberately do NOT infer teardown from the saved *_BUILTIN flag: the default
       // data/.env.generated carries POSTGRES_BUILTIN=false, so a bare compose-profile restart would
       // otherwise tear down the very backend the app is running on. The dashboard fills this list from the
-      // live /infra/status builtIn flags at save time (running minus the new profiles). A container is
-      // left running when that status read had failed, or when an environment pin keeps the app on it
-      // (dropped above).
+      // live /infra/status at save time: the builtIn services minus the new profiles, plus a running container
+      // OpenWA created whose host the environment pins elsewhere, less any whose next-boot host (the pinned one,
+      // else the saved config read back, else the one the save sent when that read fails) still reaches it, and
+      // less any whose host it cannot tell. A container is left running when that status read had failed, or when
+      // the next boot still dials it (dropped above).
       // Only ever tear down OpenWA-managed services. An arbitrary profile name (or the empty string)
       // would otherwise reach stopManagedService and, via container-name matching, could stop an unrelated
       // container — so constrain teardown to the managed allowlist and drop anything else.

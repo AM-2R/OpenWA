@@ -14,6 +14,8 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       // Fall through to the legacy path (e.g. NotAllowedError outside a user gesture).
     }
   }
+  // Selecting the textarea takes focus, and removing it leaves focus on the page: give it back to where it was.
+  const focused = document.activeElement;
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -24,6 +26,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     ta.select();
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
+    if (focused instanceof HTMLElement) focused.focus();
     return ok;
   } catch {
     return false;

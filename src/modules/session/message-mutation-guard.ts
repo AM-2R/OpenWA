@@ -62,25 +62,37 @@ function isOwnBroadcast(row: StoredMessageRef): boolean {
  * chat with its sender. A change to it names the sender's chat, which is the chat of that message as well,
  * for as long as the row keeps the list id.
  */
-function receivedThroughList(row: StoredMessageRef, chatId: string): boolean {
+function receivedThroughList(
+  row: StoredMessageRef,
+  chatId: string,
+  resolveLid?: (jid: string) => string | null,
+): boolean {
   return (
     row.direction === MessageDirection.INCOMING &&
     entityOf(row.chatId)?.kind === 'broadcast' &&
-    !provablyDifferent(row.author, chatId)
+    !provablyDifferent(row.author, chatId, resolveLid)
   );
 }
 
 /**
  * Whether two ids provably name different chats or people, compared by the entity they name rather than
- * by dialect or spelling. A lid against a phone number may be one person.
+ * by dialect or spelling. A LID and phone match only through a reported directory pairing.
  */
-export function provablyDifferent(a?: string | null, b?: string | null): boolean {
+export function provablyDifferent(
+  a?: string | null,
+  b?: string | null,
+  resolveLid?: (jid: string) => string | null,
+): boolean {
   if (!a || !b || a === b) return false;
   const left = entityOf(a);
   const right = entityOf(b);
   if (!left || !right) return false;
   if (left.kind === right.kind) return left.id !== right.id;
-  return !(isPerson(left.kind) && isPerson(right.kind));
+  if (!isPerson(left.kind) || !isPerson(right.kind)) return true;
+  const lid = left.kind === 'lid' ? a : b;
+  const phone = left.kind === 'user' ? left.id : right.id;
+  const mapped = resolveLid?.(lid);
+  return !mapped || phoneKey(mapped) !== phone;
 }
 
 /**
@@ -103,17 +115,40 @@ export function provablyDifferent(a?: string | null, b?: string | null): boolean
 export function mutationTargetsForeignRow(
   row: StoredMessageRef,
   source: MutationSource,
+  resolveLid?: (jid: string) => string | null,
 ): 'chat' | 'direction' | 'author' | null {
-  const listed = (source.kind === 'reaction' && isOwnBroadcast(row)) || receivedThroughList(row, source.chatId);
-  if (!listed && provablyDifferent(row.chatId, source.chatId)) return 'chat';
+  const listed =
+    (source.kind === 'reaction' && isOwnBroadcast(row)) || receivedThroughList(row, source.chatId, resolveLid);
+  if (!listed && provablyDifferent(row.chatId, source.chatId, resolveLid)) return 'chat';
   const group = source.chatId.endsWith('@g.us') || row.chatId.endsWith('@g.us');
   const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
   if (authorOnly && source.fromMe !== undefined) {
     const expected = source.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING;
     if (row.direction && row.direction !== expected) return 'direction';
   }
-  if (source.kind === 'edit' && group && source.fromMe === false && provablyDifferent(row.author, source.author)) {
+  if (
+    source.kind === 'edit' &&
+    group &&
+    source.fromMe === false &&
+    provablyDifferent(row.author, source.author, resolveLid)
+  ) {
     return 'author';
   }
   return null;
+}
+
+/** Resolve only cross-dialect comparisons through reported directory data; distinct LIDs stay distinct. */
+export async function mutationTargetsForeignRowPersisted(
+  row: StoredMessageRef,
+  source: MutationSource,
+  resolveLid?: (jid: string) => Promise<string | null>,
+): Promise<'chat' | 'direction' | 'author' | null> {
+  if (!resolveLid) return mutationTargetsForeignRow(row, source);
+  const phones = new Map<string, string | null>();
+  await Promise.all(
+    [...new Set([row.chatId, row.author, source.chatId, source.author])].map(async jid => {
+      if (jid && parseWaId(jid).kind === 'lid') phones.set(jid, await resolveLid(jid).catch(() => null));
+    }),
+  );
+  return mutationTargetsForeignRow(row, source, jid => phones.get(jid) ?? null);
 }

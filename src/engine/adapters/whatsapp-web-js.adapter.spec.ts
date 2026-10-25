@@ -28,7 +28,14 @@ import { type WwebjsCalls } from './wwebjs-calls';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import { resolveAuthTimeoutMs, resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { DataSource } from 'typeorm';
+import { EngineRegistry } from '../engine-registry.service';
+import { LidMapping } from '../identity/lid-mapping.entity';
+import { LidMappingStoreService } from '../identity/lid-mapping-store.service';
+import { Session } from '../../modules/session/entities/session.entity';
+import { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
+import { ChatScopeService } from '../../modules/auth/chat-scope.service';
 import * as path from 'path';
 import * as ts from 'typescript';
 import * as vm from 'vm';
@@ -43,6 +50,7 @@ import { RecipientUnreachableError } from '../../common/errors/recipient-unreach
 import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { readCurrentLid } from './wwebjs-contacts';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
@@ -4131,6 +4139,30 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
     return { onMessageEdited, client };
   };
 
+  // The client emits `new Message(client, model)` with the model serialized inside WhatsApp Web's change:body or
+  // change:caption handler, so it holds the values after the change (Client.js, onEditMessageEvent). Built here
+  // with the real structure, whose `body` is the caption of a message with a file and the body attribute otherwise.
+  const WwebjsMessage = jest.requireActual<{ Message: new (client: unknown, data: object) => unknown }>(
+    'whatsapp-web.js',
+  ).Message;
+  const changed = (client: EventEmitter, model: Record<string, unknown>, newBody: unknown, prevBody: unknown): void => {
+    client.emit(
+      'message_edit',
+      new WwebjsMessage(client, {
+        id: { id: 'EDIT1', remote: 'peer@c.us', fromMe: false, _serialized: 'false_peer@c.us_EDIT1' },
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        t: 1700000080,
+        ...model,
+      }),
+      newBody,
+      prevBody,
+    );
+  };
+  const editedBodies = (onMessageEdited: jest.Mock): string[] =>
+    (onMessageEdited.mock.calls as Array<[EditedMessage]>).map(([edit]) => edit.body);
+  const THUMB = '/9j/4AAQSkZJRgABAQAAAQABAAD';
+
   it('emits onMessageEdited with the new body and mapped fields', () => {
     const { onMessageEdited, client } = wireEditHandler();
     const now = jest.spyOn(Date, 'now').mockReturnValue(1700000089123);
@@ -4138,18 +4170,16 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
     try {
       client.emit(
         'message_edit',
-        {
-          id: { _serialized: 'MSG_EDIT_1' },
+        new WwebjsMessage(client, {
+          id: { id: 'MSG_EDIT_1', remote: 'peer@c.us', fromMe: false, _serialized: 'MSG_EDIT_1' },
           from: 'peer@c.us',
           to: 'me@c.us',
           author: 'peer@c.us',
-          body: 'Old text',
+          body: 'Edited new text',
           type: 'chat',
-          fromMe: false,
-          hasMedia: false,
-          mentionedIds: ['mentioned@c.us'],
-          timestamp: 1700000080,
-        },
+          mentionedJidList: ['mentioned@c.us'],
+          t: 1700000080,
+        }),
         'Edited new text',
         'Old text',
       );
@@ -4174,6 +4204,56 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
       mentionedIds: ['mentioned@c.us'],
       timestamp: 1700000089,
     });
+  });
+
+  it('emits the new caption of a media message whose caption changed', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(
+      client,
+      { type: 'image', body: THUMB, caption: 'new caption', directPath: '/v/t62/1', mimetype: 'image/jpeg' },
+      'new caption',
+      'old caption',
+    );
+
+    expect(editedBodies(onMessageEdited)).toEqual(['new caption']);
+    const [[edit]] = onMessageEdited.mock.calls as Array<[EditedMessage]>;
+    expect(edit).toEqual(expect.objectContaining({ type: 'image', hasMedia: true }));
+  });
+
+  it.each([
+    ['the thumbnail of a captioned image', { type: 'image', caption: 'cap', directPath: '/v/t62/1' }],
+    [
+      'the thumbnail of a forwarded video',
+      { type: 'video', caption: 'cap', directPath: '/v/t62/2', isForwarded: true },
+    ],
+    ['the thumbnail of an image without a caption', { type: 'image', directPath: '/v/t62/3' }],
+  ])('emits nothing when only %s changed', (_what, model) => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { ...model, body: `${THUMB}new` }, `${THUMB}new`, `${THUMB}old`);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a changed location preview, which no user edits', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'location', body: `${THUMB}new`, lat: 1, lng: 2 }, `${THUMB}new`, `${THUMB}old`);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a changed caption attribute of a text message, which shows its body', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'chat', body: 'hello', caption: 'stray' }, 'stray', undefined);
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a media message WhatsApp Web holds no file for, whose body attribute is its thumbnail', () => {
+    const { onMessageEdited, client } = wireEditHandler();
+    changed(client, { type: 'image', body: `${THUMB}new`, caption: 'cap' }, `${THUMB}new`, `${THUMB}old`);
+    changed(client, { type: 'image', body: THUMB, caption: 'new caption' }, 'new caption', 'cap');
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
   });
 });
 
@@ -9353,11 +9433,72 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     ['a number with a plus', '+628111'],
   ])('getNumberId answers %s of a migrated contact with the phone id, not its lid', async (_label, input) => {
     const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
-    const adapter = readyAdapter({ getNumberId });
+    const getContactLidAndPhone = jest.fn().mockResolvedValue([{ lid: '159442138038327@lid', pn: '628111@c.us' }]);
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
 
     await expect(adapter.getNumberId(input)).resolves.toBe('628111@c.us');
     await expect(adapter.checkNumberExists(input)).resolves.toBe(true);
     expect(getNumberId).toHaveBeenCalledWith(input);
+    expect(getContactLidAndPhone).toHaveBeenCalledWith(['159442138038327@lid']);
+  });
+
+  // Brazil, Mexico and Argentina numbers exist on WhatsApp under another digit string than the one typed (the
+  // ninth digit). The number check reports the id WhatsApp knows, as the Baileys engine does.
+  it('getNumberId answers the phone WhatsApp holds for a migrated contact, not the digits typed', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const getContactLidAndPhone = jest
+      .fn()
+      .mockResolvedValue([{ lid: '159442138038327@lid', pn: '551187654321@c.us' }]);
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
+
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('551187654321@c.us');
+  });
+
+  it.each([
+    ['no mapping', []],
+    ['an empty phone', [{ lid: '159442138038327@lid', pn: '' }]],
+    ['no phone', [{ lid: '159442138038327@lid' }]],
+  ])('getNumberId keeps the typed number for a migrated contact WhatsApp Web has %s for', async (_label, mapping) => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone: jest.fn().mockResolvedValue(mapping) });
+
+    await expect(adapter.getNumberId('+5511987654321')).resolves.toBe('5511987654321@c.us');
+  });
+
+  it('getNumberId does not read a phone for a contact that is not migrated', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '551187654321@c.us' });
+    const getContactLidAndPhone = jest.fn();
+    const adapter = readyAdapter({ getNumberId, getContactLidAndPhone });
+
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('551187654321@c.us');
+    expect(getContactLidAndPhone).not.toHaveBeenCalled();
+  });
+
+  // The lookup already answered that the number exists; a failed read of its phone (a second page call that can
+  // run a second WhatsApp query) must not turn that answer into a 500.
+  it('getNumberId answers the typed number when the phone read fails, and logs it at debug', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({
+      getNumberId,
+      getContactLidAndPhone: jest.fn().mockRejectedValue(new Error('Evaluation failed')),
+    });
+    const logger = (adapter as unknown as { logger: { debug: (m: string, meta?: unknown) => void } }).logger;
+    const debug = jest.spyOn(logger, 'debug').mockImplementation(() => undefined);
+
+    await expect(adapter.getNumberId('+5511987654321')).resolves.toBe('5511987654321@c.us');
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining('phone'), { error: 'Error: Evaluation failed' });
+    // Existence is all checkNumberExists asks, so the phone read never reaches it.
+    await expect(adapter.checkNumberExists('5511987654321')).resolves.toBe(true);
+  });
+
+  it('getNumberId still answers 503 when the page dies during the phone read', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const adapter = readyAdapter({
+      getNumberId,
+      getContactLidAndPhone: jest.fn().mockRejectedValue(new Error('Protocol error: Target closed')),
+    });
+
+    await expect(adapter.getNumberId('5511987654321')).rejects.toBeInstanceOf(EngineTransportError);
   });
 
   it('getSubscribedChannels reads $1 on a renamed build, never the literal "undefined"', async () => {
@@ -9395,6 +9536,290 @@ describe('WhatsAppWebJsAdapter raw-id extraction hardening', () => {
     expect(info.id).toBe('120363000@g.us');
     expect(info.owner).toBe('628111@c.us');
     expect(info.participantCount).toBe(3);
+  });
+});
+
+/**
+ * The number check of a migrated contact through the library's own page code (Client.getNumberId,
+ * Client.getContactLidAndPhone and the injected WWebJS.enforceLidAndPnRetrieval) against a stand-in
+ * WhatsApp Web, counting the existence queries one check sends.
+ */
+describe('WhatsAppWebJsAdapter number check through the library page code', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  const LID = '159442138038327@lid';
+  const PN = '551187654321@c.us';
+  afterEach(() => {
+    delete g.window;
+  });
+
+  /** The typed number exists under LID; `knownLocally` is whether the page already holds that lid's phone. */
+  function checkOn(page: { knownLocally: boolean; secondQuery?: 'fills' | 'throws' | 'absent' }) {
+    const wid = (id: string) => ({ _serialized: id, server: id.split('@')[1], user: id.split('@')[0] });
+    let mapped = page.knownLocally;
+    const queryWidExists = jest.fn((queried: { server: string }) => {
+      if (queried.server === 'lid') {
+        if (page.secondQuery === 'throws') return Promise.reject(new Error('query failed'));
+        if (page.secondQuery === 'absent') return Promise.resolve({});
+        mapped = true;
+      }
+      return Promise.resolve({ wid: wid(LID) });
+    });
+    const modules: Record<string, unknown> = {
+      WAWebWidFactory: { createWid: wid },
+      WAWebQueryExistsJob: { queryWidExists },
+      WAWebApiContact: { getPhoneNumber: () => (mapped ? wid(PN) : null), getCurrentLid: () => wid(LID) },
+    };
+    g.window = { require: (name: string) => modules[name] };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    (require('whatsapp-web.js/src/util/Injected/Utils.js') as { LoadUtils: () => void }).LoadUtils();
+    const client = Object.assign(Object.create(Client.prototype) as object, {
+      pupPage: { evaluate: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => fn(...args) },
+    });
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return { adapter, queryWidExists };
+  }
+
+  it('sends one query when the page already holds the phone of the lid', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: true });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe(PN);
+    expect(queryWidExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds an unknown lid from the page cache without replacing a newer shared phone or negative', async () => {
+    const pg = process.env.DATABASE_TYPE === 'postgres';
+    const server = {
+      type: 'postgres' as const,
+      host: process.env.DATABASE_HOST || '127.0.0.1',
+      port: Number(process.env.DATABASE_PORT || 5432),
+      username: process.env.DATABASE_USERNAME || 'openwa',
+      password: process.env.DATABASE_PASSWORD || 'openwa',
+      database: process.env.DATABASE_NAME || 'openwa',
+    };
+    const schema = `lid_lookup_${randomUUID().replace(/-/g, '')}`;
+    const admin = pg ? await new DataSource(server).initialize() : undefined;
+    if (admin) await admin.query(`CREATE SCHEMA "${schema}"`);
+    const entities = [LidMapping, Session];
+    const ds = await new DataSource(
+      pg
+        ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+        : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+    ).initialize();
+    const [s1, s2] = ['00000001-0000-4000-8000-000000000000', '00000002-0000-4000-8000-000000000000'];
+    await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id, phone: '6290000000' })));
+    const repo = ds.getRepository(LidMapping);
+    const store = new LidMappingStoreService(repo);
+    const peer = new LidMappingStoreService(repo);
+    await store.onModuleInit();
+    await peer.onModuleInit();
+    const { adapter, queryWidExists } = checkOn({ knownLocally: true });
+    const engines = new EngineRegistry();
+    engines.set(s1, adapter);
+    const resolver = new SessionLidResolver(engines, store);
+    let clock = 0;
+    (resolver as unknown as { now: () => number }).now = () => clock;
+    const pending = new Set<Promise<boolean>>();
+    for (const method of ['remember', 'rememberIfUnknown'] as const) {
+      const real = store[method].bind(store);
+      jest.spyOn(store, method).mockImplementation((...args: Parameters<typeof store.remember>) => {
+        const promise = real(...(args as [string, string, string]));
+        pending.add(promise);
+        void promise.finally(() => pending.delete(promise));
+        return promise;
+      });
+    }
+    const settle = async () => {
+      for (let i = 0; i < 5; i++) {
+        await Promise.allSettled([...pending]);
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
+    try {
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: '551187654321' });
+      await peer.remember('159442138038327', '628222', s2);
+      await store.reload();
+      clock += 300_000;
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(queryWidExists).not.toHaveBeenCalled();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({
+        phone: '628222',
+        sessionId: s2,
+      });
+      await peer.remember('159442138038327', null, s2);
+      await store.reload();
+      clock += 300_000;
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBe('551187654321');
+      await settle();
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null });
+      for (const node of [store, peer]) {
+        const fence = new ChatScopeService(node);
+        const key = { allowedChats: [PN] };
+        expect(await fence.allows(key, LID)).toBe(false);
+        expect((await fence.scopeForFilter(key))!.allowed.has(LID)).toBe(false);
+      }
+      const restarted = new LidMappingStoreService(repo);
+      await restarted.onModuleInit();
+      expect(await restarted.findPhoneForLid(LID)).toBeNull();
+      await store.remember('159442138038327', '551187654321', s1);
+      const hidden = checkOn({ knownLocally: false, secondQuery: 'absent' });
+      engines.set(s1, hidden.adapter);
+      await expect(resolver.resolveSenderPhone(s1, LID)).resolves.toBeNull();
+      await settle();
+      expect(hidden.queryWidExists).toHaveBeenCalledTimes(1);
+      expect(await repo.findOne({ where: { lid: '159442138038327' } })).toMatchObject({ phone: null, sessionId: s1 });
+    } finally {
+      await ds.destroy();
+      if (admin) {
+        await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+        await admin.destroy();
+      }
+    }
+  });
+
+  it('sends a second query when the page does not, and answers the phone it reads', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'fills' });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe(PN);
+    expect(queryWidExists).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers the typed number when that second query fails', async () => {
+    const { adapter, queryWidExists } = checkOn({ knownLocally: false, secondQuery: 'throws' });
+    await expect(adapter.getNumberId('5511987654321')).resolves.toBe('5511987654321@c.us');
+    expect(queryWidExists).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * WhatsApp Web keys a migrated contact's chat by its LID, so the picture lookup by its phone id can come back
+ * empty or fail where the LID form answers. The lookup is retried once by the LID the page already holds.
+ */
+describe('WhatsAppWebJsAdapter profile picture of a migrated contact', () => {
+  const PHONE = '628111@c.us';
+  const LID = '159442138038327@lid';
+  const URL = 'https://pps.whatsapp.net/v/avatar.jpg';
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  /** A client whose picture lookup answers per id (a value, or an Error to throw), on a page holding `lid`. */
+  const clientWith = (answers: Record<string, string | undefined | Error>, lid: string | null = LID) => {
+    const getProfilePicUrl = jest.fn((id: string) => {
+      const answer = answers[id];
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    });
+    const evaluate = jest.fn().mockResolvedValue(lid);
+    return { getProfilePicUrl, pupPage: { evaluate } };
+  };
+
+  it('answers the phone form without reading the LID when it works', async () => {
+    const client = clientWith({ [PHONE]: URL });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(URL);
+    expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['answers nothing', undefined],
+    ['fails in the page', new Error("Cannot read properties of undefined (reading 'id')")],
+  ])('retries by the LID when the phone form %s', async (_label, phoneAnswer) => {
+    const client = clientWith({ [PHONE]: phoneAnswer, [LID]: URL });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(URL);
+    expect(client.pupPage.evaluate).toHaveBeenCalledWith(expect.any(Function), PHONE);
+    expect(client.getProfilePicUrl.mock.calls).toEqual([[PHONE], [LID]]);
+  });
+
+  it.each([
+    ['nothing, then nothing', undefined, undefined, null],
+    ['nothing, then a failure', undefined, new Error('lid lookup failed'), null],
+  ])('answers as before when both forms give %s', async (_label, phoneAnswer, lidAnswer, expected) => {
+    const client = clientWith({ [PHONE]: phoneAnswer, [LID]: lidAnswer });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBe(expected);
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['nothing', undefined],
+    ['a failure', new Error('lid lookup failed')],
+  ])('answers 503 as before when the phone form fails and the LID form gives %s', async (_label, lidAnswer) => {
+    const client = clientWith({ [PHONE]: new Error('phone lookup failed'), [LID]: lidAnswer });
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).rejects.toBeInstanceOf(EngineTransportError);
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a page that dies during the retry and keeps the first answer', async () => {
+    const client = clientWith({
+      [PHONE]: undefined,
+      [LID]: new Error('Protocol error (Runtime.callFunctionOn): Target closed.'),
+    });
+    const adapter = readyAdapter(client);
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+    await expect(adapter.getProfilePicture(PHONE)).resolves.toBeNull();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when the page holds no LID for the phone', async () => {
+    const client = clientWith({ [PHONE]: undefined }, null);
+    await expect(readyAdapter(client).getProfilePicture(PHONE)).resolves.toBeNull();
+    expect(client.getProfilePicUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry after a dead page or a protocol timeout', async () => {
+    for (const failure of [
+      new Error('Protocol error: Connection closed. Target closed'),
+      new Error("Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls"),
+    ]) {
+      const client = clientWith({ [PHONE]: failure, [LID]: URL });
+      await expect(readyAdapter(client).getProfilePicture(PHONE)).rejects.toBeInstanceOf(EngineTransportError);
+      expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['a group', '120363000000000001@g.us'],
+    ['a LID', LID],
+  ])('does not retry for %s', async (_label, id) => {
+    const client = clientWith({ [id]: undefined });
+    await expect(readyAdapter(client).getProfilePicture(id)).resolves.toBeNull();
+    expect(client.pupPage.evaluate).not.toHaveBeenCalled();
+  });
+
+  describe('readCurrentLid, the in-page read', () => {
+    const g = globalThis as unknown as { window?: unknown };
+    afterEach(() => {
+      delete g.window;
+    });
+    const pageHolding = (lid: { _serialized?: string; $1?: string } | null) => {
+      const queryWidExists = jest.fn();
+      const getCurrentLid = jest.fn(() => lid);
+      const modules: Record<string, unknown> = {
+        WAWebWidFactory: { createWid: (id: string) => ({ _serialized: id }) },
+        WAWebApiContact: { getCurrentLid },
+        WAWebQueryExistsJob: { queryWidExists },
+      };
+      g.window = { require: (name: string) => modules[name] };
+      return { getCurrentLid, queryWidExists };
+    };
+
+    it('reads the LID the page holds for a phone id, in either property name, and queries nothing', () => {
+      const page = pageHolding({ _serialized: LID });
+      expect(readCurrentLid(PHONE)).toBe(LID);
+      expect(page.getCurrentLid).toHaveBeenCalledWith({ _serialized: PHONE });
+      expect(page.queryWidExists).not.toHaveBeenCalled();
+      pageHolding({ $1: LID });
+      expect(readCurrentLid(PHONE)).toBe(LID);
+    });
+
+    it('answers null when the page holds none', () => {
+      pageHolding(null);
+      expect(readCurrentLid(PHONE)).toBeNull();
+    });
   });
 });
 

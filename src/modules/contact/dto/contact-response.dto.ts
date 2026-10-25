@@ -80,7 +80,9 @@ export class NumberCheckResponseDto {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: "The canonical chat id in the engine's native format, or null when the number is not registered.",
+    description:
+      'The chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines ' +
+      '(it can differ from the digits supplied), or null when the number is not registered.',
     example: '628123456789@c.us',
   })
   whatsappId!: string | null;

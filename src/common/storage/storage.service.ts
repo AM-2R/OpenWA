@@ -274,20 +274,24 @@ export class StorageService implements OnModuleDestroy {
    * `prefix` narrows the walk at the source (the S3 ListObjectsV2 prefix and the local traversal
    * root), so a caller reconciling one subtree neither pages the whole store nor holds every key
    * of it in the dedupe Set.
+   *
+   * A local directory the walk cannot read fails it, so no caller is handed a short listing without
+   * knowing. `skipUnreadable` is for a caller that only acts on the files it was shown (an orphan
+   * sweep): the directory is named in a warning and left alone.
    */
-  async *iterateFiles(prefix = ''): AsyncGenerator<string> {
+  async *iterateFiles(prefix = '', options: { skipUnreadable?: boolean } = {}): AsyncGenerator<string> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       const seen = new Set<string>();
       for await (const file of this.iterateS3Files(prefix)) {
         seen.add(file);
         yield file;
       }
-      for await (const file of this.iterateLocalFiles(prefix)) {
+      for await (const file of this.iterateLocalFiles(prefix, options.skipUnreadable)) {
         if (!seen.has(file)) yield file;
       }
       return;
     }
-    yield* this.iterateLocalFiles(prefix);
+    yield* this.iterateLocalFiles(prefix, options.skipUnreadable);
   }
 
   async getFile(filePath: string): Promise<Buffer> {
@@ -358,7 +362,7 @@ export class StorageService implements OnModuleDestroy {
       const s3Keys = new Set(s3.keys);
       let { count, sizeBytes } = s3;
       for await (const file of this.iterateLocalFiles()) {
-        if (s3Keys.has(file)) continue;
+        if (s3Keys.has(file) || !this.isExportableKey(file)) continue;
         count += 1;
         try {
           // Same reason as the local branch below: the walk covers the whole store, so the stat must yield.
@@ -372,7 +376,7 @@ export class StorageService implements OnModuleDestroy {
 
     // The whole store is walked, for the same reason createExportStream does: this is the pre-check an
     // operator runs BEFORE the export/import migration, so it has to see every file the export will carry.
-    const files = await this.listAllFiles();
+    const files = await this.listExportableFiles();
     let sizeBytes = 0;
     for (const file of files) {
       try {
@@ -409,7 +413,7 @@ export class StorageService implements OnModuleDestroy {
 
       for (const obj of response.Contents ?? []) {
         const key = this.stripS3KeyRoot(obj.Key);
-        if (key === null) continue;
+        if (key === null || !this.isExportableKey(key)) continue;
         count += 1;
         sizeBytes += obj.Size ?? 0;
         keys.push(key);
@@ -433,25 +437,31 @@ export class StorageService implements OnModuleDestroy {
     // root) is left out here: the export fails on any open error other than a missing object, and a
     // key that can never be opened must not fail every export.
     return createExportStream(
-      async () => (await this.listAllFiles()).filter(file => this.isExportableKey(file)),
+      () => this.listExportableFiles(),
       filePath => this.openFile(filePath),
       this.logger,
     );
   }
 
+  /**
+   * Whether the export carries a listed key. The file count applies the same rule, so the pre-check never
+   * promises a file the archive will not hold.
+   */
   private isExportableKey(file: string): boolean {
     // A key ending in "/" is a folder placeholder an S3 console leaves behind: it holds no file, and written to
     // the archive as one it would fail the import that restores it onto a local store.
     if (file.endsWith('/')) return false;
     if (isSafeStorageKey(file)) return true;
-    this.logger.warn(`Skipping an unsafe storage key in the export: ${JSON.stringify(file)}`);
+    this.logger.warn(`Leaving an unsafe storage key out of the export and the file count: ${JSON.stringify(file)}`);
     return false;
   }
 
-  /** Every key in the store. */
-  private async listAllFiles(): Promise<string[]> {
+  /** Every key in the store that the export carries. */
+  private async listExportableFiles(): Promise<string[]> {
     const files: string[] = [];
-    for await (const file of this.iterateFiles()) files.push(file);
+    for await (const file of this.iterateFiles()) {
+      if (this.isExportableKey(file)) files.push(file);
+    }
     return files;
   }
 
@@ -469,8 +479,8 @@ export class StorageService implements OnModuleDestroy {
    * media tree can't block the event loop or stack-overflow; still bounded by the max directory
    * depth so a pathological tree can't descend unbounded.
    */
-  private iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
-    return iterateLocalFiles(this.localPath, prefix);
+  private iterateLocalFiles(prefix = '', skipUnreadable = false): AsyncGenerator<string> {
+    return iterateLocalFiles(this.localPath, prefix, { skipUnreadable, logger: this.logger });
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {

@@ -41,6 +41,7 @@
             "name": "severity",
             "required": false,
             "in": "query",
+            "description": "`error` is reserved: nothing writes it, so that filter returns no rows.",
             "schema": {
               "enum": [
                 "info",
@@ -660,6 +661,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On SQLite, another database transaction stayed open for 10 s; nothing was stored, so retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Create a new WhatsApp session",
@@ -878,7 +889,7 @@
             }
           },
           "409": {
-            "description": "A credential teardown for the same session name is still in flight (retryable — the body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; wait for it to settle and retry), OR another node currently holds this session's live engine and deleting it here would strip a session the owner is running. No destructive side effect runs before either refusal.",
+            "description": "A credential teardown for the same session name is still in flight (retryable: the body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; wait for it to settle and retry), OR another node currently holds this session's live engine and deleting it here would strip a session the owner is running, OR ownership changes while deletion runs. The first two refusals remove nothing. Ownership loss stops later deletion units; earlier batches may already be committed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4531,7 +4542,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4652,7 +4663,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4803,7 +4814,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4953,7 +4964,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5104,7 +5115,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5255,7 +5266,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5397,7 +5408,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5538,7 +5549,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5688,7 +5699,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5832,7 +5843,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5963,7 +5974,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6076,7 +6087,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6197,7 +6208,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6249,7 +6260,7 @@
             }
           },
           "400": {
-            "description": "Session not active or message not found",
+            "description": "Session not active or invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -6299,7 +6310,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6839,7 +6850,7 @@
             }
           },
           "400": {
-            "description": "Session not active or message not found",
+            "description": "Session not active or invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -6889,7 +6900,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken). WhatsApp did not answer within the request budget. The change may or may not have been applied — the gateway stopped waiting for a confirmation that never came.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7103,7 +7114,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. The whatsapp-web.js page connection died mid-request. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken). The whatsapp-web.js page connection died mid-request. The pin may or may not have been applied; a retry is safe, but it restarts the pin duration from the moment it succeeds.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7205,7 +7216,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7409,7 +7420,7 @@
             }
           },
           "503": {
-            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
+            "description": "Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken). The whatsapp-web.js page connection died mid-request. The change may or may not have been applied; repeating the request is safe, since it converges on the same state.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8548,6 +8559,16 @@
               }
             }
           },
+          "409": {
+            "description": "The local storage directory cannot be enumerated completely, so the answer would silently leave files out: it holds a symbolic link, a directory the app cannot read, or one nested too deep. `message` names the path relative to the storage root and the cause. Replace a link with a bind mount or fix the permissions, then retry; nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "STORAGE_TYPE is s3 but the bucket is unreachable or its credentials are missing; nothing was read or written.",
             "content": {
@@ -8592,6 +8613,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The local storage directory cannot be enumerated completely, so the answer would silently leave files out: it holds a symbolic link, a directory the app cannot read, or one nested too deep. `message` names the path relative to the storage root and the cause. Replace a link with a bind mount or fix the permissions, then retry; nothing was written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10084,7 +10115,7 @@
             }
           }
         },
-        "summary": "Get group settings (announce / locked / ephemeral timer)",
+        "summary": "Get group settings (announce / locked / ephemeral timer / member-add mode)",
         "tags": [
           "groups"
         ]
@@ -10133,7 +10164,7 @@
             }
           },
           "400": {
-            "description": "No setting provided, or a value is not a boolean",
+            "description": "No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, `ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. Also answered when the session is not started (no engine is running for it).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10203,7 +10234,7 @@
             }
           }
         },
-        "summary": "Update group settings (announce / locked / ephemeral timer)",
+        "summary": "Update group settings (announce / locked / ephemeral timer / member-add mode)",
         "tags": [
           "groups"
         ]
@@ -14695,7 +14726,7 @@
             }
           },
           "503": {
-            "description": "The whatsapp-web.js page connection died mid-request, so the revoke did not complete. Safe to retry: revoking an already-revoked status converges. The status POST routes deliberately do NOT answer this, because a replayed post would publish the status a second time.",
+            "description": "The whatsapp-web.js page connection died mid-request, so the revoke did not complete. Safe to retry: revoking an already-revoked status converges. The status POST routes deliberately do NOT answer this for whatsapp-web.js, because a replayed post would publish the status a second time. On Baileys, also when WhatsApp rate-limits the revoke (code 429) or times out a query it awaits (code 408).",
             "content": {
               "application/json": {
                 "schema": {
@@ -14864,6 +14895,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On Baileys, WhatsApp can answer the post with a 503: it rate-limited the request (code 429: nothing was posted) or timed out a query the post awaits (code 408: the outcome is not proven, so the post may have been published).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Post a text status",
@@ -14967,7 +15008,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. On Baileys, WhatsApp can answer the post with a 503: it rate-limited the request (code 429: nothing was posted) or timed out a query the post awaits (code 408: the outcome is not proven, so the post may have been published).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15078,7 +15119,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. On Baileys, WhatsApp can answer the post with a 503: it rate-limited the request (code 429: nothing was posted) or timed out a query the post awaits (code 408: the outcome is not proven, so the post may have been published).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15189,7 +15230,7 @@
             }
           },
           "503": {
-            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`. On Baileys, WhatsApp can answer the post with a 503: it rate-limited the request (code 429: nothing was posted) or timed out a query the post awaits (code 408: the outcome is not proven, so the post may have been published).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15849,7 +15890,7 @@
             }
           },
           "503": {
-            "description": "WhatsApp did not answer the catalog query within the request budget, or rate-limited it. For some business accounts WhatsApp never answers it, so a retry may not help. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure.",
+            "description": "WhatsApp did not answer the catalog query within the request budget, or rate-limited it. For some business accounts WhatsApp never answers it, so a retry may not help. Baileys could not complete the recipient lookup within the request budget. On send routes, no message was handed to WhatsApp for this lookup failure. On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed send keeps its `Idempotency-Key` taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -16945,7 +16986,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17012,7 +17053,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17079,7 +17120,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17146,7 +17187,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17213,7 +17254,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17280,7 +17321,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17347,7 +17388,7 @@
             "description": "Rate limit exceeded: the per-instance bucket (INGRESS_INSTANCE_LIMIT) or the per-client-IP bucket (INGRESS_IP_LIMIT). The `Retry-After-instance` / `Retry-After-ingress-ip` header names which one shed the request, and a plain `Retry-After` carries the same delay for a client that reads only the standard name."
           },
           "503": {
-            "description": "A route whose response contract declares a `session-alive` preflight, when the bound session has no running engine or its engine has failed (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay."
+            "description": "A route that declares a response contract, while its plugin is still being restored after startup or when its `session-alive` preflight finds the bound session with no running engine or a failed one (a starting, reconnecting or QR-pending session is answered with the route's ack). The delivery is not persisted, so the provider's retry is treated as a new one; `Retry-After` carries the delay. A route without a response contract is accepted while its plugin restores."
           }
         },
         "tags": [
@@ -17781,6 +17822,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "On SQLite, another database transaction stayed open for 10 s; nothing was deleted, so retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -17883,7 +17934,7 @@
             "name": "chatId",
             "required": false,
             "in": "query",
-            "description": "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+            "description": "Restrict to a single chat id. With the built-in search provider, a phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it); a plugin provider receives the id as sent.",
             "schema": {
               "type": "string"
             }
@@ -17892,7 +17943,7 @@
             "name": "from",
             "required": false,
             "in": "query",
-            "description": "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+            "description": "Sender filter. With the built-in search provider, matches `from` or a group message's `author`, and a phone also matches any lid that resolves to it; a plugin provider receives the id as sent.",
             "schema": {
               "type": "string"
             }
@@ -17925,6 +17976,8 @@
             "in": "query",
             "description": "Epoch-ms lower bound (inclusive)",
             "schema": {
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "type": "number"
             }
           },
@@ -17934,6 +17987,8 @@
             "in": "query",
             "description": "Epoch-ms upper bound (inclusive)",
             "schema": {
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "type": "number"
             }
           },
@@ -19190,10 +19245,11 @@
           },
           "muteUntil": {
             "type": "integer",
-            "description": "Absolute epoch-MILLISECONDS timestamp at which the mute expires, or `null` to unmute now. Required — omitting it is rejected rather than guessed, because the two plausible readings (unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp. Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires immediately while the request still answers 200.",
+            "description": "Absolute epoch-MILLISECONDS timestamp at which the mute expires, or `null` to unmute now. Required — omitting it is rejected rather than guessed, because the two plausible readings (unmute vs mute forever) are opposites. To mute indefinitely, send a far-future timestamp, no later than 9007199254740991 (Number.MAX_SAFE_INTEGER, the largest integer a JSON number carries exactly). Milliseconds, not seconds: a seconds-scale value is an instant in 1970, so the mute expires immediately while the request still answers 200.",
             "example": 1800000000000,
             "nullable": true,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -21851,8 +21907,13 @@
           },
           "builtIn": {
             "type": "boolean",
-            "description": "Whether OpenWA's own bundled container is actually running and backing this service, detected live from the labelled container rather than read from the saved intent. Falls back to the saved flag when Docker is unavailable.",
+            "description": "Whether OpenWA's own bundled container is actually running and backing this service, detected live from the labelled container rather than read from the saved intent. When Docker is unavailable it falls back to the saved flag (the environment's first) beside a host that reaches the bundled container: neither a host name nor the flag alone proves it.",
             "example": true
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled PostgreSQL container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
+            "example": false
           }
         },
         "required": [
@@ -21887,6 +21948,11 @@
             "type": "boolean",
             "description": "Whether OpenWA's bundled Redis container is backing this.",
             "example": true
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled Redis container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
+            "example": false
           }
         },
         "required": [
@@ -21965,9 +22031,19 @@
             "description": "Bucket name. Present only for `s3`.",
             "example": "openwa-media"
           },
+          "endpoint": {
+            "type": "string",
+            "description": "S3 endpoint the app is configured to reach. Present only for `s3` with an endpoint set; absent for the default AWS endpoint.",
+            "example": "http://minio:9000"
+          },
           "builtIn": {
             "type": "boolean",
             "description": "Whether OpenWA's bundled MinIO container is backing this.",
+            "example": false
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether a bundled MinIO container OpenWA created is running, whether or not this service uses it, beside this instance's built-in flag (the environment's first). False for one Docker Compose created, or with the flag not set; absent when Docker is unreachable, where nothing can be seen or stopped.",
             "example": false
           },
           "s3Available": {
@@ -22209,6 +22285,11 @@
             "type": "boolean",
             "example": true
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the saved configuration states the built-in mode of this service. False when a host pinned by the environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not select the service (the first boot writes every flag as false next to a service that is not in use), when the file holds the bundled host with the flag not true (the next boot dials the container, builtIn is true), and when nothing is saved. When false, read what runs from /infra/status.",
+            "example": true
+          },
           "host": {
             "type": "string",
             "example": "openwa-postgres"
@@ -22252,6 +22333,7 @@
         "required": [
           "type",
           "builtIn",
+          "builtInSet",
           "host",
           "port",
           "username",
@@ -22274,6 +22356,11 @@
             "type": "boolean",
             "example": true
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the saved configuration states the built-in mode of this service. False when a host pinned by the environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not select the service (the first boot writes every flag as false next to a service that is not in use), when the file holds the bundled host with the flag not true (the next boot dials the container, builtIn is true), and when nothing is saved. When false, read what runs from /infra/status.",
+            "example": true
+          },
           "host": {
             "type": "string",
             "example": "openwa-redis"
@@ -22292,6 +22379,7 @@
         "required": [
           "enabled",
           "builtIn",
+          "builtInSet",
           "host",
           "port",
           "passwordSet"
@@ -22324,9 +22412,14 @@
             "type": "boolean",
             "example": false
           },
+          "builtInSet": {
+            "type": "boolean",
+            "description": "Whether the saved configuration states the built-in mode of this service. False when a host pinned by the environment decides it (builtIn then reports the pin: true for the bundled host), when the saved file does not select the service (the first boot writes every flag as false next to a service that is not in use), when the file holds the bundled host with the flag not true (the next boot dials the container, builtIn is true), and when nothing is saved. When false, read what runs from /infra/status.",
+            "example": true
+          },
           "localPath": {
             "type": "string",
-            "example": "./data/storage"
+            "example": "./data/media"
           },
           "s3Bucket": {
             "type": "string",
@@ -22349,6 +22442,7 @@
         "required": [
           "type",
           "builtIn",
+          "builtInSet",
           "localPath",
           "s3Bucket",
           "s3Region",
@@ -22418,7 +22512,8 @@
             "enum": [
               "sqlite",
               "postgres"
-            ]
+            ],
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins another selection than the stored one, a section without it writes nothing."
           },
           "builtIn": {
             "type": "boolean"
@@ -22450,10 +22545,7 @@
           "sslRejectUnauthorized": {
             "type": "boolean"
           }
-        },
-        "required": [
-          "type"
-        ]
+        }
       },
       "RedisConfigDto": {
         "type": "object",
@@ -22491,7 +22583,8 @@
             "enum": [
               "local",
               "s3"
-            ]
+            ],
+            "description": "Absent keeps the stored selection, which the rest of the section then applies to. While the environment pins another selection than the stored one, a section without it writes nothing."
           },
           "builtIn": {
             "type": "boolean"
@@ -22514,10 +22607,7 @@
           "s3Endpoint": {
             "type": "string"
           }
-        },
-        "required": [
-          "type"
-        ]
+        }
       },
       "EngineConfigDto": {
         "type": "object",
@@ -23284,7 +23374,7 @@
           "whatsappId": {
             "type": "string",
             "nullable": true,
-            "description": "The canonical chat id in the engine's native format, or null when the number is not registered.",
+            "description": "The chat id WhatsApp holds for the number, in the neutral `<phone>@c.us` form on both engines (it can differ from the digits supplied), or null when the number is not registered.",
             "example": "628123456789@c.us"
           }
         },
@@ -25421,7 +25511,7 @@
           "batchSize": {
             "type": "number",
             "description": "The bounded batch size this call processed.",
-            "example": 25
+            "example": 100
           }
         },
         "required": [

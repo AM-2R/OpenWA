@@ -75,6 +75,23 @@ describe('App smoke (e2e)', () => {
     return request(app.getHttpServer()).get('/api/sessions').expect(401);
   });
 
+  // A driver refuses an OFFSET of 2^63 or more, so a window that far out answered 500 instead of an
+  // empty page. Through the real controllers, query parsing and services, on the database the app booted.
+  it('GET the session and message lists answer an empty page for an offset past the largest safe integer', async () => {
+    const { rawKey } = await app.get(AuthService).createApiKey({ name: 'e2e-offset', role: ApiKeyRole.VIEWER });
+    const offset = '99999999999999999999';
+
+    const sessions = await request(app.getHttpServer()).get(`/api/sessions?offset=${offset}`).set('X-API-Key', rawKey);
+    expect(sessions.status).toBe(200);
+    expect(sessions.body).toEqual([]);
+
+    const messages = await request(app.getHttpServer())
+      .get(`/api/sessions/0a941dac-a965-45e7-b318-74ae8be134f0/messages?offset=${offset}`)
+      .set('X-API-Key', rawKey);
+    expect(messages.status).toBe(200);
+    expect(messages.body).toMatchObject({ messages: [], total: 0 });
+  });
+
   it('GET an unknown route returns 404', () => {
     return request(app.getHttpServer()).get('/api/this-route-does-not-exist').expect(404);
   });

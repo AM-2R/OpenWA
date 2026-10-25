@@ -8,6 +8,8 @@ use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\ConnectTimeoutException;
 use GuzzleHttp\Exception\NetworkTimeoutException;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Exception\ResponseException;
 use GuzzleHttp\Exception\ResponseTimeoutException;
 use OpenWA\Exceptions\OpenWAApiException;
 use OpenWA\Exceptions\OpenWAException;
@@ -207,6 +209,8 @@ class HttpExecutor
      */
     private function send(string $method, string $path, array $query, $body, ?string $idempotencyKey = null): ResponseInterface
     {
+        // Guzzle 7 upper-cased the method itself; Guzzle 8 sends it as written, and the gateway refuses "get".
+        $method = strtoupper($method);
         if ($idempotencyKey !== null && preg_match('/\A[\x21-\x7E]{1,255}\z/', $idempotencyKey) !== 1) {
             throw new \InvalidArgumentException('Idempotency-Key must contain 1-255 visible ASCII characters');
         }
@@ -240,6 +244,12 @@ class HttpExecutor
                 'Accept' => 'application/json',
             ]),
         ];
+        // Guzzle 8's stream handler also stops a connection that stays silent for 60 s (read_timeout, 0 disables
+        // it), which would cut off a longer timeout or none. Guzzle 7 reads the option differently (0 and
+        // fractions end reads at once), so only 8 is told; cURL handlers ignore it.
+        if (ClientInterface::MAJOR_VERSION >= 8) {
+            $options['read_timeout'] = $this->timeout;
+        }
         if ($idempotencyKey !== null) {
             $options['headers']['Idempotency-Key'] = $idempotencyKey;
         }
@@ -254,6 +264,7 @@ class HttpExecutor
             $options['json'] = $body;
         }
 
+        $started = hrtime(true);
         try {
             $response = $this->http->request($method, $url, $options);
         } catch (ConnectTimeoutException | NetworkTimeoutException | ResponseTimeoutException $e) {
@@ -262,7 +273,12 @@ class HttpExecutor
             // Guzzle 7 exposes cURL errno 28 in the context; custom transports may only supply a message.
             $errno = method_exists($e, 'getHandlerContext') ? ($e->getHandlerContext()['errno'] ?? null) : null;
             $isTimeout = $errno === 28 || str_contains($e->getMessage(), 'timed out');
-            if ($isTimeout) {
+            if ($isTimeout || $this->failedAfterTimeout($e, $started)) {
+                throw new OpenWATimeoutException($this->timeout);
+            }
+            throw $e;
+        } catch (RequestException $e) {
+            if ($this->failedAfterTimeout($e, $started)) {
                 throw new OpenWATimeoutException($this->timeout);
             }
             throw $e;
@@ -276,6 +292,24 @@ class HttpExecutor
             throw $this->buildApiException($response, $method, $path);
         }
         return $response;
+    }
+
+    /**
+     * Guzzle's stream handler (a host without ext-curl) reports a gateway that stays silent past the timeout
+     * as a plain ConnectException (before the headers, Guzzle 7) or a RequestException without a response
+     * (before the headers on Guzzle 8, in the middle of the body on Guzzle 7): no errno, no timeout text.
+     * Such a failure is a timeout when it took at least the whole timeout. cURL failures carry their own
+     * "cURL error" text and are left alone, and a timeout of 0 (no bound) never matches.
+     *
+     * The start is hrtime(true), an int on 64-bit PHP and a float on 32-bit PHP.
+     */
+    private function failedAfterTimeout(\Throwable $e, int|float $startedNs): bool
+    {
+        return $this->timeout > 0
+            && (hrtime(true) - $startedNs) / 1e9 >= $this->timeout
+            && !str_starts_with($e->getMessage(), 'cURL error')
+            && !$e instanceof ResponseException
+            && !(method_exists($e, 'hasResponse') && $e->hasResponse());
     }
 
     private function buildApiException(ResponseInterface $response, string $method, string $path): OpenWAApiException

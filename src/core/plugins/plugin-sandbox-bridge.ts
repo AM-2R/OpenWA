@@ -11,6 +11,7 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
+import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
@@ -576,23 +577,32 @@ export class PluginSandboxBridge {
         state.dropped++;
         return;
       }
-      // Like the level below, the message and meta come off the wire unchecked: a non-string message is coerced
-      // before the length check, and a meta whose JSON form exceeds the same cap is replaced by a size
-      // marker (not a truncated string, which would hide its keys from the logger's secret redaction).
+      // Like the level below, the message and meta come off the wire unchecked: a non-string message is replaced by
+      // a fixed marker (turning an array into text would write a shared reference out at every use), and a meta
+      // whose text, as the logger writes it (metaText), exceeds the same cap is replaced by a size marker (not a
+      // truncated string, which would hide its keys from the logger's secret redaction).
       // logger.error's reason travels as a string meta.error, so that one key survives the replacement.
       const truncate = (value: string): string =>
         value.length > SANDBOX_LOG_MAX_MESSAGE_LENGTH
           ? `${value.slice(0, SANDBOX_LOG_MAX_MESSAGE_LENGTH)}…[truncated]`
           : value;
-      const bounded = truncate(typeof message === 'string' ? message : String(message));
+      const bounded = truncate(typeof message === 'string' ? message : '[non-string log message]');
       let boundedMeta = meta;
       if (meta !== undefined) {
         const reason = typeof meta?.error === 'string' ? { error: truncate(meta.error) } : undefined;
-        try {
-          const metaLength = JSON.stringify(meta).length;
-          if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH) boundedMeta = { ...reason, metaTruncated: true, metaLength };
-        } catch {
-          boundedMeta = reason; // not serializable (circular or BigInt), so it cannot be logged as JSON anyway
+        // A count past the size limit (values, string characters and property name characters) marks a meta that is
+        // replaced without being written out. The text is only built, to learn its length, for a meta under the
+        // limit: building it for any other could take seconds, as a shared reference is written out at every use.
+        if (countMetaValues(meta, SANDBOX_LOG_MAX_MESSAGE_LENGTH) > SANDBOX_LOG_MAX_MESSAGE_LENGTH) {
+          boundedMeta = { ...reason, metaTruncated: true };
+        } else {
+          try {
+            const metaLength = (metaText(meta) ?? '').length;
+            if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH)
+              boundedMeta = { ...reason, metaTruncated: true, metaLength };
+          } catch {
+            boundedMeta = reason; // circular, or holding a BigInt, whose text is not built on the host
+          }
         }
       }
       // The level comes off the wire unchecked (plugin code can post to parentPort directly), and the

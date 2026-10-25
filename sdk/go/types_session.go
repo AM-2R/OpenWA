@@ -256,12 +256,13 @@ type SessionStatsOverview struct {
 	Active       int            `json:"active"`
 	Ready        int            `json:"ready"`
 	Disconnected int            `json:"disconnected"`
-	ByStatus     map[string]int `json:"byStatus,omitempty"`
+	ByStatus     map[string]int `json:"byStatus"`
 	MemoryUsage  MemoryUsage    `json:"memoryUsage"`
 }
 
 // SessionConfig is a session's effective runtime configuration. A nil MaxReconnectAttempts means
-// unlimited — not unset.
+// unlimited — not unset. AutoRejectCalls works on Baileys only: whatsapp-web.js stores the flag but
+// cannot reject a call, so calls keep ringing there.
 type SessionConfig struct {
 	AutoRejectCalls      bool `json:"autoRejectCalls"`
 	MaxReconnectAttempts *int `json:"maxReconnectAttempts"`
@@ -269,8 +270,9 @@ type SessionConfig struct {
 }
 
 // UpdateSessionConfigRequest is a partial update of a session's config, merged in any session state
-// with no restart, re-link or QR scan. AutoRejectCalls applies immediately; MaxReconnectAttempts and
-// ReconnectBaseDelay apply on the next start.
+// with no restart, re-link or QR scan. AutoRejectCalls applies immediately, on Baileys only (whatsapp-web.js
+// stores the flag but cannot reject a call); MaxReconnectAttempts and ReconnectBaseDelay apply on the
+// next start.
 //
 // The route needs THREE states per field, not two: a key that is absent leaves the value unchanged, a
 // key sent as explicit null clears it back to the default, and a value sets it. A `*int` with

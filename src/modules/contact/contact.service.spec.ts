@@ -294,9 +294,81 @@ describe('ContactService', () => {
       ['the engine dialect', '628123456789@s.whatsapp.net'],
       ['a bare number', '628123456789'],
     ])('still accepts %s', async (_label, id) => {
-      const upsertContact = jest.fn();
+      const upsertContact = jest.fn().mockResolvedValue(undefined);
       await makeService({ upsertContact }).upsertContact('s1', id, 'Ada');
       expect(upsertContact).toHaveBeenCalled();
+    });
+  });
+
+  describe('one engine read per walk', () => {
+    const contactsOf = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: `${prefix}${i}@c.us` }));
+    const walk = async (svc: ContactService, sessionId = 's1') => {
+      const ids: string[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        const page = (await svc.getContacts(sessionId, { limit: 1000, offset })) as { id: string }[];
+        ids.push(...page.map(c => c.id));
+        if (page.length < 1000) return ids;
+      }
+    };
+
+    it('reads the engine once for every page of one walk, and afresh for the next walk', async () => {
+      const getContacts = jest.fn().mockResolvedValue(contactsOf('62', 5000));
+      const svc = makeService({ getContacts });
+      expect(new Set(await walk(svc)).size).toBe(5000);
+      expect(getContacts).toHaveBeenCalledTimes(1);
+      await walk(svc);
+      expect(getContacts).toHaveBeenCalledTimes(2);
+    });
+
+    it("never serves one session's listing to another session", async () => {
+      const engines = new EngineRegistry();
+      const first = { getContacts: jest.fn().mockResolvedValue(contactsOf('62', 5000)) };
+      const second = { getContacts: jest.fn().mockResolvedValue(contactsOf('63', 1500)) };
+      engines.set('s1', first as unknown as IWhatsAppEngine);
+      engines.set('s2', second as unknown as IWhatsAppEngine);
+      const svc = new ContactService(engines);
+      await svc.getContacts('s1', { offset: 0 });
+      const page = (await svc.getContacts('s2', { offset: 1000 })) as { id: string }[];
+      expect(second.getContacts).toHaveBeenCalledTimes(1);
+      expect(page).toHaveLength(500);
+      expect(page.every(c => c.id.startsWith('63'))).toBe(true);
+    });
+
+    it('reads afresh once the engine it came from was retired, and answers 400 while none runs', async () => {
+      const engines = new EngineRegistry();
+      const getContacts = jest.fn().mockResolvedValue(contactsOf('62', 1500));
+      const engine = { getContacts } as unknown as IWhatsAppEngine;
+      engines.set('s1', engine);
+      const svc = new ContactService(engines);
+      await svc.getContacts('s1', { offset: 0 });
+      engines.delete('s1');
+      expect(() => svc.getContacts('s1', { offset: 1000 })).toThrow(BadRequestException);
+      // The same engine object registered again: only the retire notification can drop the listing.
+      engines.set('s1', engine);
+      await svc.getContacts('s1', { offset: 1000 });
+      expect(getContacts).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ['upsertContact', (svc: ContactService) => svc.upsertContact('s1', '628123@c.us', 'Ada')],
+      ['deleteContact', (svc: ContactService) => svc.deleteContact('s1', '628123@c.us')],
+      ['blockContact', (svc: ContactService) => svc.blockContact('s1', '628123@c.us')],
+      ['unblockContact', (svc: ContactService) => svc.unblockContact('s1', '628123@c.us')],
+    ])('a %s call makes the next page read afresh, even when it fails', async (method, write) => {
+      const getContacts = jest.fn().mockResolvedValue(contactsOf('62', 5000));
+      const engine: Partial<Record<string, jest.Mock>> = { getContacts, [method]: jest.fn().mockResolvedValue(true) };
+      const svc = makeService(engine as Partial<IWhatsAppEngine>);
+      await svc.getContacts('s1', { offset: 0 });
+      await write(svc);
+      await svc.getContacts('s1', { offset: 1000 });
+      expect(getContacts).toHaveBeenCalledTimes(2);
+
+      // A timed-out write may still have been applied, so a failure drops the listing too.
+      engine[method] = jest.fn().mockRejectedValue(new Error('timed out'));
+      await expect(write(svc)).rejects.toThrow('timed out');
+      await svc.getContacts('s1', { offset: 2000 });
+      expect(getContacts).toHaveBeenCalledTimes(3);
     });
   });
 

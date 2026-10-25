@@ -103,6 +103,14 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /**
+   * Set by an engine that applied an edit to `body` before it handed the message over: the text the message
+   * arrived with. The edits that reached the message meanwhile reach the session too, and are compared with
+   * this text. It equals `body` when a later edit restored that text, as the message was edited all the same,
+   * and is unset when every edit repeated the text. The session removes the field before the message is
+   * hooked, stored or announced.
+   */
+  originalBody?: string;
   /** User-facing chat kind of the conversation this message belongs to (derived from `chatId`). */
   kind: ChatKind;
   /**
@@ -1051,8 +1059,9 @@ export interface EngineEventCallbacks {
    * per live row and so covers that directory, so start()/delete()/executeReconnect can wait
    * (bounded, fail-closed) for it to settle before touching that path.
    *
-   * Adapters that never remove credentials on their own (e.g. Baileys until a later task wires its
-   * WhatsApp-originated cleanup) simply never invoke this.
+   * Adapters that never remove credentials on their own simply never invoke this. Baileys invokes it for a
+   * WhatsApp-originated unlink (a remote logout): the promise is the cleanup that wipes the stored account
+   * state and the auth directory.
    */
   onCredentialTeardownStarted?: (operation: Promise<void>) => void;
   /**
@@ -1275,6 +1284,12 @@ export interface ChatHistoryCapability {
  * JID included — see setGroupPicture), and its consumer domain is contact data.
  */
 export interface ContactCapability {
+  /**
+   * Defaults to reporting lookup answers. `seed` keeps positive lookups as display data and revokes alias
+   * trust on a conflicting phone; null still uses owner-aware clearing.
+   */
+  readonly contactPhoneLookupPersistence?: 'seed';
+
   getContacts(): Promise<Contact[]>;
 
   getContactById(contactId: string): Promise<Contact | null>;
@@ -1584,8 +1599,11 @@ export interface ChatCapability {
    * `messageIds` names exactly which messages to acknowledge. Engines that acknowledge per
    * message (Baileys) need it to mark a burst, or anything at all after a restart; engines with a
    * chat-level receipt (whatsapp-web.js) ignore it.
+   *
+   * `authors` maps a message id to who posted it, for a group: a receipt names its sender, and an id the
+   * engine never kept (history backfill) has no key to read it from. An id with neither is not acknowledged.
    */
-  sendSeen(chatId: string, messageIds?: string[]): Promise<boolean>;
+  sendSeen(chatId: string, messageIds?: string[], authors?: ReadonlyMap<string, string>): Promise<boolean>;
 
   markUnread(chatId: string): Promise<boolean>;
 

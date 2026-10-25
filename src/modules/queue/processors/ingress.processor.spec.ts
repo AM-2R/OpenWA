@@ -1,3 +1,4 @@
+import { DelayedError } from 'bullmq';
 import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { IngressProcessor } from './ingress.processor';
 
@@ -40,7 +41,7 @@ describe('IngressProcessor', () => {
 
   it('dispatches the event into the worker via dispatchWebhook', async () => {
     const dispatchWebhook = jest.fn().mockResolvedValue({ ok: true, status: 200 });
-    const loader = { dispatchWebhookForInstance: dispatchWebhook };
+    const loader = { isRestorePending: () => false, dispatchWebhookForInstance: dispatchWebhook };
     const failures = { save: jest.fn() };
     const proc = new IngressProcessor(
       loader as never,
@@ -54,7 +55,10 @@ describe('IngressProcessor', () => {
   });
 
   it('records a DLQ failure row and fires ingress:error on the final attempt', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
@@ -69,7 +73,10 @@ describe('IngressProcessor', () => {
   // payload on 'queued' and removeOnFail prunes the failed job. A data database that is down for the
   // whole retry window refuses the row too, so the delivery goes back on the queue instead.
   it('re-queues the delivery when the final-attempt DLQ write fails, and still rethrows the dispatch error', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockRejectedValue(new Error('db down')), count: jest.fn().mockResolvedValue(0) };
     const queue = { add: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(1) };
     const proc = new IngressProcessor(
@@ -112,7 +119,10 @@ describe('IngressProcessor', () => {
   // The original job of a re-queued delivery stays 'failed', which the reconciler reads as dead-lettered:
   // it may write a DLQ row and mark the event 'failed' before or after the re-queued copy runs.
   it('records a re-queued delivery that succeeds as dispatched and retires its open DLQ row', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockResolvedValue({ ok: true, status: 200 }) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockResolvedValue({ ok: true, status: 200 }),
+    };
     const failures = { update: jest.fn().mockResolvedValue(undefined) };
     const events = { update: jest.fn().mockResolvedValue(undefined) };
     const proc = new IngressProcessor(
@@ -143,7 +153,10 @@ describe('IngressProcessor', () => {
   });
 
   it('does not add a second DLQ row when one is already open for the delivery', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(1) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const queue = { add: jest.fn() };
@@ -167,7 +180,10 @@ describe('IngressProcessor', () => {
   });
 
   it('rethrows on a non-final attempt without recording a DLQ row or firing ingress:error', async () => {
-    const loader = { dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')) };
+    const loader = {
+      isRestorePending: () => false,
+      dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+    };
     const failures = { save: jest.fn().mockResolvedValue(undefined) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
     const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
@@ -180,6 +196,7 @@ describe('IngressProcessor', () => {
     const started: string[] = [];
     const finished: string[] = [];
     const loader = {
+      isRestorePending: () => false,
       dispatchWebhookForInstance: jest.fn(async (d: { deliveryId: string }) => {
         started.push(d.deliveryId);
         await new Promise(r => setTimeout(r, d.deliveryId === 'same-1' ? 20 : 1));
@@ -215,6 +232,7 @@ describe('IngressProcessor', () => {
     let concurrent = 0;
     let maxConcurrent = 0;
     const loader = {
+      isRestorePending: () => false,
       dispatchWebhookForInstance: jest.fn(async () => {
         concurrent++;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
@@ -306,5 +324,176 @@ describe('IngressProcessor stall exhaustion (worker failed event)', () => {
     failures.save.mockRejectedValue(new Error('db down'));
     queue.add.mockRejectedValue(new Error('redis down'));
     await expect(proc.onWorkerFailed(job({ id: 'ing-abc', name: 'ingress' }), STALLED)).resolves.toBeUndefined();
+  });
+});
+
+// The plugin's worker does not exist until the boot restore reaches it, and a restore can outlast the whole
+// retry budget (3 attempts, 5 s apart, by default), so a job taken meanwhile would end in the dead-letter
+// table for a plugin that is about to be up. It goes back to the delayed set instead, which spends no attempt.
+describe('IngressProcessor while the plugin is still being restored', () => {
+  const build = (restoring: boolean) => {
+    const loader = {
+      isRestorePending: jest.fn().mockReturnValue(restoring),
+      dispatchWebhookForInstance: jest.fn().mockResolvedValue(undefined),
+    };
+    const failures = { save: jest.fn(), count: jest.fn() };
+    const hooks = { execute: jest.fn() };
+    const proc = new IngressProcessor(loader as never, failures as never, hooks as never, {} as never, {} as never);
+    return { proc, loader, failures, hooks };
+  };
+
+  it('delays the delivery without dispatching it or spending an attempt, even on the last one', async () => {
+    const { proc, loader, failures, hooks } = build(true);
+    const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+    const before = Date.now();
+
+    await expect(
+      proc.process(job({ attemptsMade: 2, opts: { attempts: 3 }, moveToDelayed }), 'tok-1'),
+    ).rejects.toBeInstanceOf(DelayedError);
+
+    expect(loader.isRestorePending).toHaveBeenCalledWith('chatwoot');
+    expect(moveToDelayed).toHaveBeenCalledTimes(1);
+    const [when, token] = moveToDelayed.mock.calls[0] as [number, string];
+    expect(token).toBe('tok-1');
+    // The next multiple of the retry delay, 5 s by default, with nothing added to it.
+    expect(when % 5000).toBe(0);
+    expect(when).toBeGreaterThan(before);
+    expect(when).toBeLessThanOrEqual(Date.now() + 5000);
+    expect(loader.dispatchWebhookForInstance).not.toHaveBeenCalled();
+    expect(failures.save).not.toHaveBeenCalled();
+    expect(hooks.execute).not.toHaveBeenCalled();
+  });
+
+  it('waits for the next multiple of the delay, never for the instant it is held', async () => {
+    const { proc } = build(true);
+    const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(10_000);
+    try {
+      await expect(proc.process(job({ moveToDelayed }), 'tok-4')).rejects.toBeInstanceOf(DelayedError);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(moveToDelayed).toHaveBeenCalledWith(15_000, 'tok-4');
+  });
+
+  it('keeps to a grid of at least a second even when the retry delay is configured as 0', async () => {
+    const original = process.env.INGRESS_RETRY_DELAY_MS;
+    process.env.INGRESS_RETRY_DELAY_MS = '0';
+    try {
+      const { proc } = build(true);
+      const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+      const before = Date.now();
+
+      await expect(proc.process(job({ moveToDelayed }), 'tok-2')).rejects.toBeInstanceOf(DelayedError);
+
+      // A grid of a second at least, not a delay of "now", which is promoted straight back and would spin.
+      const [when] = moveToDelayed.mock.calls[0] as [number];
+      expect(when % 1000).toBe(0);
+      expect(when).toBeGreaterThan(before);
+      expect(when).toBeLessThanOrEqual(Date.now() + 1000);
+    } finally {
+      if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+      else process.env.INGRESS_RETRY_DELAY_MS = original;
+    }
+  });
+
+  // BullMQ promotes the delayed jobs that are due in order of their due time, equal ones in the order they were delayed,
+  // and a job that finds the plugin still restoring is delayed again. A fixed delay from "now" gives two deliveries that
+  // arrived a fraction of a period apart polls a fraction of a period apart, so a restore that ends between the polls lets
+  // the later one through first. The test plays that out on a clock of its own: a then b, 30% of a period apart, and a
+  // restore that ends between the polls a fixed delay would give them.
+  describe.each([1000, 5000])('with a retry delay of %i ms', period => {
+    const original = process.env.INGRESS_RETRY_DELAY_MS;
+    beforeEach(() => {
+      process.env.INGRESS_RETRY_DELAY_MS = String(period);
+    });
+    afterEach(() => {
+      if (original === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+      else process.env.INGRESS_RETRY_DELAY_MS = original;
+    });
+
+    const [arrivesA, arrivesB, restoreEnds] = [2.4 * period, 2.7 * period, 3.55 * period];
+
+    const playOut = async (): Promise<{ dispatched: string[]; dues: number[] }> => {
+      let now = arrivesA;
+      const dispatched: string[] = [];
+      const loader = {
+        isRestorePending: jest.fn(() => now < restoreEnds),
+        dispatchWebhookForInstance: jest.fn((d: { deliveryId: string }) => {
+          dispatched.push(d.deliveryId);
+          return Promise.resolve();
+        }),
+      };
+      const proc = new IngressProcessor(loader as never, {} as never, {} as never, {} as never, {} as never);
+      const delayed: Array<{ id: string; when: number; seq: number }> = [];
+      const jobs = new Map<string, ReturnType<typeof job>>();
+      for (const id of ['a', 'b']) {
+        jobs.set(
+          id,
+          job({
+            data: {
+              pluginId: 'chatwoot',
+              instanceId: 'acct1',
+              route: 'chatwoot',
+              deliveryId: id,
+              payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+            },
+            moveToDelayed: jest.fn((when: number) => {
+              delayed.push({ id, when, seq: delayed.length });
+              return Promise.resolve();
+            }),
+          }),
+        );
+      }
+      const run = async (id: string): Promise<void> => {
+        await proc.process(jobs.get(id) as never, `tok-${id}`).catch((error: unknown) => {
+          if (!(error instanceof DelayedError)) throw error;
+        });
+      };
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      // Random draws that would put a before b if they were added to the delay.
+      const random = jest.spyOn(Math, 'random').mockReturnValueOnce(0.9).mockReturnValueOnce(0.1);
+      try {
+        await run('a');
+        now = arrivesB;
+        await run('b');
+        const dues = delayed.map(entry => entry.when);
+        // The jobs due first run first, equal due times in the order they were delayed.
+        for (let wakes = 0; dispatched.length < 2 && wakes < 20; wakes++) {
+          delayed.sort((x, y) => x.when - y.when || x.seq - y.seq);
+          const next = delayed.shift();
+          if (!next) break;
+          now = next.when;
+          await run(next.id);
+        }
+        return { dispatched, dues };
+      } finally {
+        clock.mockRestore();
+        random.mockRestore();
+      }
+    };
+
+    it('brings two deliveries of one conversation back in the order they arrived', async () => {
+      const { dispatched } = await playOut();
+
+      expect(dispatched).toEqual(['a', 'b']);
+    });
+
+    it('delays them to the next multiple of the delay, so jobs held at different moments wake together', async () => {
+      const { dues } = await playOut();
+
+      expect(dues).toEqual([3 * period, 3 * period]);
+    });
+  });
+
+  it('dispatches as usual once the restore is done with the plugin', async () => {
+    const { proc, loader } = build(false);
+    const moveToDelayed = jest.fn();
+
+    await proc.process(job({ moveToDelayed }), 'tok-3');
+
+    expect(loader.dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+    expect(moveToDelayed).not.toHaveBeenCalled();
   });
 });

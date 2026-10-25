@@ -49,7 +49,7 @@ export class GroupsResource {
   }
 
   /**
-   * Create a new group.
+   * Create a new group. **Baileys only**: whatsapp-web.js answers 501.
    *
    * Answers the group SUMMARY, not the detail shape `get()` returns — there is no participant list,
    * description, owner or creation time on a create response.
@@ -140,7 +140,7 @@ export class GroupsResource {
     });
   }
 
-  /** Get the group settings (announce / locked / ephemeral timer). */
+  /** Get the group settings (announce / locked / ephemeral timer / member-add mode). */
   getGroupSettings(sessionId: string, groupId: string): Promise<GroupSettingsResponse> {
     return this.client.request<GroupSettingsResponse>({
       method: 'GET',

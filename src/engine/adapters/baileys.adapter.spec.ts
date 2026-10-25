@@ -3,6 +3,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as qrcode from 'qrcode';
 import * as messagingModule from './baileys-messaging';
+import { randomUUID } from 'crypto';
+import { DataSource } from 'typeorm';
+import { EngineRegistry } from '../engine-registry.service';
+import { LidMapping } from '../identity/lid-mapping.entity';
+import { LidMappingStoreService } from '../identity/lid-mapping-store.service';
+import { Session } from '../../modules/session/entities/session.entity';
+import { Message, MessageDirection } from '../../modules/message/entities/message.entity';
+import { MessageProjector } from '../../modules/session/message-projector.service';
+import { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
+import { ChatScopeService } from '../../modules/auth/chat-scope.service';
 
 jest.mock('../../common/media/load-remote-media', () => ({
   loadRemoteMediaBuffer: jest.fn(),
@@ -66,6 +76,7 @@ class FakeSock extends EventEmitter {
   public removeContact = jest.fn().mockResolvedValue(undefined);
   public readMessages = jest.fn().mockResolvedValue(undefined);
   public chatModify = jest.fn().mockResolvedValue(undefined);
+  public executeUSyncQuery = jest.fn().mockResolvedValue(undefined);
   public addChatLabel = jest.fn().mockResolvedValue(undefined);
   public addLabel = jest.fn().mockResolvedValue(undefined);
   public removeChatLabel = jest.fn().mockResolvedValue(undefined);
@@ -128,6 +139,30 @@ jest.mock('@whiskeysockets/baileys', () => ({
   // Identity passthrough — the adapter wraps state.keys with this for session-store caching; tests
   // don't exercise the caching behavior itself, just need the real store object to flow through.
   makeCacheableSignalKeyStore: jest.fn((store: unknown) => store),
+  USyncQuery: class {
+    users: unknown[] = [];
+    protocols: string[] = [];
+    context = 'interactive';
+    withLIDProtocol() {
+      this.protocols.push('lid');
+      return this;
+    }
+    withContext(context: string) {
+      this.context = context;
+      return this;
+    }
+    withUser(user: unknown) {
+      this.users.push(user);
+      return this;
+    }
+  },
+  USyncUser: class {
+    id?: string;
+    withId(id: string) {
+      this.id = id;
+      return this;
+    }
+  },
   getContentType: jest.fn(() => 'conversation'),
   // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
   // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
@@ -165,6 +200,7 @@ import { BaileysAdapter, createProxyAgent } from './baileys.adapter';
 import { BaileysEvents } from './baileys-events';
 import {
   EditedMessage,
+  DeliveryStatus,
   EngineStatus,
   EngineEventCallbacks,
   GroupEvent,
@@ -206,6 +242,7 @@ const fakeStore = {
 beforeEach(() => {
   fakeStore.getMessage.mockReset();
   fakeSock.signalRepository = undefined;
+  fakeSock.executeUSyncQuery.mockReset().mockResolvedValue(undefined);
   fakeSock.onWhatsApp.mockReset().mockImplementation((jid: string) => Promise.resolve([{ jid, exists: true }]));
   fakeSock.groupFetchAllParticipating.mockReset();
   const baileys = jest.requireMock<Record<string, jest.Mock>>('@whiskeysockets/baileys');
@@ -1936,6 +1973,17 @@ describe('BaileysAdapter messaging', () => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });
 
+  // The library's own write timeout (promiseTimeout) carries statusCode 408 and an object data, not a numeric
+  // WhatsApp code. Its frame may already be on the socket, so it must not become a retryable 503.
+  it('leaves the local socket-write timeout of a send unmapped', async () => {
+    const adapter = await readyAdapter();
+    const timedOut = new Boom('Timed Out', { statusCode: 408, data: { stack: 'Error\n    at x' } });
+    fakeSock.sendMessage.mockRejectedValue(timedOut);
+    const rejection = adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    await expect(rejection).rejects.toBe(timedOut);
+    await expect(rejection).rejects.not.toBeInstanceOf(EngineTransportError);
+  });
+
   it('leaves any other WhatsApp refusal code to propagate untouched', async () => {
     const adapter = await readyAdapter();
     const refusal = new Boom('forbidden', { data: 403 });
@@ -2051,7 +2099,7 @@ describe('BaileysAdapter messaging', () => {
     await adapter.sendTextMessage('628111@c.us', 'hello');
 
     // The device suffix (:3) is stripped — that is the key the lid->phone lookup reads.
-    expect(spy).toHaveBeenCalledWith([{ lid: '484848@lid', pn: '628111@s.whatsapp.net' }]);
+    expect(spy).toHaveBeenCalledWith([{ lid: '484848@lid', pn: '628111@s.whatsapp.net' }], false);
   });
 
   it('sendTextMessage uses the canonical phone jid when no LID mapping is known', async () => {
@@ -2551,7 +2599,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg.chatId).toBe('628111@c.us');
   });
 
-  it('resolves an @lid sender to <phone>@c.us using a history-sync lid->pn mapping', async () => {
+  it('retains the raw LID sender after a history phone mapping', async () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();
     await adapter.initialize({ onMessage });
@@ -2570,11 +2618,11 @@ describe('BaileysAdapter inbound fan-out', () => {
     await new Promise(r => setImmediate(r));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as { from: string; isLidSender?: boolean };
-    expect(msg.from).toBe('628111@c.us'); // lid resolved to phone, neutral dialect
+    expect(msg.from).toBe('111@lid'); // display resolution does not change chat identity
     expect(msg.isLidSender).toBe(true); // still flagged: the raw sender was a lid
   });
 
-  it('resolves an @lid sender via the lid/pn pair carried on the inbound message key (#362)', async () => {
+  it('retains a sender LID while recording its explicit key phone pairing', async () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();
     await adapter.initialize({ onMessage });
@@ -2598,7 +2646,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     await new Promise(r => setImmediate(r));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as { from: string; isLidSender?: boolean };
-    expect(msg.from).toBe('628111@c.us'); // resolved from the key's remoteJidAlt, neutral dialect
+    expect(msg.from).toBe('111@lid'); // the reported pair bridges the phone through the shared directory
     expect(msg.isLidSender).toBe(true);
   });
 
@@ -4168,7 +4216,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as { author?: string; body: string };
-    expect(msg.author).toBe('628111@c.us');
+    expect(msg.author).toBe('111@lid');
     expect(msg.body).toBe('first real message');
   });
 
@@ -4511,6 +4559,110 @@ describe('BaileysAdapter store-backed ops', () => {
     // below, so a spec cannot pass on either one.
     messageTimestamp: '1700000000',
   };
+
+  it('confirms a phone-addressed stored LID through a fresh LID query before mutating it', async () => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({
+      key: { id: 'TARGET', remoteJid: '111@lid', fromMe: true },
+      message: { conversation: 'mine' },
+    });
+    fakeSock.executeUSyncQuery.mockResolvedValueOnce({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await expect(adapter.starMessage('628111@c.us', 'TARGET', true)).resolves.toBeUndefined();
+    expect(fakeSock.executeUSyncQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: 'background',
+        protocols: ['lid'],
+        users: [expect.objectContaining({ id: '628111@s.whatsapp.net' })],
+      }),
+    );
+  });
+
+  it('confirms a LID request against an older phone-keyed message through the same fresh query', async () => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({
+      key: { id: 'TARGET', remoteJid: '628111@s.whatsapp.net', fromMe: true },
+      message: { conversation: 'mine' },
+    });
+    fakeSock.executeUSyncQuery.mockResolvedValueOnce({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await expect(adapter.starMessage('111@lid', 'TARGET', true)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { list: [{ id: '628222@s.whatsapp.net', lid: '111@lid' }] },
+    { list: [{ id: '628111@s.whatsapp.net', lid: '222@lid' }] },
+    { list: [{ id: '628111@s.whatsapp.net', lid: '111@g.us' }] },
+    { list: [{ id: '628111@lid', lid: '111@lid' }] },
+    { list: [{ id: '628111@s.whatsapp.net' }] },
+    {
+      list: [
+        { id: '628111@s.whatsapp.net', lid: '111@lid' },
+        { id: '628111@s.whatsapp.net', lid: '222@lid' },
+      ],
+    },
+    { list: [] },
+    undefined,
+  ])('refuses a stored LID whose query result does not uniquely confirm the addressed phone (%j)', async result => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({
+      key: { id: 'TARGET', remoteJid: '111@lid', fromMe: true },
+      message: { conversation: 'mine' },
+    });
+    fakeSock.executeUSyncQuery.mockResolvedValueOnce(result);
+    await expect(adapter.starMessage('628111@c.us', 'TARGET', true)).rejects.toBeInstanceOf(MessageNotFoundError);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  });
+
+  it('bounds a stored LID identity query that never answers', async () => {
+    const adapter = await ready();
+    fakeStore.getMessage.mockResolvedValue({
+      key: { id: 'TARGET', remoteJid: '111@lid', fromMe: true },
+      message: { conversation: 'mine' },
+    });
+    fakeSock.executeUSyncQuery.mockImplementationOnce(() => new Promise(() => undefined));
+    jest.useFakeTimers();
+    try {
+      let failure: unknown;
+      void adapter.starMessage('628111@c.us', 'TARGET', true).catch(error => {
+        failure = error;
+      });
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(failure).toBeInstanceOf(EngineTransportError);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('drops a matching identity answer from a retired socket', async () => {
+    const adapter = await ready();
+    const mappings = jest.spyOn(
+      (adapter as unknown as { sessionStore: { addLidMappings: () => void } }).sessionStore,
+      'addLidMappings',
+    );
+    fakeStore.getMessage.mockResolvedValue({
+      key: { id: 'TARGET', remoteJid: '111@lid', fromMe: true },
+      message: { conversation: 'mine' },
+    });
+    let reply!: (value: unknown) => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    fakeSock.executeUSyncQuery.mockImplementationOnce(() => {
+      started();
+      return new Promise(resolve => {
+        reply = resolve;
+      });
+    });
+    const pending = adapter.starMessage('628111@c.us', 'TARGET', true);
+    const rejected = expect(pending).rejects.toBeInstanceOf(EngineNotReadyError);
+    await entered;
+    await adapter.disconnect();
+    reply({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await rejected;
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+    expect(mappings).not.toHaveBeenCalled();
+  });
 
   it('replyToMessage quotes the stored message', async () => {
     fakeStore.getMessage.mockResolvedValue(stored);
@@ -5215,21 +5367,26 @@ describe('BaileysAdapter store-backed ops', () => {
       );
     afterEach(() => {
       fakeSock.signalRepository = undefined;
+      fakeSock.executeUSyncQuery.mockResolvedValue(undefined);
     });
 
     it.each([
       ['an unmapped @c.us id to a phone-keyed chat', '628111@c.us', '628111@s.whatsapp.net', null],
       ['a phone id to a phone-keyed chat whose lid is known', '628111@c.us', '628111@s.whatsapp.net', '484848@lid'],
       ['a phone id to a lid-keyed chat', '628111@s.whatsapp.net', '484848@lid', '484848@lid'],
-    ])('%s still becomes the chat preview and sort time', async (_label, sendTo, chatKey, lid) => {
+    ])('%s keeps the wire identity for its preview and operations', async (_label, sendTo, chatKey, lid) => {
       fakeSock.signalRepository = { lidMapping: { getLIDForPN: jest.fn().mockResolvedValue(lid) } };
       echoSend();
+      if (lid) fakeSock.executeUSyncQuery.mockResolvedValue({ list: [{ id: '628111@s.whatsapp.net', lid }] });
       const adapter = await ready();
       fakeSock.fire('chats.upsert', [{ id: chatKey, conversationTimestamp: 1700000000 }]);
       await adapter.sendTextMessage(sendTo, 'on its way');
-      expect(await adapter.getChats()).toEqual([
-        expect.objectContaining({ id: '628111@c.us', timestamp: 1700000100, lastMessage: 'on its way' }),
-      ]);
+      const identity = lid ?? '628111@c.us';
+      expect(await adapter.getChats()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: identity, timestamp: 1700000100, lastMessage: 'on its way' }),
+        ]),
+      );
 
       fakeStore.getMessage.mockResolvedValue({
         key: { id: 'OUT', remoteJid: lid ?? sendTo, fromMe: true },
@@ -5237,9 +5394,9 @@ describe('BaileysAdapter store-backed ops', () => {
         messageTimestamp: 1700000100,
       });
       await adapter.editMessage('628111@c.us', 'OUT', 'arriving tomorrow');
-      expect((await adapter.getChats())[0]?.lastMessage).toBe('arriving tomorrow');
+      expect((await adapter.getChats()).find(chat => chat.id === identity)?.lastMessage).toBe('arriving tomorrow');
       await adapter.deleteMessage('628111@c.us', 'OUT', true);
-      expect((await adapter.getChats())[0]?.lastMessage).toBe('');
+      expect((await adapter.getChats()).find(chat => chat.id === identity)?.lastMessage).toBe('');
     });
   });
 
@@ -5469,7 +5626,7 @@ describe('BaileysAdapter group management', () => {
     await expect(adapter.getGroupInfo('123-456@g.us')).rejects.toThrow('unexpected');
   });
 
-  it('getGroupInfo canonicalizes participant + owner ids through the session store (lid -> phone)', async () => {
+  it('getGroupInfo keeps LID participant and owner identities separate from cached phones', async () => {
     const adapter = await ready();
     // History sync supplies the lid -> phone mapping; the adapter passes the store's canonicalizer in.
     fakeSock.fire('messaging-history.set', { lidPnMappings: [{ lid: '111@lid', pn: '628111@s.whatsapp.net' }] });
@@ -5484,8 +5641,8 @@ describe('BaileysAdapter group management', () => {
     });
     const info = await adapter.getGroupInfo('123-456@g.us');
     // Owner + the known admin fold to <phone>@c.us, so they share the dialect of canonicalized authors.
-    expect(info?.owner).toBe('628111@c.us');
-    expect(info?.participants[0]).toMatchObject({ id: '628111@c.us', number: '628111', isSuperAdmin: true });
+    expect(info?.owner).toBe('111@lid');
+    expect(info?.participants[0]).toMatchObject({ id: '111@lid', number: '111', isSuperAdmin: true });
     expect(info?.participants[1]).toMatchObject({ id: '222@lid', number: '222' }); // unresolved kept raw
   });
 
@@ -6066,7 +6223,7 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
     expect(firstEvent(onGroupEvent).participantIds).toEqual(['628111@c.us']);
   });
 
-  it('resolves a lid-only participant through the learned lid->pn mapping, else keeps the lid', async () => {
+  it('retains a lid-only participant identity after learning a display phone', async () => {
     const { onGroupEvent } = await readyWithGroupEvents();
 
     fakeSock.fire('group-participants.update', {
@@ -6084,7 +6241,7 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
       participants: [{ id: '111@lid' }],
     });
     const calls = onGroupEvent.mock.calls as Array<[GroupEvent]>;
-    expect(calls[1][0].participantIds).toEqual(['628111@c.us']);
+    expect(calls[1][0].participantIds).toEqual(['111@lid']);
   });
 
   it('prefers authorPn over a lid author for the neutral actorId', async () => {
@@ -6281,7 +6438,7 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
     expect(firstEvent(onGroupEvent).groupId).toBe('789-000@g.us');
   });
 
-  it('skips a self-created group addressed by lid when the creds carry no own lid', async () => {
+  it('retains a lid actor when the credentials cannot identify it as this account', async () => {
     // Without `user.lid` every lid comparison answered false, so the group this session had just
     // created was reported as a join of itself. The store's own lid mapping settles it instead.
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' }; // no lid on the creds
@@ -6291,7 +6448,7 @@ describe('BaileysAdapter group events (group-participants.update / groups.update
 
     fakeSock.fire('groups.upsert', [createdGroup({ author: '999000@lid', owner: '999000@lid', authorPn: undefined })]);
 
-    expect(onGroupEvent).not.toHaveBeenCalled();
+    expect(onGroupEvent).toHaveBeenCalledWith(expect.objectContaining({ actorId: '999000@lid' }));
   });
 
   it('reports a groups.upsert entry the session authored for a group another account owns', async () => {
@@ -6820,12 +6977,64 @@ describe('BaileysAdapter contact + chat reads', () => {
     });
   });
 
+  it.each(['add', 'remove'])('does not %s a label if the connection changes after address preparation', async mode => {
+    const adapter = await ready();
+    const original = fakeSock;
+    const replacement = { addChatLabel: jest.fn(), removeChatLabel: jest.fn() };
+    const contacts = (adapter as unknown as { contacts: { confirmedChatJid: (chatId: string) => Promise<string> } })
+      .contacts;
+    const prepare = contacts.confirmedChatJid.bind(contacts);
+    const lookup = jest.spyOn(contacts, 'confirmedChatJid').mockImplementation(async chatId => {
+      const jid = await prepare(chatId);
+      (adapter as unknown as { sock: unknown }).sock = replacement;
+      return jid;
+    });
+    try {
+      const pending =
+        mode === 'add'
+          ? adapter.addLabelToChat('628111@c.us', 'label')
+          : adapter.removeLabelFromChat('628111@c.us', 'label');
+      await expect(pending).rejects.toBeInstanceOf(EngineNotReadyError);
+      for (const socket of [original, replacement]) {
+        expect(socket.addChatLabel).not.toHaveBeenCalled();
+        expect(socket.removeChatLabel).not.toHaveBeenCalled();
+      }
+    } finally {
+      lookup.mockRestore();
+      (adapter as unknown as { sock: unknown }).sock = original;
+      await adapter.destroy();
+    }
+  });
+
+  it('drops a contact identity answer from a retired socket', async () => {
+    const adapter = await ready();
+    fakeSock.fire('contacts.upsert', [{ id: '111@lid', phoneNumber: '628111@s.whatsapp.net' }]);
+    let reply!: (value: unknown) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    fakeSock.executeUSyncQuery.mockImplementationOnce(() => {
+      entered();
+      return new Promise(resolve => {
+        reply = resolve;
+      });
+    });
+    const pending = adapter.getContactById('628111@c.us');
+    const rejected = expect(pending).rejects.toBeInstanceOf(EngineNotReadyError);
+    await started;
+    await adapter.disconnect();
+    reply({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+    await rejected;
+  });
+
   describe('resolveContactPhone for a lid this session does not hold in memory', () => {
     const makeLidStore = () => ({
       getCached: jest.fn((): string | null | undefined => undefined),
       resolveLid: jest.fn(() => null),
       lidsForPhone: jest.fn((): string[] => []),
-      remember: jest.fn(() => Promise.resolve()),
+      remember: jest.fn(() => Promise.resolve(true)),
+      rememberIfUnknown: jest.fn(() => Promise.resolve(true)),
       findPhoneForLid: jest.fn((): Promise<string | null> => Promise.resolve(null)),
     });
     const readyWith = async (lidMappingStore: ReturnType<typeof makeLidStore>): Promise<BaileysAdapter> => {
@@ -6844,6 +7053,52 @@ describe('BaileysAdapter contact + chat reads', () => {
       fakeSock.signalRepository = undefined;
     });
 
+    it.each(['persisted-add', 'persisted-remove', 'fresh-add', 'fresh-remove'])(
+      'does not send a label action across replacement during %s preparation',
+      async mode => {
+        const lidStore = makeLidStore();
+        let release!: () => void;
+        let entered!: () => void;
+        const started = new Promise<void>(resolve => {
+          entered = resolve;
+        });
+        const gate = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        if (mode.startsWith('persisted'))
+          lidStore.findPhoneForLid.mockImplementation(async () => {
+            entered();
+            await gate;
+            return '628111';
+          });
+        const adapter = await readyWith(lidStore);
+        const original = fakeSock;
+        original.executeUSyncQuery.mockReset().mockImplementation(async () => {
+          entered();
+          await gate;
+          return { list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] };
+        });
+        fakeSock.fire('contacts.upsert', [{ id: '111@lid', phoneNumber: '628111@s.whatsapp.net' }]);
+        fakeSock.fire('chats.upsert', [{ id: '111@lid' }]);
+        const replacement = { addChatLabel: jest.fn(), removeChatLabel: jest.fn() };
+        const pending = (
+          mode.endsWith('add')
+            ? adapter.addLabelToChat('628111@c.us', 'label')
+            : adapter.removeLabelFromChat('628111@c.us', 'label')
+        ).catch((error: unknown) => error);
+        await started;
+        (adapter as unknown as { sock: unknown }).sock = replacement;
+        release();
+        expect(await pending).toBeInstanceOf(EngineNotReadyError);
+        for (const socket of [original, replacement]) {
+          expect(socket.addChatLabel).not.toHaveBeenCalled();
+          expect(socket.removeChatLabel).not.toHaveBeenCalled();
+        }
+        (adapter as unknown as { sock: unknown }).sock = original;
+        await adapter.destroy();
+      },
+    );
+
     it('answers from the persisted table when the cache no longer holds the mapping', async () => {
       const lidStore = makeLidStore();
       lidStore.findPhoneForLid.mockResolvedValue('628111');
@@ -6860,7 +7115,8 @@ describe('BaileysAdapter contact + chat reads', () => {
       const adapter = await readyWith(lidStore);
       expect(await adapter.resolveContactPhone('111@lid')).toBe('628222');
       expect(getPNForLID).toHaveBeenCalledWith('111@lid');
-      expect(lidStore.remember).toHaveBeenCalledWith('111', '628222', 'sess-1');
+      expect(lidStore.rememberIfUnknown).toHaveBeenCalledWith('111', '628222', 'sess-1');
+      expect(lidStore.remember).not.toHaveBeenCalled();
     });
 
     it('rejects instead of answering null when nothing maps the lid, so no null is stored', async () => {
@@ -6880,6 +7136,436 @@ describe('BaileysAdapter contact + chat reads', () => {
       expect(await adapter.resolveContactPhone('120363@g.us')).toBeNull();
       expect(lidStore.findPhoneForLid).not.toHaveBeenCalled();
     });
+
+    it.each(['history', 'contact', 'signal'])(
+      'keeps a newer shared phone when a sender lookup reads an earlier %s mapping',
+      async source => {
+        const pg = process.env.DATABASE_TYPE === 'postgres';
+        const server = {
+          type: 'postgres' as const,
+          host: process.env.DATABASE_HOST || '127.0.0.1',
+          port: Number(process.env.DATABASE_PORT || 5432),
+          username: process.env.DATABASE_USERNAME || 'openwa',
+          password: process.env.DATABASE_PASSWORD || 'openwa',
+          database: process.env.DATABASE_NAME || 'openwa',
+        };
+        const schema = `lid_sender_${randomUUID().replace(/-/g, '')}`;
+        const admin = pg ? await new DataSource(server).initialize() : undefined;
+        if (admin) await admin.query(`CREATE SCHEMA "${schema}"`);
+        const entities = [LidMapping, Session, Message];
+        const ds = await new DataSource(
+          pg
+            ? { ...server, schema, extra: { options: `-c search_path=${schema},public` }, entities, synchronize: true }
+            : { type: 'better-sqlite3', database: ':memory:', entities, synchronize: true },
+        ).initialize();
+        const [s1, s2] = ['00000001-0000-4000-8000-000000000000', '00000002-0000-4000-8000-000000000000'];
+        await ds.getRepository(Session).insert([s1, s2].map(id => ({ id, name: id, phone: '6290000000' })));
+        const repo = ds.getRepository(LidMapping);
+        const store = new LidMappingStoreService(repo);
+        const peer = new LidMappingStoreService(repo);
+        await store.onModuleInit();
+        await peer.onModuleInit();
+        jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+        const pending = new Set<Promise<boolean>>();
+        for (const method of ['remember', 'rememberIfUnknown'] as const) {
+          const real = store[method].bind(store);
+          jest.spyOn(store, method).mockImplementation((...args: Parameters<typeof store.remember>) => {
+            const promise = real(...(args as [string, string, string]));
+            pending.add(promise);
+            void promise.finally(() => pending.delete(promise));
+            return promise;
+          });
+        }
+        const settle = async () => {
+          for (let i = 0; i < 5; i++) {
+            await new Promise(resolve => setImmediate(resolve));
+            await Promise.allSettled([...pending]);
+          }
+        };
+        const adapter = new BaileysAdapter({
+          sessionId: s1,
+          dbSessionId: s1,
+          authDir: './data/baileys',
+          messageStore: fakeStore,
+          lidMappingStore: store,
+        });
+        try {
+          const projected = new Set<Promise<unknown>>();
+          const onMessage = jest.fn((message: IncomingMessage) => {
+            const receipt = projector?.handleInboundMessage(s1, adapter, message);
+            if (receipt) {
+              projected.add(receipt.settled);
+              void receipt.settled.finally(() => projected.delete(receipt.settled));
+            }
+            return receipt;
+          });
+          const library = jest.requireMock<{ getContentType: jest.Mock }>('@whiskeysockets/baileys');
+          library.getContentType.mockImplementation((message: Record<string, unknown> = {}) => Object.keys(message)[0]);
+          const edits = jest.fn((message: EditedMessage) => projector.applyMessageEditQueued(s1, message));
+          const acks = jest.fn((id: string, status: DeliveryStatus, chatId?: string) =>
+            projector.handleMessageAck(s1, adapter, id, status, chatId),
+          );
+          await adapter.initialize({
+            onMessage,
+            onMessageCreate: message => projector.handleOwnSendEcho(s1, adapter, message),
+            onHistoryMessages: messages => projector.persistHistoryMessages(s1, adapter, messages),
+            onMessageAck: acks,
+            onMessageEdited: edits,
+            onMessageRevoked: (message, actor) => projector.handleMessageRevoked(s1, adapter, message, actor),
+            onMessageReaction: event => projector.applyReactionQueued(s1, event),
+          });
+          fakeSock.fire('connection.update', { connection: 'open' });
+          const engines = new EngineRegistry();
+          engines.set(s1, adapter);
+          const resolver = new SessionLidResolver(engines, store);
+          const projector = new MessageProjector(
+            ds.getRepository(Message),
+            ds.getRepository(Session),
+            engines,
+            {
+              emitNewMessage: jest.fn(),
+              emitMessage: jest.fn(),
+              emitMessageEdited: jest.fn(),
+              emitMessageRevoked: jest.fn(),
+              emitMessageReaction: jest.fn(),
+              emitMessageSent: jest.fn(),
+              emitMessageAck: jest.fn(),
+            } as never,
+            { dispatch: jest.fn().mockResolvedValue(undefined) } as never,
+            {
+              execute: jest.fn((_event: string, data: Record<string, unknown>) =>
+                Promise.resolve({ continue: true, data }),
+              ),
+            } as never,
+            {} as never,
+            resolver,
+            undefined,
+            undefined,
+            undefined,
+            store,
+          );
+          const drainProjection = async () => {
+            await settle();
+            await Promise.allSettled([...projected]);
+            for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+          };
+          const rowEventually = async (
+            waMessageId: string,
+            check: (row: Message) => boolean = () => true,
+          ): Promise<Message> => {
+            const deadline = performance.now() + 5000;
+            for (;;) {
+              const row = await ds.getRepository(Message).findOneBy({ waMessageId });
+              if (row && check(row)) return row;
+              if (performance.now() >= deadline)
+                throw new Error(`Message ${waMessageId} did not reach its expected state`);
+              await new Promise(resolve => setTimeout(resolve, 1));
+            }
+          };
+          let clock = 0;
+          (resolver as unknown as { now: () => number }).now = () => clock;
+          const failed = jest.spyOn(repo, 'upsert').mockRejectedValue(new Error('connection lost'));
+          const builder = repo.createQueryBuilder().insert().values({});
+          const execute = jest.spyOn(builder, 'execute').mockRejectedValue(new Error('connection lost'));
+          const failedSeed = jest.spyOn(repo, 'createQueryBuilder').mockReturnValue(builder as never);
+          if (source === 'history') {
+            fakeSock.fire('messaging-history.set', {
+              contacts: [],
+              chats: [],
+              messages: [],
+              lidPnMappings: [{ lid: '111@lid', pn: '628111@s.whatsapp.net' }],
+            });
+          } else if (source === 'contact') {
+            fakeSock.fire('contacts.upsert', [{ id: '111@lid', phoneNumber: '628111@s.whatsapp.net' }]);
+          } else {
+            fakeSock.signalRepository = {
+              lidMapping: { getLIDForPN: jest.fn(), getPNForLID: jest.fn().mockResolvedValue('628111@s.whatsapp.net') },
+            };
+          }
+          await expect(resolver.resolveSenderPhone(s1, '111@lid')).resolves.toBe('628111');
+          await settle();
+          expect(await repo.findOne({ where: { lid: '111' } })).toBeNull();
+          failed.mockRestore();
+          failedSeed.mockRestore();
+          execute.mockRestore();
+          await peer.remember('111', '628222', s2);
+          fakeSock.fire('contacts.update', [{ id: '111@lid', notify: 'New name' }]);
+          await settle();
+          expect(await repo.findOneByOrFail({ lid: '111' })).toMatchObject({ phone: '628222', isReported: true });
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'CACHE_ONLY', remoteJid: '111@lid', fromMe: false },
+                message: { conversation: 'private message' },
+                messageTimestamp: 1700000029,
+              },
+            ],
+          });
+          await settle();
+          fakeSock.fire('chats.upsert', [{ id: '111@lid' }, { id: '628111@s.whatsapp.net' }]);
+          const chats = await adapter.getChats();
+          const fence = new ChatScopeService(store);
+          expect(await fence.filter({ allowedChats: ['628111@c.us'] }, chats, chat => chat.id)).toEqual([
+            expect.objectContaining({ id: '628111@c.us', lastMessage: undefined }),
+          ]);
+          expect(await fence.filter({ allowedChats: ['111@lid'] }, chats, chat => chat.id)).toContainEqual(
+            expect.objectContaining({ id: '111@lid', lastMessage: 'private message' }),
+          );
+          const incoming = onMessage.mock.calls.find(([message]) => message.id === 'CACHE_ONLY')![0];
+          expect(incoming.chatId).toBe('111@lid');
+          expect(await new ChatScopeService(store).allows({ allowedChats: ['628111@c.us'] }, incoming.chatId)).toBe(
+            false,
+          );
+          await drainProjection();
+          const persisted = await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'CACHE_ONLY' });
+          expect(persisted.chatId).toBe('111@lid');
+          expect(await fence.filter({ allowedChats: ['628111@c.us'] }, [persisted], message => message.chatId)).toEqual(
+            [],
+          );
+          expect(
+            await fence.filter({ allowedChats: ['111@lid'] }, [persisted], message => message.chatId),
+          ).toHaveLength(1);
+          fakeSock.fire('messages.update', [
+            { key: { id: 'CACHE_ONLY', remoteJid: '111@lid' }, update: { status: 3 } },
+          ]);
+          expect(acks).toHaveBeenCalledWith('CACHE_ONLY', 'delivered', '111@lid');
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'RAW_OWN', remoteJid: '111@lid', remoteJidAlt: '6290000000@s.whatsapp.net', fromMe: true },
+                message: { conversation: 'own content' },
+                messageTimestamp: 1700000029,
+              },
+            ],
+          });
+          fakeSock.fire('messaging-history.set', {
+            contacts: [],
+            chats: [],
+            messages: [
+              {
+                key: { id: 'RAW_HISTORY', remoteJid: '111@lid', fromMe: false },
+                message: { conversation: 'history content' },
+                messageTimestamp: 1700000029,
+              },
+            ],
+          });
+          await drainProjection();
+          for (const waMessageId of ['RAW_OWN', 'RAW_HISTORY']) {
+            const raw = await rowEventually(waMessageId);
+            expect(raw.chatId).toBe('111@lid');
+            expect(await fence.allows({ allowedChats: ['628111@c.us'] }, raw.chatId)).toBe(false);
+            expect(await fence.allows({ allowedChats: ['111@lid'] }, raw.chatId)).toBe(true);
+          }
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'RAW_REACTION', remoteJid: '111@lid', fromMe: false },
+                message: { reactionMessage: { key: { id: 'CACHE_ONLY' }, text: 'yes' } },
+                messageTimestamp: 1700000029,
+              },
+            ],
+          });
+          await drainProjection();
+          expect((await rowEventually('CACHE_ONLY', row => !!row.metadata?.reactions)).metadata?.reactions).toEqual({
+            '111@lid': 'yes',
+          });
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'RAW_REVOKE', remoteJid: '111@lid', fromMe: false },
+                message: { protocolMessage: { type: 0, key: { id: 'CACHE_ONLY' } } },
+                messageTimestamp: 1700000029,
+              },
+            ],
+          });
+          await drainProjection();
+          expect(await rowEventually('CACHE_ONLY', row => row.type === 'revoked')).toMatchObject({
+            chatId: '111@lid',
+            body: '',
+            type: 'revoked',
+          });
+          await ds.getRepository(Message).save({
+            sessionId: s1,
+            waMessageId: 'LEGACY',
+            chatId: '628111@c.us',
+            from: '628111@c.us',
+            to: 'me',
+            body: 'old body',
+            type: 'text',
+            direction: MessageDirection.INCOMING,
+            metadata: {},
+          });
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'LEGACY', remoteJid: '628111@s.whatsapp.net', fromMe: false },
+                message: { conversation: 'old body' },
+                messageTimestamp: 1700000028,
+              },
+            ],
+          });
+          await drainProjection();
+          const editLegacy = (id: string) =>
+            fakeSock.fire('messages.upsert', {
+              type: 'notify',
+              messages: [
+                {
+                  key: { id, remoteJid: '111@lid', fromMe: false },
+                  messageTimestamp: 1700000029,
+                  message: {
+                    protocolMessage: { type: 14, key: { id: 'LEGACY' }, editedMessage: { conversation: 'new body' } },
+                  },
+                },
+              ],
+            });
+          editLegacy('EDIT_FOREIGN');
+          await drainProjection();
+          expect((await ds.getRepository(Message).findOneByOrFail({ waMessageId: 'LEGACY' })).body).toBe('old body');
+          expect((await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.lastMessage).toBe('old body');
+          if (source === 'contact') {
+            expect(await adapter.getContactById('628111@c.us')).toBeNull();
+            fakeSock.fire('contacts.update', [{ id: '111@lid', name: 'Private name' }]);
+            const contacts = await adapter.getContacts();
+            expect(await fence.filter({ allowedChats: ['628111@c.us'] }, contacts, contact => contact.id)).toEqual([]);
+            expect(await fence.filter({ allowedChats: ['111@lid'] }, contacts, contact => contact.id)).toContainEqual(
+              expect.objectContaining({ id: '111@lid', name: 'Private name' }),
+            );
+          }
+          clock += 300_000;
+
+          await expect(resolver.resolveSenderPhone(s1, '111@lid')).resolves.toBe('628111');
+          await settle();
+
+          expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({
+            phone: '628222',
+            sessionId: s2,
+            isReported: false,
+          });
+          for (const node of [store, peer]) {
+            const fence = new ChatScopeService(node);
+            const key = { allowedChats: ['628111@c.us'] };
+            expect(await fence.allows(key, '111@lid')).toBe(false);
+            expect((await fence.scopeForFilter(key))!.allowed.has('111@lid')).toBe(false);
+          }
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'CURRENT', remoteJid: '111@lid', remoteJidAlt: '628222@s.whatsapp.net', fromMe: false },
+                message: { conversation: 'hello' },
+                messageTimestamp: 1700000030,
+              },
+            ],
+          });
+          await settle();
+          expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({ phone: '628222', sessionId: s1 });
+          expect(await new ChatScopeService(store).allows({ allowedChats: ['628222@c.us'] }, '111@lid')).toBe(true);
+          const failedChange = jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
+          const changed = {
+            key: { id: 'CHANGED', remoteJid: '111@lid', remoteJidAlt: '628333@s.whatsapp.net', fromMe: false },
+            message: { conversation: 'new number' },
+            messageTimestamp: 1700000031,
+          };
+          fakeSock.fire('messages.upsert', { type: 'notify', messages: [changed] });
+          await settle();
+          expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({ phone: '628222' });
+          failedChange.mockRestore();
+          const recovered = jest.spyOn(repo, 'upsert');
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'NO_ALT', remoteJid: '111@lid', fromMe: false },
+                message: { conversation: 'hello' },
+                messageTimestamp: 1700000032,
+              },
+            ],
+          });
+          clock += 300_000;
+          await expect(resolver.resolveSenderPhone(s1, '111@lid')).resolves.toBe('628333');
+          await settle();
+          expect(recovered).not.toHaveBeenCalled();
+          expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({ phone: '628222' });
+          const restoredReader = new LidMappingStoreService(repo);
+          await restoredReader.reload();
+          expect(await repo.findOneByOrFail({ lid: '111' })).toMatchObject({ phone: '628222', isReported: false });
+          for (const reader of [peer, restoredReader]) {
+            expect(await new ChatScopeService(reader).allows({ allowedChats: ['628222@c.us'] }, '111@lid')).toBe(false);
+            expect(await new ChatScopeService(reader).allows({ allowedChats: ['628333@c.us'] }, '111@lid')).toBe(false);
+          }
+
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [{ ...changed, key: { ...changed.key, id: 'RETRY' } }],
+          });
+          await settle();
+          expect(await repo.findOne({ where: { lid: '111' } })).toMatchObject({ phone: '628333', sessionId: s1 });
+          expect(await new ChatScopeService(store).allows({ allowedChats: ['628333@c.us'] }, '111@lid')).toBe(true);
+          await peer.remember('111', '628111', s2);
+          expect(await store.findPhoneForLid('111@lid')).toBe('628111');
+          editLegacy('EDIT_MATCHING');
+          await drainProjection();
+          expect((await rowEventually('LEGACY', row => row.body === 'new body')).body).toBe('new body');
+          expect(edits).toHaveBeenCalledTimes(2);
+          expect((await adapter.getChats()).find(chat => chat.id === '628111@c.us')?.lastMessage).toBe('new body');
+          const updates = fakeStore.update.mock.calls as Array<
+            [string, string, (message: unknown) => { message: { conversation: string } | null } | null]
+          >;
+          const update = updates.filter(([, id]) => id === 'LEGACY').at(-1)?.[2];
+          expect(
+            update?.({
+              key: { id: 'LEGACY', remoteJid: '628111@s.whatsapp.net', fromMe: false },
+              message: { conversation: 'old body' },
+            })?.message?.conversation,
+          ).toBe('new body');
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'LEGACY_REVOKE', remoteJid: '111@lid', fromMe: false },
+                message: { protocolMessage: { type: 0, key: { id: 'LEGACY' } } },
+                messageTimestamp: 1700000033,
+              },
+            ],
+          });
+          expect(await rowEventually('LEGACY', row => row.type === 'revoked')).toMatchObject({
+            chatId: '628111@c.us',
+            body: '',
+            type: 'revoked',
+          });
+          const removeBody = updates.filter(([, id]) => id === 'LEGACY').at(-1)?.[2];
+          expect(
+            removeBody?.({
+              key: { id: 'LEGACY', remoteJid: '628111@s.whatsapp.net', fromMe: false },
+              message: { conversation: 'new body' },
+            })?.message,
+          ).toBeNull();
+          await peer.rememberIfUnknown('111', '628222', s2);
+          expect(await store.findPhoneForLid('111@lid')).toBeNull();
+          fakeStore.getMessage.mockResolvedValueOnce({
+            key: { id: 'CONFIRMED', remoteJid: '111@lid', fromMe: true },
+            message: { conversation: 'own' },
+          });
+          fakeSock.executeUSyncQuery.mockResolvedValueOnce({ list: [{ id: '628111@s.whatsapp.net', lid: '111@lid' }] });
+          await adapter.starMessage('628111@c.us', 'CONFIRMED', true);
+          await settle();
+          expect(await repo.findOneByOrFail({ lid: '111' })).toMatchObject({ phone: '628111', isReported: true });
+          expect(await fence.allows({ allowedChats: ['628111@c.us'] }, '111@lid')).toBe(true);
+        } finally {
+          await adapter.destroy();
+          await ds.destroy();
+          if (admin) {
+            await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+            await admin.destroy();
+          }
+        }
+      },
+    );
   });
 
   describe('address book on a first link', () => {
@@ -7122,36 +7808,40 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     ['clearChatMessages', (a: BaileysAdapter) => a.clearChatMessages('628111@c.us')],
     ['archiveChat', (a: BaileysAdapter) => a.archiveChat('628111@c.us', true)],
     ['deleteChat', (a: BaileysAdapter) => a.deleteChat('628111@c.us')],
-  ])('%s addresses a lid-keyed chat by its lid when called with the listed @c.us id', async (_n, act) => {
-    const adapter = newAdapter();
-    await adapter.initialize({});
-    fakeSock.fire('connection.update', { connection: 'open' });
-    fakeSock.fire('chats.upsert', [{ id: '484848@lid' }]);
-    fakeSock.fire('messages.upsert', {
-      type: 'notify',
-      messages: [
-        {
-          key: { remoteJid: '484848@lid', remoteJidAlt: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
-          message: { conversation: 'hi' },
-          messageTimestamp: 1700000020,
-        },
-      ],
-    });
-    await new Promise(r => setImmediate(r));
-    expect((await adapter.getChats())[0]?.id).toBe('628111@c.us');
-    await expect(act(adapter)).resolves.toBe(true);
-    expect(fakeSock.chatModify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lastMessages: [{ key: expect.objectContaining({ id: 'M1' }) as unknown, messageTimestamp: 1700000020 }],
-      }),
-      '484848@lid',
-    );
-  });
+  ])(
+    '%s addresses a lid-keyed chat by its lid when called with the phone alias confirmed by a fresh query',
+    async (_n, act) => {
+      const adapter = newAdapter();
+      await adapter.initialize({});
+      fakeSock.fire('connection.update', { connection: 'open' });
+      fakeSock.fire('chats.upsert', [{ id: '484848@lid' }]);
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '484848@lid', remoteJidAlt: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
+            message: { conversation: 'hi' },
+            messageTimestamp: 1700000020,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      expect((await adapter.getChats())[0]?.id).toBe('484848@lid');
+      fakeSock.executeUSyncQuery.mockResolvedValueOnce({ list: [{ id: '628111@s.whatsapp.net', lid: '484848@lid' }] });
+      await expect(act(adapter)).resolves.toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastMessages: [{ key: expect.objectContaining({ id: 'M1' }) as unknown, messageTimestamp: 1700000020 }],
+        }),
+        '484848@lid',
+      );
+    },
+  );
 
   // The writes that need no last message resolve the chat the same way. Keyed by the phone jid, the
   // patch named a chat the phone does not hold, and its local echo added a second row to GET /chats
   // under the same @c.us id, carrying the mute or pin the listed row never showed.
-  describe('writes without a last message on a lid-keyed chat called with the listed @c.us id', () => {
+  describe('writes without a last message on a lid-keyed chat called with the phone alias confirmed by a fresh query', () => {
     const lidKeyedChat = async (): Promise<BaileysAdapter> => {
       const adapter = newAdapter();
       await adapter.initialize({});
@@ -7168,7 +7858,8 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
         ],
       });
       await new Promise(r => setImmediate(r));
-      expect((await adapter.getChats()).map(c => c.id)).toEqual(['628111@c.us']);
+      expect((await adapter.getChats()).map(c => c.id)).toEqual(['484848@lid']);
+      fakeSock.executeUSyncQuery.mockResolvedValueOnce({ list: [{ id: '628111@s.whatsapp.net', lid: '484848@lid' }] });
       return adapter;
     };
 
@@ -7188,7 +7879,7 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
       // Baileys replays its own patch as chats.update under the jid the patch was indexed by.
       fakeSock.fire('chats.update', [{ id: jid, ...echo }]);
       expect(await adapter.getChats()).toEqual([
-        expect.objectContaining({ id: '628111@c.us', name: 'Alice', ...state }),
+        expect.objectContaining({ id: '484848@lid', name: 'Alice', ...state }),
       ]);
     });
 
@@ -9787,10 +10478,10 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
       });
 
-      it('does not hold an edit from the chat the delivery arrived in', async () => {
+      it('does not hold an edit from the chat the delivery arrived in for the answer', async () => {
         const callbacks = sessionCallbacks();
         await startWith({ onMessage: jest.fn(() => ({ settled: answer().promise })), ...callbacks });
-        holdReads([1]);
+        const open = holdReads([1]);
         deliverReuse();
         await settleAll();
 
@@ -9798,6 +10489,10 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
           { id: 'OWN_EDIT_ENV', remoteJid: OTHER, fromMe: false },
           { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: 'late, edited' } },
         );
+        await settleAll();
+        // It follows the delivery's emit, which the answer of the session does not hold up.
+        expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+        open(1);
         await settleAll();
 
         expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(1);
@@ -10335,8 +11030,9 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
 
       answered.resolve({ conflict });
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledTimes(conflict ? 1 : 0);
       expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(conflict ? 0 : 1);
+      // The real edit is judged, but follows the delivery that is still being processed.
+      expect(onMessageEdited).not.toHaveBeenCalled();
 
       openFirst();
       await settleAll();
@@ -10506,6 +11202,10 @@ describe('BaileysAdapter group metadata cache', () => {
     ['a participant is added or removed', 'group-participants.update', { id: GROUP, action: 'add', participants: [] }],
     ['the group changes a setting', 'groups.update', [{ id: GROUP, announce: true }]],
     ['the account is added to the group again', 'groups.upsert', [{ id: GROUP, participants: [] }]],
+    // Baileys reports a disappearing-messages change made on the phone as a chat update only, and the
+    // timer on the cached list is what a group send stamps on its stanza.
+    ['its disappearing-messages timer is changed', 'chats.update', [{ id: GROUP, ephemeralExpiration: 86400 }]],
+    ['its disappearing-messages timer is switched off', 'chats.update', [{ id: GROUP, ephemeralExpiration: null }]],
   ])('reads the group again after %s', async (_label, event, payload) => {
     await ready();
     const { cachedGroupMetadata } = socketConfig();
@@ -10517,16 +11217,35 @@ describe('BaileysAdapter group metadata cache', () => {
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
   });
 
-  it('refreshes a cached group from a whole snapshot without another query', async () => {
+  it('keeps a cached group through the chat updates that every message raises', async () => {
     await ready();
     const { cachedGroupMetadata } = socketConfig();
     await cachedGroupMetadata(GROUP);
 
-    fakeSock.fire('groups.update', [meta(['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
-    const refreshed = (await cachedGroupMetadata(GROUP)) as { participants: unknown[] };
+    fakeSock.fire('chats.update', [{ id: GROUP, unreadCount: 3, conversationTimestamp: 1_700_000_000 }]);
+    await cachedGroupMetadata(GROUP);
 
-    expect(refreshed.participants).toHaveLength(2);
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds the next send from the single-group query, not from a whole snapshot of the group list', async () => {
+    const queried = {
+      ...meta(['159442138038327@lid']),
+      addressingMode: 'lid',
+      ephemeralDuration: 86400,
+    };
+    fakeSock.groupMetadata.mockResolvedValue(queried);
+    await ready();
+    const { cachedGroupMetadata } = socketConfig();
+    await cachedGroupMetadata(GROUP);
+
+    // The all-groups listing can name participants in another id form and leave out the addressing mode
+    // and the disappearing timer; it must not become what the next group send is built from.
+    fakeSock.fire('groups.update', [meta(['628111@s.whatsapp.net', '628222@s.whatsapp.net'])]);
+    const next = await cachedGroupMetadata(GROUP);
+
+    expect(next).toBe(queried);
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
   });
 
   it('still reports the group events to consumers while it keeps the cache', async () => {
@@ -10583,6 +11302,24 @@ describe('BaileysAdapter group metadata cache', () => {
     });
     await jest.runAllTimersAsync();
     await socketConfig().cachedGroupMetadata(GROUP);
+
+    expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
+    await adapter.destroy();
+  });
+
+  it('asks a new socket for a group whose query never came back on the previous one', async () => {
+    const adapter = await ready();
+    // A socket ended on a silent connection loss leaves a query still out on it unanswered.
+    fakeSock.groupMetadata.mockReturnValueOnce(new Promise(() => undefined));
+    void socketConfig().cachedGroupMetadata(GROUP);
+
+    jest.useFakeTimers();
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await jest.runAllTimersAsync();
+    void socketConfig().cachedGroupMetadata(GROUP);
 
     expect(fakeSock.groupMetadata).toHaveBeenCalledTimes(2);
     await adapter.destroy();

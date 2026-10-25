@@ -379,3 +379,18 @@ test('Escape with focus on "more" closes the results and is consumed', async () 
   assert.equal(fireEvent.keyDown(more, { key: 'Escape' }), false, 'Escape on "more" was not consumed');
   assert.ok(!screen.queryByRole('listbox'), 'Escape on "more" left the results open');
 });
+
+test('a hit shows its chat id and time as isolated runs, so a right-to-left page keeps them readable', async () => {
+  const { screen, act } = rtl;
+  rtl.render(createElement(GlobalSearch, { onHit: () => undefined }));
+  const input = screen.getByRole('textbox');
+  await typeAndWaitForRequest(input, 'alice');
+  await act(async () => pending.get('alice')!(['alice replied']));
+  const meta = (await screen.findByRole('listbox')).querySelector('.global-search-hit-meta');
+  assert.ok(meta, 'the hit has no meta line');
+  // A <bdi> takes its direction from its own text, so the Latin id and the digits stay in order inside Arabic or Hebrew text.
+  assert.deepEqual(
+    [...meta.querySelectorAll('bdi')].map(run => run.textContent),
+    ['chat-1@c.us', new Date(1_767_225_600 * 1000).toLocaleString()],
+  );
+});

@@ -128,6 +128,23 @@ describe('Message send endpoints (e2e)', () => {
     expect(engine.sendTextMessage).toHaveBeenCalledWith('628123@c.us', 'hello from e2e');
   });
 
+  // Implicit conversion used to rewrite these into their string forms, so the engine was called with
+  // '[object Object]' or 'true' and the customer received that as the message.
+  it.each([[{ order: 42 }], [true]])('send-text refuses a text of %j and never reaches the engine', async text => {
+    await post('send-text', { chatId: '628123@c.us', text }).expect(400);
+    await post('send-text', { chatId: text, text: 'hello' }).expect(400);
+
+    expect(engine.sendTextMessage).not.toHaveBeenCalled();
+  });
+
+  // A number keeps the conversion every release has had: no-code clients post a value held as a number,
+  // and the engine receives its decimal string.
+  it('send-text still reads a numeric text as its decimal string', async () => {
+    await post('send-text', { chatId: '628123@c.us', text: 5 }).expect(201);
+
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('628123@c.us', '5');
+  });
+
   it('send-image returns 201 and hands the base64 payload to the engine', async () => {
     const base64 = Buffer.from('GIF89a').toString('base64');
     const res = await post('send-image', {

@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { MessageProjector, PERSIST_RETRY_DELAY_MS } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
-import { Not, type Repository } from 'typeorm';
+import { IsNull, Not, Or, type Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { Session } from './entities/session.entity';
 import { EventsGateway } from '../events/events.gateway';
@@ -435,7 +435,11 @@ describe('MessageProjector', () => {
         metadata: null,
         timestamp: 1_700_000_000,
       };
-      messageRepository.find.mockResolvedValueOnce([{ waMessageId: 'WA1', type: 'text' }]).mockResolvedValueOnce([row]);
+      messageRepository.find
+        .mockResolvedValueOnce([
+          { waMessageId: 'WA1', type: 'text', chatId: 'c1@c.us', direction: MessageDirection.INCOMING },
+        ])
+        .mockResolvedValueOnce([row]);
       const builder = {
         insert: jest.fn().mockReturnThis(),
         values: jest.fn().mockReturnThis(),
@@ -766,12 +770,13 @@ describe('MessageProjector (inbound projection)', () => {
       expect(projector.inFlightInbound('other-session', 'wamid.1')).toBeUndefined();
     });
 
-    it('lends no text to a quote once the message is revoked before its row is written', () => {
+    it('lends no text to a quote once the message is revoked before its row is written', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
       hookManager.execute.mockImplementationOnce(() => new Promise(() => undefined));
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+      await settle();
       projector.handleMessageRevoked(SESSION_ID, engine, { id: 'wamid.1' } as never);
 
       expect(projector.inFlightInbound(SESSION_ID, 'wamid.1')).toEqual({ chatId: '15550001111@c.us', body: '' });
@@ -834,7 +839,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[where, { body: 'second fix' }]]);
+        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'second fix' }]]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
 
@@ -960,7 +965,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[where, { body: 'genuine edit' }]]);
+        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'genuine edit' }]]);
       });
 
       it('keeps a reaction from another chat out of the message while its row is not written', async () => {
@@ -1210,7 +1215,10 @@ describe('MessageProjector (inbound projection)', () => {
       await flush();
 
       const guarded = { ...where, type: Not('revoked') };
-      expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'late' });
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        { ...guarded, body: Or(Not('late'), IsNull()) },
+        { body: 'late' },
+      );
       expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'later' });
     });
 
@@ -1324,6 +1332,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'B', chatId: chatA }));
+      await flush();
       // Both chains started: hooks still run concurrently.
       expect(hookManager.execute).toHaveBeenCalledTimes(2);
 
@@ -1345,6 +1354,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'C', chatId: '15550002222@c.us' }));
+      await flush();
       release.get('C')!();
       await flush();
 
@@ -1358,6 +1368,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'B', chatId: chatA }));
+      await flush();
       release.get('A')!(true);
       release.get('B')!();
       await flush();
@@ -1373,6 +1384,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'B', chatId: chatA }));
+      await flush();
       release.get('B')!();
       await flush();
       engines.set(SESSION_ID, makeEngine());
@@ -1390,6 +1402,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'B', chatId: chatA }));
+      await flush();
       release.get('B')!();
       await flush();
       projector.handleMessageRevoked(SESSION_ID, engine, { id: 'B' } as never);
@@ -1426,6 +1439,7 @@ describe('MessageProjector (inbound projection)', () => {
       });
       if (fromMe) projector.handleOwnSendEcho(SESSION_ID, engine, b);
       else projector.handleInboundMessage(SESSION_ID, engine, b);
+      await flush();
       release.get('B')!();
       await flush();
       // The REST delete-for-me: no engine revoke event follows, so no message.revoked went out.
@@ -1453,6 +1467,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'B', chatId: chatA, body: 'typo' }));
+      await flush();
       release.get('B')!();
       await flush();
       projector.applyMessageEditQueued(SESSION_ID, { messageId: 'B', body: 'fixed' } as never);
@@ -1477,6 +1492,7 @@ describe('MessageProjector (inbound projection)', () => {
 
       projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
       projector.handleOwnSendEcho(SESSION_ID, engine, makeIncoming({ id: 'S', chatId: chatA, fromMe: true }));
+      await flush();
       release.get('S')!();
       await flush();
       expect(inserted()).toEqual([]);
@@ -1495,6 +1511,7 @@ describe('MessageProjector (inbound projection)', () => {
         const release = holdHooks();
         projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ id: 'A', chatId: chatA }));
         projector.handleOwnSendEcho(SESSION_ID, engine, makeIncoming({ id: 'S', chatId: chatA, fromMe: true }));
+        await flush();
         release.get('S')!();
         await flush();
         return { engine, releaseA: () => release.get('A')!() };
@@ -1531,7 +1548,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[whereS, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(
           SESSION_ID,
           'message.sent',
@@ -1569,7 +1586,7 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[whereS, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
       });
 
       it('stores reactions that arrived before the row, without announcing them again', async () => {
@@ -1687,7 +1704,10 @@ describe('MessageProjector (inbound projection)', () => {
       await flush();
 
       await expect(receipt?.settled).resolves.toBeUndefined();
-      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(messageRepository.findOne).toHaveBeenCalledTimes(1);
+      expect(messageRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'revoked' } }),
+      );
       expect(received()).toHaveLength(1);
     });
 
@@ -1941,13 +1961,13 @@ describe('MessageProjector (inbound projection)', () => {
       expect(outcome).toBeUndefined();
     });
 
-    it('reports nothing for a chat it cannot compare with the row, as a lid against a phone number', async () => {
+    it('reports a conflict for a LID without a reported pairing to the phone-keyed row', async () => {
       const outcome = await repeat(
         { chatId: '99887766@lid' },
         { chatId: '15550001111@c.us', direction: 'incoming', author: null },
       );
 
-      expect(outcome).toBeUndefined();
+      expect(outcome).toEqual({ conflict: true });
     });
 
     it('judges the message a hook left, as the row it would have written', async () => {
@@ -1978,7 +1998,10 @@ describe('MessageProjector (inbound projection)', () => {
       await flush();
 
       await expect(receipt?.settled).resolves.toBeUndefined();
-      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(messageRepository.findOne).toHaveBeenCalledTimes(1);
+      expect(messageRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: SESSION_ID, waMessageId: 'wamid.1', type: 'revoked' } }),
+      );
       expect(received()).toHaveLength(1);
     });
 

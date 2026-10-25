@@ -171,6 +171,16 @@
       "backgroundColor": "Hintergrundfarbe",
       "font": "Schriftart",
       "fontDefault": "Standard",
+      "fonts": {
+        "system": "System",
+        "systemText": "Systemtext",
+        "script": "Schreibschrift",
+        "bold": "Fett",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "oder",
       "post": "Posten",
       "posted": "Status gepostet",
@@ -670,7 +680,7 @@
       "call.rejected": "Wenn ein Anruf abgelehnt wird",
       "call.missed": "Wenn ein Anruf unbeantwortet bleibt",
       "status.received": "Wenn ein Kontakt einen Status veröffentlicht",
-      "all": "Alle Ereignisse"
+      "all": "Alle Ereignisse außer message.receipt, das ausdrücklich genannt werden muss"
     },
     "auth": {
       "title": "Zustellungsauthentifizierung",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} gesendet",
     "groupSendCancelled": "{{count}}, abgebrochen",
     "groupSendStopped": "{{count}}, gestoppt nach HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, gestoppt: das Gateway hat nicht geantwortet",
     "response": {
       "timestamp": "Zeitstempel",
       "messageId": "Nachrichten-ID",
@@ -1045,7 +1056,7 @@
       "copy": "Kopieren",
       "copied": "Kopiert",
       "checkedAt": "Geprüft um",
-      "openTester": "Im Nachrichtentester öffnen"
+      "openTester": "Zum Nachrichtentester"
     },
     "recent": {
       "title": "Letzte Prüfungen",
@@ -1082,6 +1093,7 @@
       "start": "Batch-Prüfung starten",
       "stop": "Prüfung stoppen",
       "export": "Ergebnisse exportieren (CSV)",
+      "exportHint": "Die Datei enthält jede Ziffer. Eine Tabellenkalkulation zeigt lange Nummern eventuell als 9.19612E+11 an oder entfernt eine führende Null; importieren Sie die Datei und stellen Sie die Spalte Phone Number auf Text, damit die Nummern unverändert bleiben.",
       "stoppedTitle": "Batch gestoppt",
       "checked": "Geprüft",
       "remaining": "Verbleibend",
@@ -1094,6 +1106,7 @@
       "reasonOther": "Das Gateway hat eine Abfrage abgelehnt",
       "partial": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummer wurde nicht geprüft. Versuche es später erneut.",
       "partial_other": "{{reason}} (HTTP {{status}}). Gestoppt bei Nummer {{attempted}} von {{total}}; {{count}} Nummern wurden nicht geprüft. Versuche es später erneut.",
+      "noAnswer": "Das Gateway hat nicht geantwortet. Gestoppt bei Nummer {{attempted}} von {{total}}. Versuche es später erneut.",
       "last": "{{reason}} (HTTP {{status}}). Die letzte Abfrage ist fehlgeschlagen. Versuche es später erneut."
     },
     "toast": {
@@ -1192,7 +1205,10 @@
       "disabled": "Deaktiviert"
     },
     "envPinNote": "Durch die Umgebungsvariable {{name}} festgelegt — dies ist der aktuell verwendete Wert. Änderungen im Dashboard werden erst wirksam, wenn diese Variable entfernt wird.",
+    "envPinFlagNote": "Durch die Umgebungsvariable {{name}} festgelegt: Solange sie auf true steht und dieser Dienst verwendet wird, startet der integrierte Container bei jedem Serverstart, auch wenn dieser Schalter aus ist.",
     "pendingRestartNote": "Gespeichert, aber noch nicht übernommen — starten Sie den Server neu, damit diese Änderung wirksam wird.",
+    "pendingBuiltInNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit einem externen Dienst, ein Neustart wechselt zum integrierten Container.",
+    "pendingExternalNote": "Gespeichert, aber noch nicht übernommen: Der Server läuft derzeit mit dem integrierten Container, ein Neustart wechselt zu einem externen Dienst.",
     "migration": {
       "title": "Achtung — dadurch wird das Daten-Backend geändert",
       "dbWarning": "Die neue Datenbank ist zunächst leer. Lade jetzt eine Sicherung deiner aktuellen Daten herunter, solange noch die alte Datenbank aktiv ist, und stelle sie nach dem Neustart wieder her.",
@@ -1218,6 +1234,7 @@
       "successTitle": "Server bereit",
       "errorTitle": "Neustart fehlgeschlagen",
       "idleDesc": "Die Konfiguration wurde in <code>.env.generated</code> gespeichert.<br/>Ein Serverneustart ist erforderlich, um die Änderungen anzuwenden.",
+      "stopsContainers": "Der Neustart stoppt außerdem diese integrierten Container, die mit ihren Daten erhalten bleiben und nicht gelöscht werden:",
       "later": "Später neu starten",
       "now": "Jetzt neu starten",
       "restartingMsg": "Server wird neu gestartet... {{count}} s",

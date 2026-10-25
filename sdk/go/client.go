@@ -279,6 +279,9 @@ func isIdempotentSendPath(path string) bool {
 // typed service path (rawPath false) also refuses an empty segment, which
 // means a required id was blank; a hand-written Do path may keep one.
 func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any, rawPath bool) ([]byte, string, error) {
+	// net/http sends the method as written and the gateway answers 400 to a lowercase one. The idempotency
+	// header and the retry policy compare the upper-case names as well.
+	method = strings.ToUpper(method)
 	if err := checkPathSegments(path, rawPath); err != nil {
 		return nil, "", err
 	}

@@ -7,6 +7,9 @@ package com.rmyndharis.openwa.model;
  * <p>{@code dateFrom} / {@code dateTo} are epoch-<strong>milliseconds</strong> (the public
  * contract), even though {@link SearchHit#timestamp()} is epoch-seconds (it mirrors the stored
  * {@code messages.timestamp} column).
+ *
+ * <p>{@code limit} defaults to 50 and is capped at the server's {@code SEARCH_LIMIT_MAX} (100 by
+ * default); {@code offset} is at most 100000, and the server answers 400 above it.
  */
 public record SearchQuery(
     String q,
@@ -35,7 +38,10 @@ public record SearchQuery(
         private Integer limit;
         private Integer offset;
 
-        /** Required. The search term; must be non-empty at {@link #build()} time. */
+        /**
+         * Required. The search term; must be non-empty at {@link #build()} time. At most 1000
+         * characters and 32 words; the server answers 400 above either.
+         */
         public Builder q(String v) {
             this.q = v;
             return this;

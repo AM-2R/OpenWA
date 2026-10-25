@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsInt, IsString, Max, Min } from 'class-validator';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 /** The largest epoch-ms value a JS Date can hold; anything above it is an Invalid Date. */
 const MAX_DATE_MS = 8_640_000_000_000_000;
@@ -10,6 +11,7 @@ export class CreateCallLinkDto {
     enum: ['audio', 'video'],
     example: 'video',
   })
+  @ToStrictString()
   @IsString()
   @IsIn(['audio', 'video'])
   type!: 'audio' | 'video';

@@ -201,7 +201,7 @@ function ConfigField({
           minLength={field.min}
           maxLength={field.max}
           rows={4}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => onChange(coerceFieldInput(field, e.target.value))}
         />
         {desc}
       </div>
@@ -225,7 +225,8 @@ function ConfigField({
         step={field.type === 'number' ? 'any' : undefined}
         minLength={field.type !== 'number' ? field.min : undefined}
         maxLength={field.type !== 'number' ? field.max : undefined}
-        pattern={field.type !== 'number' ? field.pattern : undefined}
+        // A stored secret reads back as the mask '***', which no pattern describes: it is only checked once typed over.
+        pattern={field.type !== 'number' && !(field.secret && value === '***') ? field.pattern : undefined}
         onChange={e => onChange(coerceFieldInput(field, e.target.value))}
       />
       {desc}
@@ -591,7 +592,13 @@ export default function Plugins() {
   useDocumentTitle(t('plugins.title'));
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { data: plugins = [], isLoading: loadingPlugins, error: queryError } = usePluginsQuery();
+  const {
+    data: plugins = [],
+    isLoading: loadingPlugins,
+    error: queryError,
+    // A read that never produced a list says nothing about what is installed. A failed refetch keeps its data.
+    isLoadingError: neverLoaded,
+  } = usePluginsQuery();
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   // Ids of plugins with a lifecycle action in flight. One per plugin, so another plugin's action
@@ -896,18 +903,18 @@ export default function Plugins() {
         <aside className="plugins-rail">
           <div className="rail-stats">
             <div className="rail-stat">
-              <span className="rail-stat-num">{enabledCount}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : enabledCount}</span>
               <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
             </div>
             <div className="rail-stat">
-              <span className="rail-stat-num">{visiblePlugins.length}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : visiblePlugins.length}</span>
               <span className="rail-stat-label">{t('plugins.rail.installed', 'installed')}</span>
             </div>
           </div>
 
           <div className="rail-section">
             <p className="rail-label">{t('plugins.rail.active', 'Active plugins')}</p>
-            {activePlugins.length === 0 ? (
+            {neverLoaded ? null : activePlugins.length === 0 ? (
               <p className="rail-empty">{t('plugins.rail.none', 'None enabled yet')}</p>
             ) : (
               <ul className="rail-active-list">
@@ -923,7 +930,7 @@ export default function Plugins() {
           </div>
         </aside>
 
-        <main className="plugins-main">
+        <div className="plugins-main">
           <div className="plugins-grid">
             {visiblePlugins.map(plugin => {
               const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
@@ -1047,10 +1054,10 @@ export default function Plugins() {
               );
             })}
           </div>
-        </main>
+        </div>
       </div>
 
-      {visiblePlugins.length === 0 && !loading && (
+      {visiblePlugins.length === 0 && !loading && !neverLoaded && (
         <div className="empty-state">
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>

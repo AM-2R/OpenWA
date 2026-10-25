@@ -445,8 +445,9 @@ LOG_FORMAT=json
 # CACHE_ENABLED=true
 # QUEUE_ENABLED=true   # process webhooks/ingress through the BullMQ queue
 # Deployments that use the queue on one shared Redis need a distinct QUEUE_PREFIX each (default bull; up
-# to 64 letters, digits, dots, underscores or hyphens). A queue is named only by its prefix and name, so
-# two deployments on the same prefix take each other's webhook jobs and complete them without delivering.
+# to 64 letters, digits, dots, underscores or hyphens, starting with a letter or digit). A queue is named
+# only by its prefix and name, so two deployments on the same prefix take each other's webhook jobs and
+# complete them without delivering.
 # Replicas of one deployment share a value; changing it on a live deployment leaves the jobs queued under
 # the old prefix unprocessed. The prefix covers the queues only: with REDIS_ENABLED=true the rate-limit
 # counters and the WebSocket fan-out channel are shared as well, and events reach the clients of every
@@ -503,7 +504,17 @@ WEBHOOK_DISPATCH_MAX_QUEUED=1000
 # The failing state and the cap are held per process, not per cluster.
 # The first 2xx from the webhook lifts it. With the queue disabled, a session parks at most a
 # quarter of WEBHOOK_DISPATCH_MAX_QUEUED behind that limit and sheds the rest, so other sessions
-# keep room. Each running, parked or backoff-waiting inline delivery holds its event's inline media
+# keep room. Opt-in events such as message.receipt are bounded per receiving webhook instead: a
+# quarter of WEBHOOK_DISPATCH_CONCURRENCY deliveries run at once, divided among the session's
+# webhooks that name the event and one at least for each, and three quarters of
+# WEBHOOK_DISPATCH_MAX_QUEUED events wait; further ones are dropped, not replayed, and counted in
+# openwa_webhook_delivery_failures_total. A webhook whose receiver never answers holds only its own
+# places, but the pool is shared: a session holds up to four at once (one per webhook past four), and
+# another session's events wait for a slot once such sessions together hold all of them, which
+# is four sessions at the defaults. A webhook's share is fixed when its queue is created and kept while
+# it has events, so receipt webhooks added meanwhile can briefly raise a session above four. There is
+# no process-wide cap on the events waiting.
+# Each running, parked or backoff-waiting inline delivery holds its event's inline media
 # (up to 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES as base64), about 1.3 GiB per process at the defaults
 # when every slot is taken; lower these caps or enable the queue to reduce it.
 # WEBHOOK_DEGRADED_SESSION_CONCURRENCY=
@@ -924,7 +935,9 @@ set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSa
 wrong token returns 401. After 10 failed attempts from one client IP within a minute, that client is
 answered 429 (even with the correct token) until the window slides; a successful scrape does not count
 against the limit. The token is **separate** from the API key — the route is `@Public()` (skips
-the API-key guard) and `@SkipThrottle()`.
+the API-key guard) and `@SkipThrottle()`. A production boot refuses a `METRICS_TOKEN` that is the
+`.env.example` placeholder or a known weak value such as `test` or `change-me`, because the route is
+public; there is no length floor, so choose a long random value or leave it unset.
 
 ```typescript
 // metrics/metrics.service.ts (dependency-free; emits text v0.0.4 by hand)
@@ -1090,7 +1103,22 @@ configured for stdout alone drops exactly the lines you most want. `LOG_LEVEL`
 (`error|warn|info|debug|verbose`) sets verbosity and `LOG_FORMAT` (`json|pretty`) the rendering,
 defaulting to `json` under `NODE_ENV=production` and `pretty` elsewhere. Metadata whose **key name**
 looks like a secret (password, token, api-key, authorization, …) keeps the key and has its **value**
-replaced with `[REDACTED]` before the line is written.
+replaced with `[REDACTED]` before the line is written, at any depth. A log call never throws on its
+metadata: an object that contains itself is written with `[Circular]` in its place, and below the fifth
+level at most 1000 more objects and arrays are copied, the rest written as `[Truncated]`. So is an array,
+Map, Set or object with more entries than that allowance has left (a list of 1000 numbers at the sixth
+level), and, at any level, an array, Map or Set of more than a million entries. A Map is counted as the arrays
+it is written as: its list of pairs, and each pair an array of two, which below the fifth level is one more of
+those 1000. At every level one call copies at most two million entries in all (the keys of its objects plus the
+lengths of its arrays, so three to a Map's pair: one of more than 666,666 pairs loses its last pairs) and writes at
+most 2^26 (about 67 million) characters of string values, key names and BigInt text (sixteen to the digit, as
+a long BigInt's text costs that much more to build, so one of more than 2^22 digits is `[Truncated]` even alone); a
+value referenced again is counted again at each use, and what no longer fits is written as `[Truncated]`.
+A value that keeps its data outside its own properties is written readably, at any depth: an Error as its
+`name`, `message` and `stack` before its own properties, a Date as its ISO text (`Invalid Date` when it holds
+none), a boxed string, number or boolean as its value, a Buffer or typed array as its `type` and `length`, never
+its bytes, a Map as an array of `[key, value]` pairs (the value of a secret-named string key redacted) and a Set
+as an array of its values.
 
 The same logger is installed as Nest's framework logger, so framework lines (route mapping, unhandled
 exception stacks from the exception handler) follow `LOG_LEVEL` and `LOG_FORMAT` and carry the

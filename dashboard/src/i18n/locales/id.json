@@ -171,6 +171,16 @@
       "backgroundColor": "Warna latar",
       "font": "Font",
       "fontDefault": "Default",
+      "fonts": {
+        "system": "Sistem",
+        "systemText": "Teks sistem",
+        "script": "Tulisan tangan",
+        "bold": "Tebal",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "atau",
       "post": "Posting",
       "posted": "Status diposting",
@@ -670,7 +680,7 @@
       "call.rejected": "Saat panggilan ditolak",
       "call.missed": "Saat panggilan tidak terjawab",
       "status.received": "Saat kontak memposting status",
-      "all": "Semua kejadian"
+      "all": "Semua kejadian kecuali message.receipt, yang harus disebutkan secara eksplisit"
     },
     "auth": {
       "title": "Autentikasi pengiriman",
@@ -971,6 +981,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} terkirim",
     "groupSendCancelled": "{{count}}, dibatalkan",
     "groupSendStopped": "{{count}}, dihentikan setelah HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, dihentikan: gateway tidak merespons",
     "response": {
       "timestamp": "Waktu",
       "messageId": "ID Pesan",
@@ -1045,7 +1056,7 @@
       "copy": "Salin",
       "copied": "Tersalin",
       "checkedAt": "Diperiksa Pada",
-      "openTester": "Buka di Penguji Pesan"
+      "openTester": "Buka Penguji Pesan"
     },
     "recent": {
       "title": "Pemeriksaan Terbaru",
@@ -1082,6 +1093,7 @@
       "start": "Mulai Pemeriksaan Batch",
       "stop": "Hentikan Pemeriksaan",
       "export": "Ekspor Hasil (CSV)",
+      "exportHint": "File ini memuat semua digit. Aplikasi spreadsheet bisa menampilkan nomor panjang sebagai 9.19612E+11 atau menghapus nol di depan; impor file dan atur kolom Phone Number ke Teks agar nomor tetap utuh.",
       "stoppedTitle": "Batch dihentikan",
       "checked": "Diperiksa",
       "remaining": "Tersisa",
@@ -1094,6 +1106,7 @@
       "reasonOther": "Gateway menolak pemeriksaan",
       "partial": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
       "partial_other": "{{reason}} (HTTP {{status}}). Berhenti di nomor {{attempted}} dari {{total}}; {{count}} nomor belum diperiksa. Coba lagi nanti.",
+      "noAnswer": "Gateway tidak merespons. Berhenti di nomor {{attempted}} dari {{total}}. Coba lagi nanti.",
       "last": "{{reason}} (HTTP {{status}}). Pemeriksaan terakhir gagal. Coba lagi nanti."
     },
     "toast": {
@@ -1192,7 +1205,10 @@
       "disabled": "Dinonaktifkan"
     },
     "envPinNote": "Disematkan oleh variabel lingkungan {{name}} — ini adalah nilai yang berjalan; perubahan dasbor tidak akan berlaku sampai variabel tersebut dihapus.",
+    "envPinFlagNote": "Disematkan oleh variabel lingkungan {{name}}: selama bernilai true dan layanan ini digunakan, container bawaan tetap dijalankan setiap kali server mulai, meskipun sakelar ini mati.",
     "pendingRestartNote": "Tersimpan, tetapi belum diterapkan — restart server agar perubahan berlaku.",
+    "pendingBuiltInNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan layanan eksternal, dan restart akan mengalihkannya ke container bawaan.",
+    "pendingExternalNote": "Tersimpan, tetapi belum diterapkan: server saat ini berjalan dengan container bawaan, dan restart akan mengalihkannya ke layanan eksternal.",
     "migration": {
       "title": "Perhatian — ini mengubah backend data",
       "dbWarning": "Database baru dimulai kosong. Unduh cadangan data Anda saat ini sekarang (saat masih di database lama), lalu pulihkan setelah restart.",
@@ -1218,6 +1234,7 @@
       "successTitle": "Server siap",
       "errorTitle": "Restart gagal",
       "idleDesc": "Konfigurasi telah disimpan ke <code>.env.generated</code>.<br/>Restart server diperlukan untuk menerapkan perubahan.",
+      "stopsContainers": "Restart juga akan menghentikan container bawaan berikut, yang tetap menyimpan datanya dan tidak dihapus:",
       "later": "Restart Nanti",
       "now": "Restart Sekarang",
       "restartingMsg": "Me-restart server... {{count}}d",

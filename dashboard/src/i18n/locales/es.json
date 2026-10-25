@@ -175,6 +175,16 @@
       "backgroundColor": "Color de fondo",
       "font": "Fuente",
       "fontDefault": "Predeterminada",
+      "fonts": {
+        "system": "Sistema",
+        "systemText": "Texto del sistema",
+        "script": "Manuscrita",
+        "bold": "Negrita",
+        "morningBreeze": "Morning Breeze",
+        "calistoga": "Calistoga",
+        "exo2": "Exo 2",
+        "courierPrime": "Courier Prime"
+      },
       "orLabel": "o",
       "post": "Publicar",
       "posted": "Estado publicado",
@@ -676,7 +686,7 @@
       "call.rejected": "Cuando se rechaza una llamada",
       "call.missed": "Cuando una llamada no se contesta",
       "status.received": "Cuando un contacto publica un estado",
-      "all": "Todos los eventos"
+      "all": "Todos los eventos excepto message.receipt, que debe indicarse de forma explícita"
     },
     "auth": {
       "title": "Autenticación de entrega",
@@ -927,6 +937,7 @@
     "groupsSentSummary": "{{sent}}/{{total}} enviados",
     "groupSendCancelled": "{{count}}, cancelados",
     "groupSendStopped": "{{count}}, detenido tras HTTP {{status}}",
+    "groupSendStoppedNoAnswer": "{{count}}, detenido: la puerta de enlace no respondió",
     "response": {
       "timestamp": "Fecha/Hora",
       "messageId": "ID de mensaje",
@@ -1051,7 +1062,7 @@
       "copy": "Copiar",
       "copied": "Copiado",
       "checkedAt": "Hora de verificación",
-      "openTester": "Abrir en el probador de mensajes"
+      "openTester": "Ir al probador de mensajes"
     },
     "recent": {
       "title": "Verificaciones recientes",
@@ -1089,6 +1100,7 @@
       "start": "Iniciar verificación por lotes",
       "stop": "Detener verificación",
       "export": "Exportar resultados (CSV)",
+      "exportHint": "El archivo contiene todos los dígitos. Una hoja de cálculo puede mostrar los números largos como 9.19612E+11 o quitar un cero inicial; importe el archivo y defina la columna Phone Number como Texto para conservarlos tal como están.",
       "stoppedTitle": "Lote detenido",
       "checked": "Verificados",
       "remaining": "Restantes",
@@ -1102,6 +1114,7 @@
       "partial": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} número no se envió. Inténtalo de nuevo más tarde.",
       "partial_other": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
       "partial_many": "{{reason}} (HTTP {{status}}). La verificación se detuvo en el número {{attempted}} de {{total}}; {{count}} números no se enviaron. Inténtalo de nuevo más tarde.",
+      "noAnswer": "La puerta de enlace no respondió. La verificación se detuvo en el número {{attempted}} de {{total}}. Inténtalo de nuevo más tarde.",
       "last": "{{reason}} (HTTP {{status}}). Falló la última consulta. Inténtalo de nuevo más tarde."
     },
     "toast": {
@@ -1207,6 +1220,7 @@
       "successTitle": "✅ Servidor listo",
       "errorTitle": "❌ Error al reiniciar",
       "idleDesc": "La configuración se ha guardado en <code>.env.generated</code>.<br/>Es necesario reiniciar el servidor para aplicar los cambios.",
+      "stopsContainers": "El reinicio también detendrá estos contenedores integrados, que conservan sus datos y no se eliminan:",
       "later": "Reiniciar más tarde",
       "now": "Reiniciar ahora",
       "restartingMsg": "Reiniciando servidor... {{count}}s",
@@ -1221,7 +1235,10 @@
       "saveFailed": "Error al guardar"
     },
     "envPinNote": "Fijado por la variable de entorno {{name}}: este es el valor en ejecución; los cambios del panel no se aplicarán hasta que esa variable se elimine.",
+    "envPinFlagNote": "Fijado por la variable de entorno {{name}}: mientras valga true y este servicio esté en uso, el contenedor integrado se inicia en cada arranque del servidor, aunque este interruptor esté desactivado.",
     "pendingRestartNote": "Guardado, pero aún no aplicado: reinicia el servidor para que este cambio surta efecto.",
+    "pendingBuiltInNote": "Guardado, pero aún no aplicado: el servidor usa ahora un servicio externo y un reinicio lo cambiará al contenedor integrado.",
+    "pendingExternalNote": "Guardado, pero aún no aplicado: el servidor usa ahora el contenedor integrado y un reinicio lo cambiará a un servicio externo.",
     "migration": {
       "title": "Atención: esto cambia el backend de datos",
       "dbWarning": "La nueva base de datos comienza vacía. Descarga ahora una copia de seguridad de tus datos actuales (mientras sigues en la base de datos anterior) y luego restáurala después del reinicio.",

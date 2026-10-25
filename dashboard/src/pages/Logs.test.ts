@@ -61,6 +61,8 @@ let exportTotal: number | null = null;
 let exportThrottledFrom: number | null = null;
 // When set, the export walks a 300-row table that gains a newest row after its first page is read.
 let exportGrowsMidWalk = false;
+// When set, the export's page walk sees exactly these rows.
+let exportRows: AuditLog[] | null = null;
 // When set, the on-screen list reports this many rows in total, so the page has a pager.
 let listTotal: number | null = null;
 // When set, a request for the first on-screen page waits for it before answering.
@@ -93,6 +95,9 @@ function installFetchStub(): void {
         return Promise.resolve(jsonResponse({ data: [...Array(200).keys()].map(exportRow), total: 300 }));
       const shifted = [exportRow(-1), ...[...Array(300).keys()].map(exportRow)];
       return Promise.resolve(jsonResponse({ data: shifted.slice(offset), total: 301 }));
+    }
+    if (exportRows && url.includes('limit=200')) {
+      return Promise.resolve(jsonResponse({ data: exportRows, total: exportRows.length }));
     }
     if (listFailure && !url.includes('limit=200')) {
       return Promise.resolve(new Response(JSON.stringify({ message: 'Bad Gateway' }), { status: listFailure }));
@@ -277,6 +282,27 @@ test('a row written while the export walks the pages is not exported twice', asy
     assert.equal(lines.filter(line => line.endsWith(',err-199')).length, 1, 'the row the shift repeated');
   } finally {
     exportGrowsMidWalk = false;
+    restore();
+  }
+});
+
+// Rows carry request paths and error messages a client chose, and a spreadsheet runs a cell that starts with = + - or @.
+test('an exported cell that starts like a formula is neutralized', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { downloads, restore } = recordDownloads();
+  exportRows = [
+    { ...LOG_FAILED_SEND, id: 'row-formula', path: '=HYPERLINK("https://example.test","x")', errorMessage: '+cmd' },
+  ];
+  try {
+    renderLogs();
+    await screen.findByText('infra.restart');
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => assert.equal(downloads.length, 1));
+    const csv = await downloads[0].text();
+    assert.ok(csv.includes(`"'=HYPERLINK(""https://example.test"",""x"")"`), csv);
+    assert.ok(csv.endsWith(",'+cmd"), csv);
+  } finally {
+    exportRows = null;
     restore();
   }
 });

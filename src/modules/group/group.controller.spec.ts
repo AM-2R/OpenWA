@@ -40,6 +40,14 @@ describe('GroupController join + settings', () => {
     expect(service.updateGroupSettings).toHaveBeenCalledWith('s1', 'g1', dto);
   });
 
+  it.each(['getSettings', 'updateSettings'] as const)('%s summary names the member-add mode it carries', method => {
+    const handler = Object.getOwnPropertyDescriptor(GroupController.prototype, method)?.value as object;
+    const op = Reflect.getMetadata('swagger/apiOperation', handler) as { summary: string };
+    expect(op.summary).toBe(
+      `${method === 'getSettings' ? 'Get' : 'Update'} group settings (announce / locked / ephemeral timer / member-add mode)`,
+    );
+  });
+
   it('PUT :groupId/settings propagates a service rejection (empty patch / 501 passthrough)', async () => {
     const { controller } = build({
       updateGroupSettings: jest
@@ -173,6 +181,17 @@ describe('GroupController OpenAPI responses', () => {
   it('names the WhatsApp 5xx on the picture 503 and not on the settings 503', () => {
     expect(responsesOf('getPicture')['503']?.description).toContain('5xx');
     expect(responsesOf('getSettings')['503']?.description).not.toContain('5xx');
+  });
+
+  // GroupSettingsDto checks each field against its own type or range and refuses an explicit null, and
+  // the engine lookup answers 400 for a session that is not started, so the 400 names all of them.
+  it('describes every 400 of the settings update', () => {
+    const description = responsesOf('updateSettings')['400']?.description ?? '';
+    for (const part of ['`ephemeralSeconds`', '0 or more', '`memberAddMode`', '`all` or `admins`', '`null`']) {
+      expect(description).toContain(part);
+    }
+    expect(description).toContain('not started');
+    expect(description).not.toContain('not a boolean');
   });
 
   it('declares the rate-limited 503 on group creation', () => {

@@ -27,9 +27,15 @@ function visibleFocusables(card: HTMLElement): HTMLElement[] {
 /**
  * Wires one open dialog: locks background scroll, moves focus into the dialog, traps Tab inside it,
  * closes on Escape, and returns a cleanup that restores scroll and focus to the element that was
- * focused when the dialog opened (the trigger).
+ * focused when the dialog opened (the trigger). `initialFocus` names the element focus starts on,
+ * usually the first field; without one, or when it finds none, that is the first focusable.
  */
-export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => void): () => void {
+export function bindModalA11y(
+  doc: Document,
+  card: HTMLElement,
+  onClose: () => void,
+  initialFocus?: () => HTMLElement | null,
+): () => void {
   if (modalStack.length === 0) lockedOverflow = doc.body.style.overflow;
   doc.body.style.overflow = 'hidden';
 
@@ -69,8 +75,10 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
 
   doc.addEventListener('keydown', onKeyDown, true);
 
-  // Initial focus: the first visible focusable in the dialog, else the dialog card itself.
-  (visibleFocusables(card)[0] ?? card).focus();
+  // Initial focus: the element the dialog names, else the first visible focusable in it, else the card itself.
+  // The opener was recorded above, so focus a field here and not with autoFocus: React focuses an autoFocus
+  // input during the commit, before this runs, and it would be recorded as the opener and lost on close.
+  (initialFocus?.() ?? visibleFocusables(card)[0] ?? card).focus();
 
   return () => {
     const stackIndex = modalStack.indexOf(stackEntry);

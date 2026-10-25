@@ -156,11 +156,20 @@ const EVICTION_MESSAGES: Record<ApiKeyEvictionReason, string> = {
   expired: 'API key has expired',
 };
 
+/**
+ * Largest client frame the socket accepts, in bytes. A client only sends subscribe, unsubscribe and ping
+ * frames, and the longest legal one (the longest session and request id, every event) is under 1 KB.
+ * Every frame is decoded and walked before it is answered, so the Socket.IO default of 1 MB is far more
+ * than any client needs.
+ */
+export const WS_MAX_FRAME_BYTES = 8 * 1024;
+
 @WebSocketGateway({
   cors: {
     origin: resolveWsCorsOrigin(),
   },
   namespace: '/events',
+  maxHttpBufferSize: WS_MAX_FRAME_BYTES,
 })
 export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()

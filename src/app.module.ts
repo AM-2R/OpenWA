@@ -266,7 +266,12 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
 
     // Core modules
     HooksModule, // Global hook system for plugin integration
-    PluginsModule, // Global plugin system
+    // Global plugin system, kept ahead of ...queueModules. Nest runs the init hooks of global modules in the
+    // order it first meets them among the imports, and PluginLoaderService.onModuleInit must mark the plugins
+    // it restores before BullRegistrar starts the workers that take queued ingress jobs. This line and
+    // QueueModule's own import of PluginsModule each keep it ahead of BullModule; test/queue-on.e2e-spec.ts
+    // fails when neither does.
+    PluginsModule,
     LoggerModule,
     CacheModule,
     StorageModule,

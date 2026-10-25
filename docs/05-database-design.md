@@ -89,7 +89,7 @@ others.
 
 #### Built-in PostgreSQL Orchestration
 
-When using PostgreSQL Built-in mode (`DATABASE_TYPE=postgres` with `POSTGRES_BUILTIN=true`), `main.ts` starts the managed `postgres` container (creating it if it does not exist) **before** `NestFactory.create`. It has to run that early: the `data` connection is opened while Nest instantiates providers, before any `onModuleInit` hook, so a stopped `openwa-postgres` would otherwise fail every boot. The step is bounded at 15 seconds and never fails boot on its own. `DockerService.onModuleInit()` later runs the same orchestration for `redis` / `minio` when their own `REDIS_BUILTIN` / `MINIO_BUILTIN` flags are set.
+With `DATABASE_TYPE=postgres` and `POSTGRES_BUILTIN=true`, `main.ts` starts the managed `postgres` container (creating it if it does not exist) **before** `NestFactory.create`. It has to run that early: the `data` connection is opened while Nest instantiates providers, before any `onModuleInit` hook, so a stopped `openwa-postgres` would otherwise fail every boot. The step is bounded at 15 seconds and never fails boot on its own. `DockerService.onModuleInit()` later runs the same orchestration for `redis` / `minio` when their own `REDIS_BUILTIN` / `MINIO_BUILTIN` flags are set. A flag set for a datastore the configuration does not use starts nothing: `postgres` needs `DATABASE_TYPE=postgres`, `minio` needs `STORAGE_TYPE=s3`, and `redis` needs one of `REDIS_ENABLED`, `QUEUE_ENABLED` or `CACHE_ENABLED`. Neither does one whose host the environment or the project `.env` pins to anything but the bundled container (`DATABASE_HOST`, `REDIS_HOST`, `S3_ENDPOINT`), the early PostgreSQL start included: the app dials the pinned host. A flag decides only that start: whether the app uses the container follows its host. A `*_BUILTIN=true` the environment pins starts the bundled container at every boot whatever host the saved file gives the app, so after the dashboard switched that datastore to an external server the container runs unused until the variable is unset.
 
 The container can still be coming up when the `data` connection first dials it, so that connection is configured with `retryAttempts: 10` and `retryDelay: 3000` (`src/app.module.ts`), giving the database roughly 30 seconds to become reachable.
 
@@ -202,7 +202,7 @@ Every timestamp column on the PostgreSQL data connection is `timestamp without t
 - a naive timestamp is parsed back as UTC, through a parser registered for the scalar `timestamp` OID only (the `timestamp[]` OID keeps the driver's array parser; the schema has no such column);
 - every pooled connection issues `SET TIME ZONE 'UTC'` on connect, through the pool's own connect hook so that a socket failure or a refused statement fails the acquire instead of the process. That is what makes the server-side `DEFAULT now()` behind each `@CreateDateColumn`/`@UpdateDateColumn` write UTC too. Boot reads the effective `TimeZone` back, at two instants six months apart so a zone that merely reads +00 in winter is caught, and fails if it is not UTC; a pin that a pooler or a server-side default overrode cannot pass unnoticed.
 
-Three `@CreateDateColumn`/`@UpdateDateColumn` columns are filled by the app rather than by that default: `lid_mappings.updatedAt`, `chat_states.updatedAt` and `baileys_stored_messages.createdAt` reach the database through an `upsert` that passes the value, so the default behind them never fires and they follow the binding rule above instead of the session zone.
+Three `@CreateDateColumn`/`@UpdateDateColumn` columns are filled by the app rather than by that default: `lid_mappings.updatedAt`, `chat_states.updatedAt` and `baileys_stored_messages.createdAt` reach the database through an `upsert` (for a negative `lid_mappings` result, an insert and an update) that passes the value, so the default behind them never fires and they follow the binding rule above instead of the session zone.
 
 `messages.createdAt` is a fourth, and split within itself: a live message takes the server default, while a row written by the Baileys history backfill carries the message's own time, stamped in `message-history-projector.ts` so the chat panel orders history correctly. Both conventions are UTC since 0.23.6, and the two cannot be told apart row by row, which is why the 0.23.6 upgrade notes exclude that column from any blanket conversion. A restore writes `createdAt`/`updatedAt` explicitly wherever the archive carries them, so a restored table follows the archive rather than either rule above; the 0.23.6 upgrade notes cover that case separately.
 
@@ -346,7 +346,9 @@ CREATE TABLE sessions (
     "leaseExpiresAt" TIMESTAMP,
     -- 'stopped' after POST /stop or /force-kill, NULL again after an explicit POST /start. Boot
     -- auto-start and the takeover sweep skip a stopped row. Server-owned: not in any session
-    -- response, only in the /api/infra/export-data backup.
+    -- response, only in the /api/infra/export-data backup. A DELETE writes 'deleting', read the
+    -- same way: kept when the delete fails part-way or its node dies, taken back when it fails
+    -- before removing anything, unless a stop was recorded over it meanwhile.
     "desiredState" VARCHAR(20),
     "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
@@ -607,7 +609,7 @@ CREATE UNIQUE INDEX "IDX_api_keys_keyHash" ON api_keys("keyHash");
 
 ### 5.3.6 audit_logs
 
-Consolidated audit trail for API-key, session, send-pacing, rate-limit, queue-dashboard, integration-instance and infrastructure events. This is the **only** audit table — there are no separate `session_logs`, `webhook_logs`, or `api_key_logs` tables. Lives on the **main** (always-SQLite) connection.
+Consolidated audit trail for API-key, session, send-pacing, rate-limit, queue-dashboard, integration-instance, plugin-management and infrastructure events. This is the **only** audit table — there are no separate `session_logs`, `webhook_logs`, or `api_key_logs` tables. Lives on the **main** (always-SQLite) connection.
 
 ```sql
 CREATE TABLE audit_logs (
@@ -667,7 +669,7 @@ id, version, the host of the requested download URL and config field names, neve
 Eight of these are reserved and never emitted, so no row ever carries them: `api_key_used`,
 `session_connected`, `message_sent`, `message_failed`, `webhook_created`, `webhook_deleted`,
 `webhook_triggered` and `webhook_failed`. `src/modules/audit/intentionally-unemitted-actions.ts` is the
-authoritative list, with the reason for each.
+authoritative list, with the reason for each. The `error` severity is reserved too: nothing writes it, so every row carries `info` or `warn`, and `GET /api/audit?severity=error` returns zero rows.
 
 > [!NOTE]
 > Audit-log retention is automatic: see [§5.7 Data Retention](#57-data-retention). Other event types (session logs, API access logs) are surfaced via structured application logging, not dedicated database tables. The one exception is a webhook delivery that exhausts every retry — that lands in the `webhook_delivery_failures` table (§5.3.8), not just the log stream.
@@ -726,6 +728,8 @@ The data connection also owns:
 - **`baileys_stored_messages`** — Baileys engine message store — the serialized WAMessage proto (`src/engine/adapters/baileys-stored-message.entity.ts`); present only when the Baileys engine is used. (Credentials live on the filesystem, not here.)
 - **`lid_mappings`** — LID↔phone-number identity mappings (`src/engine/identity/lid-mapping.entity.ts`).
 - **`chat_states`** (engine): per-session mute, archive and pin state of each Baileys chat (`src/engine/adapters/baileys-chat-state.entity.ts`), keyed `(sessionId, chatId)`. `chatId` is the person's phone JID (`<phone>@s.whatsapp.net`) whenever their lid resolves, so a state WhatsApp syncs under the lid and one set through the phone number land on the same row; it stays `<lid>@lid` while the lid is unresolved, and a row found under the lid later is folded onto the phone JID on the chat's next change (reads and the fold take each field from the newest row that observed it: `observed` lists the fields a row has seen, and null, on a row not written since the column was added, means the fields it holds a set value for; the next write that can read the row records the list). WhatsApp does not re-deliver that state, so it is kept in backups. A chat deleted on the phone or through the API loses its row, so a later message starts it clean.
+
+`lid_mappings.isReported` distinguishes engine mapping reports from cache-only display data. Phone/LID alias authorization, candidate expansion and list filters use only reported mappings. A conflicting cached phone revokes alias trust without replacing the stored phone, and a later actual report restores it. The migration conservatively marks older mixed-origin rows as display data; backups carry the flag, and older backups restore with alias access disabled until a new report arrives.
 
 Additionally, the `AddMessagesFts` migration creates the full-text-search structures over `messages` (a FTS5 virtual table on SQLite, a generated `body_ts` `tsvector` column plus GIN index on PostgreSQL) that back the `/search` endpoint.
 
@@ -931,7 +935,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1790812800000-AddMessageWindowIndexes.ts   # compound timestamp indexes for message-time pagination
 ├── 1791100000000-AddIntegrationDeliveryFailureDeliveryIndex.ts   # (pluginId, instanceId, deliveryId) index for the dead-letter guards
 ├── 1791200000000-AddWebhookOutboxSessionIndex.ts   # (sessionId) index for the per-session outbox delete
-└── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
+├── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
+└── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
 ```
 
 > [!NOTE]

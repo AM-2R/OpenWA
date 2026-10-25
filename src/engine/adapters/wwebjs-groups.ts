@@ -12,6 +12,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { GroupChat, GroupMetadataRaw, SerializedWid, readWid } from '../types/whatsapp-web-js.types';
 import { toParticipantWid } from '../identity/wa-id';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -179,6 +180,11 @@ export class WwebjsGroups {
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
       };
     } catch (error) {
+      // A session that went away during the read (the client is read again after the lookup) is not a
+      // missing group either: the retryable 409, not a 404.
+      if (error instanceof EngineNotReadyError) {
+        throw error;
+      }
       // A dead page and a genuinely-missing group both land in this catch; only the second may
       // become null (→ service 404). A transport death surfaced as "group not found" sends
       // operators debugging the wrong layer — report it and answer 503 instead.
@@ -497,7 +503,8 @@ export class WwebjsGroups {
   /**
    * Resolve a group chat or throw: the shared preamble of the group settings writes. The lookup is a
    * read that runs before any write, so a dead page answers 503 with the death signal even for the
-   * non-idempotent callers: nothing has been applied yet. `context` names the caller's operation.
+   * non-idempotent callers: nothing has been applied yet. A session that went away during the lookup
+   * answers the not-ready 409 for the same reason. `context` names the caller's operation.
    */
   private async requireGroupChat(groupId: string, context: string): Promise<GroupChat> {
     this.host.ensureReady();
@@ -507,6 +514,9 @@ export class WwebjsGroups {
     if (!chat?.isGroup) {
       throw new GroupNotFoundError(groupId);
     }
+    // The write goes out on the chat's own client right after this, which the host's getClient never
+    // sees, so a teardown that landed in the lookup must be caught here.
+    this.host.ensureReady();
     return chat as unknown as GroupChat;
   }
 

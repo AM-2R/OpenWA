@@ -8,6 +8,7 @@ import {
   mergeChatMessages,
   mergeReactionSnapshot,
   liveMessageMetadata,
+  unacknowledgedIncomingIds,
   type EngineHistoryMessage,
 } from './chatMessages.ts';
 import { MENTION_CLOSE, MENTION_OPEN } from './messageFormatter.ts';
@@ -378,6 +379,38 @@ test('applyMessageEdit updates a live row by id', () => {
   const before = [msg({ id: 'WA_EDIT_1', waMessageId: undefined, body: 'old' })];
   const after = applyMessageEdit(before, { messageId: 'WA_EDIT_1', body: '' });
   assert.equal(after[0].body, '');
+});
+
+test('applyMessageEdit does not label a message whose text the event repeats', () => {
+  const before = [msg({ id: 'm-1', waMessageId: 'WA_EDIT_2', body: 'same', metadata: { reactions: { me: 'x' } } })];
+  const after = applyMessageEdit(before, { messageId: 'WA_EDIT_2', body: 'same' });
+  // The same list, so nothing renders again; compared as a boolean, since a failed deepEqual of rows is slow to print.
+  assert.ok(after === before, 'an unchanged text produced a new list');
+  assert.equal(after[0].metadata?.edited, undefined);
+  assert.deepEqual(after[0].metadata?.reactions, { me: 'x' });
+});
+
+test('liveMessageMetadata: carries the edited mark of a message announced as edited', () => {
+  const media = { mimetype: 'image/png', data: 'QUJD' };
+  assert.deepEqual(liveMessageMetadata({ edited: true }), { edited: true });
+  assert.deepEqual(liveMessageMetadata({ media, edited: true }), { media, edited: true });
+  assert.deepEqual(liveMessageMetadata({ metadata: { reactions: { me: 'x' } }, edited: true }), {
+    reactions: { me: 'x' },
+    edited: true,
+  });
+  assert.equal(liveMessageMetadata({}), undefined);
+});
+
+// The gateway announces the edit of a message it had not stored yet before the message itself, which then carries
+// the edited text and the mark.
+test('a message announced as edited after its edit missed the thread is labelled edited', () => {
+  const missed = applyMessageEdit([], { messageId: 'WA_EDIT_3', body: 'fixed' });
+  const live = { body: 'fixed', edited: true as const };
+  const after = mergeOrAppend(missed, msg({ id: 'WA_EDIT_3', body: live.body, metadata: liveMessageMetadata(live) }));
+
+  assert.equal(after[0].metadata?.edited, true);
+  const echo = mergeOrAppend(after, msg({ id: 'WA_EDIT_3', body: 'fixed', metadata: liveMessageMetadata({}) }));
+  assert.equal(echo[0].metadata?.edited, true, 'a later copy without the mark took it away');
 });
 
 test('applyMessageEdit is a referential no-op for an empty or unknown target id', () => {
@@ -791,4 +824,24 @@ test('a later message echo preserves the edited marker', () => {
   );
   assert.equal(after[0].metadata?.edited, true);
   assert.deepEqual(after[0].metadata?.reactions, { alice: '👍' });
+});
+
+test('unacknowledgedIncomingIds names the newest incoming messages that no read has acknowledged', () => {
+  const incoming = (n: number, over: Partial<ChatMessage> = {}): ChatMessage =>
+    db({ id: `row-${n}`, waMessageId: `wamid.${n}`, direction: 'incoming', timestamp: n, ...over });
+  const thread = [
+    incoming(1),
+    incoming(2, { direction: 'outgoing' }),
+    incoming(3),
+    incoming(4, { waMessageId: undefined }),
+    // The gateway refuses an id with whitespace, and the whole read with it.
+    incoming(5, { waMessageId: 'has space' }),
+    incoming(6),
+  ];
+
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(), 100), ['wamid.1', 'wamid.3', 'wamid.6']);
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(['wamid.3']), 100), ['wamid.1', 'wamid.6']);
+  // Past the cap it is the newest that are named, in the order they were sent.
+  assert.deepEqual(unacknowledgedIncomingIds(thread, new Set(), 2), ['wamid.3', 'wamid.6']);
+  assert.deepEqual(unacknowledgedIncomingIds([], new Set(), 100), []);
 });

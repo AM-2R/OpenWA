@@ -260,19 +260,20 @@ jobs:
       # failure recovery and media metadata updates hold on the real server, that a send
       # idempotency key is claimed by a unique-violation insert, and that a replace-all import runs (its
       # idempotency-key trim casts a varchar session id against a uuid). The PostgreSQL-specific
-      # suites self-skip unless DATABASE_TYPE=postgres. Session lifetime scenarios run against
-      # SQLite in the default test job and against the postgres:16 service here.
+      # suites self-skip unless DATABASE_TYPE=postgres. Session lifetime, two-node delete and lid
+      # mapping ownership scenarios run against SQLite in the default test job and against the
+      # postgres:16 service here.
       #
       # TZ is deliberately NOT UTC: the pin's whole job is to make a `timestamp` column mean the same
       # instant on a host that runs in another zone, and on a UTC runner every assertion about it
       # would pass for the wrong reason (the UTC-pin spec fails outright rather than pass vacuously).
-      - name: Postgres specs (FTS + migrations + ordering + schema + UTC + recovery + idempotency + import + lifetime)
+      - name: Postgres specs (FTS + migrations + ordering + schema + UTC + recovery + idempotency + import + lifetime + lid owners)
         # --runInBand: the specs issue DDL against the one shared service database, and jest's
         # default file-parallelism races their catalog writes (pg_type duplicate-key). The lock
         # spec's own two-migrator race is in-file (Promise.all) and unaffected by runInBand. The
         # synchronize spec additionally CREATEs and DROPs a scratch database of its own, which is
         # only safe serialized.
-        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts src/database/postgres-utc.pg.spec.ts src/modules/webhook/webhook-recovery.pg.spec.ts src/modules/message/idempotency/send-idempotency.service.pg.spec.ts src/modules/infra/infra-data.import.pg.spec.ts src/modules/session/session-content-lifetime.spec.ts
+        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts src/database/migrations/__tests__/pg-entity-synchronize.pg.spec.ts src/database/postgres-utc.pg.spec.ts src/modules/webhook/webhook-recovery.pg.spec.ts src/modules/message/idempotency/send-idempotency.service.pg.spec.ts src/modules/infra/infra-data.import.pg.spec.ts src/modules/session/session-content-lifetime.spec.ts src/modules/session/session-delete-claim.spec.ts src/engine/identity/lid-mapping-store.spec.ts
         env:
           TZ: Asia/Jakarta
           DATABASE_TYPE: postgres

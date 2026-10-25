@@ -106,11 +106,14 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   **before** the dedup persist — returning `503` only for a definitively-dead concrete-scoped WhatsApp
   session (no live engine or `FAILED`), with a `Retry-After` so a provider that retries a 503 only when
   that header is present comes back; recoverable statuses and `READY` pass through to a normal
-  `202`+enqueue so the worker can still fail fast and the dedup row still holds the delivery. A declared
+  `202`+enqueue so the worker can still fail fast and the dedup row still holds the delivery. The same
+  `503` with `Retry-After`, again before the dedup persist, answers a route declaring `response` while its
+  plugin is still being restored after startup: no worker can take the delivery yet and the provider wants
+  its answer now (see §25.7 for a route without `response`). A declared
   `ack` (`status`/`body`/`headers`) replaces the default `202 accepted`. For a route declaring `response`,
   the ack is returned without awaiting enqueue so a queue-disabled deployment cannot block the provider's
   deadline; the dedup row already persisted is the durability handle. A route with no `response` is
-  byte-identical to today's default fast-ack.
+  byte-identical to today's default fast-ack, while its plugin restores included.
 - **Plugin instance** — a first-class `instanceId` namespaced under a `pluginId`. One adapter can back
   many instances (for example, one external account per WhatsApp number). Each instance owns a host-minted
   ingress secret, a resolved session scope, and a config slice. It is a serializable field threaded
@@ -278,6 +281,27 @@ mark without a second enqueue, and a job that failed with no such copy is not re
 deliver. A `pending` row found without a payload (only possible for imported/corrupt history —
 payloads are retired only with a recorded outcome) is excluded from the sweep and never replayed
 empty; nothing logs it, and it stays `pending` until `INGRESS_DEDUP_RETENTION_DAYS` prunes it.
+
+**Plugin restore window.** The gateway opens its port before a slow plugin restore has finished (see
+[19](./19-plugin-architecture.md), Restore on boot), so a delivery can arrive for a plugin that has no
+worker yet. A route declaring a `response` contract is refused with `503` and `Retry-After: 5` (§25.4),
+and the provider's retry is accepted once the plugin is up. Any other route is accepted and persisted
+as usual. A queued job goes back to the delayed set, without spending a retry attempt, until the plugin
+is up. It is held until the next multiple of `INGRESS_RETRY_DELAY_MS` (a period of at least a second), so every
+held job wakes at the same instants and the jobs of one wake come back in the order they were held. That
+order has two limits. Once the restore ends, the jobs of a wake are handled one after another, so those
+already held again come back a period later than those the worker reaches afterwards: earlier deliveries
+of a conversation can follow later ones for as long as the worker needs to go through the whole held
+backlog (milliseconds for a short one, seconds for thousands), and that backlog is handled ahead of newer
+jobs of other plugins. And BullMQ keeps insertion order for at most 4096 held jobs per millisecond: past
+that, the jobs of a wake come back ordered by their id. With the queue off the delivery is acked and not dispatched: its row stays `pending`, and the
+reconciler dispatches it on the first pass after the restore is over and the row is older than
+`INGRESS_RECONCILE_GRACE_MS`. With the defaults that is within a minute after the plugin is up for a row
+accepted at least a minute before it came up, and one to two minutes after the delivery for a later one.
+The reconciler leaves the rows of a restoring plugin out of its batch, so they do not hold back another
+plugin's. With the reconciler disabled
+(`INGRESS_RECONCILE_INTERVAL_MS=0`) nothing would replay a held row, so the delivery is dispatched at once
+and, with no worker to run it, files a dead letter that an operator can redrive.
 
 Table growth is bounded by construction rather than by operator hygiene: the per-instance ingress
 throttle caps the row-creation rate, dispatched rows slim to a marker + hash, and the two retention

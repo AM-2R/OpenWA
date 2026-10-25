@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { SendImageStatusDto, SendVideoStatusDto } from './send-media-status.dto';
+import { SendImageStatusDto, SendVideoStatusDto, SendVoiceStatusDto } from './send-media-status.dto';
 
 describe('SendImageStatusDto recipients validation', () => {
   const valid = { image: { url: 'https://example.com/i.png' }, recipients: ['6281@c.us'] };
@@ -84,6 +84,23 @@ describe('SendVideoStatusDto recipients validation', () => {
       plainToInstance(SendVideoStatusDto, { video: valid.video, recipients: ['6281@lid'] }),
     );
     expect(errors).toHaveLength(0);
+  });
+});
+
+// @ValidateNested checks an array element by element, so a media source sent as [] or [{...}] passed.
+describe('status media sources refuse an array', () => {
+  const source = { url: 'https://example.com/m.bin' };
+
+  it.each([
+    ['image', SendImageStatusDto],
+    ['video', SendVideoStatusDto],
+    ['audio', SendVoiceStatusDto],
+  ] as const)('%s as an object is accepted and as an array is refused', async (key, Dto) => {
+    const failed = async (value: unknown) =>
+      (await validate(plainToInstance(Dto as new () => object, { [key]: value }))).some(e => e.property === key);
+    expect(await failed(source)).toBe(false);
+    expect(await failed([source])).toBe(true);
+    expect(await failed([])).toBe(true);
   });
 });
 

@@ -50,7 +50,7 @@ export class SearchController {
     name: 'chatId',
     required: false,
     description:
-      "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+      "Restrict to a single chat id. With the built-in search provider, a phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it); a plugin provider receives the id as sent.",
   })
   @ApiQuery({ name: 'direction', required: false, description: 'incoming | outgoing' })
   @ApiQuery({ name: 'type', required: false, description: 'Message type filter' })
@@ -58,7 +58,7 @@ export class SearchController {
     name: 'from',
     required: false,
     description:
-      "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+      "Sender filter. With the built-in search provider, matches `from` or a group message's `author`, and a phone also matches any lid that resolves to it; a plugin provider receives the id as sent.",
   })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Epoch-ms lower bound (inclusive)' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'Epoch-ms upper bound (inclusive)' })

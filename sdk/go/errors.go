@@ -45,18 +45,32 @@ var (
 	// ErrNotImplemented is returned for a 501 (the active engine does not
 	// support this operation).
 	ErrNotImplemented = errors.New("openwa: not implemented")
-	// ErrServiceUnavailable is returned for a 503 — a transport failure rather
-	// than a refusal: WhatsApp never replied, the socket was down, or the
-	// request budget ran out. It is retryable, but a catalog 503 can persist
-	// because WhatsApp may never answer that query, so bound any retry. The
-	// non-idempotent sends are deliberately left unbounded by the gateway so a
-	// slow WhatsApp reply never answers one, and in a multi-node deployment a
-	// forward that fails before reaching the owner node answers 503. A 503 from
-	// the owner itself is relayed unchanged and means the engine did not
-	// confirm in time, so a bounded write may still have been applied; re-read
-	// the state before repeating it. A forward that fails after the request was
-	// sent answers 502 or 504 instead: the owner may already have carried it
-	// out, so do not repeat a non-idempotent send on those unchecked.
+	// ErrServiceUnavailable is returned for a 503: the gateway could not
+	// complete the request right now. The path to WhatsApp failed (WhatsApp
+	// never replied, the socket was down, or the request budget ran out), the
+	// gateway is draining or short of a dependency, or, on Baileys, WhatsApp
+	// itself throttled (code 429) or timed out (code 408) the request; a
+	// throttle or timeout names its code in the message. It is retryable, but
+	// back off and retry later instead of at once: repeating a throttled
+	// request straight away prolongs the throttle. A catalog 503 can persist
+	// because WhatsApp may never answer that query, so bound any retry.
+	//
+	// On a send or a single write, a throttle turned the request away before it
+	// ran, so nothing was sent or applied, and a keyed send frees its
+	// Idempotency-Key for the retry. A group settings update with several
+	// fields applies them one at a time, so a 503 on a later field, a throttle
+	// included, leaves the earlier ones applied; the message lists them after
+	// "already applied:", so re-read the settings before retrying, or send one
+	// field per request. A timeout proves nothing: the write may still have
+	// been applied, and a keyed send keeps its key taken. The non-idempotent
+	// sends are deliberately left unbounded by the gateway so a slow WhatsApp
+	// reply never answers one, and in a multi-node deployment a forward that
+	// fails before reaching the owner node answers 503. A 503 from the owner
+	// itself is relayed unchanged and keeps its meaning, so a bounded write
+	// that timed out may still have been applied; re-read the state before
+	// repeating it. A forward that fails after the request was sent answers 502
+	// or 504 instead: the owner may already have carried it out, so do not
+	// repeat a non-idempotent send on those unchecked.
 	ErrServiceUnavailable = errors.New("openwa: service unavailable")
 )
 
